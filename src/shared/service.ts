@@ -1,13 +1,13 @@
 // Service bootstrap with dependency checks and health routes.
 import type { FastifyInstance } from "fastify";
 import type { Logger } from "pino";
-import type { AppConfig } from "./config";
-import { loadConfig } from "./config";
-import { createLogger } from "./logger";
-import { createServer } from "./http/server";
-import { registerHealthRoutes, type HealthCheck } from "./http/health";
-import { connectMongo, ensureMongoCollections, ensureMongoIndexes, type MongoDependencies } from "./storage/mongo";
-import { createRedisClient, type RedisClient } from "./storage/redis";
+import type { AppConfig } from "./config.js";
+import { loadConfig } from "./config.js";
+import { createLogger } from "./logger.js";
+import { createServer } from "./http/server.js";
+import { registerHealthRoutes, type HealthCheck } from "./http/health.js";
+import { connectMongo, ensureMongoCollections, ensureMongoIndexes, type MongoDependencies } from "./storage/mongo.js";
+import { createRedisClient, type RedisClient } from "./storage/redis.js";
 
 export interface ServiceDependencies {
   config: AppConfig;

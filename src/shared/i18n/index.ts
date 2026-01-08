@@ -1,7 +1,7 @@
 // Localization helpers with fallback support.
-import type { Locale } from "../config";
-import enCatalog from "./en";
-import ruCatalog from "./ru";
+import type { Locale } from "../config.js";
+import enCatalog from "./en.js";
+import ruCatalog from "./ru.js";
 
 export type Catalog = Record<string, string>;
 

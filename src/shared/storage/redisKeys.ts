@@ -43,6 +43,12 @@ export const redisKeySpecs: RedisKeySpec[] = [
     invalidationEvents: ["rate.limit.reset"]
   },
   {
+    key: "rate:ip:{ip}",
+    type: "string",
+    ttlSeconds: 1,
+    invalidationEvents: ["rate.limit.reset"]
+  },
+  {
     key: "idempotency:bid:{idempotencyKey}",
     type: "string",
     ttlSeconds: 600,

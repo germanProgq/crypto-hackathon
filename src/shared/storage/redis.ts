@@ -1,7 +1,7 @@
 // Redis connection helper.
-import Redis from "ioredis";
+import { Redis } from "ioredis";
 import type { Logger } from "pino";
-import type { AppConfig } from "../config";
+import type { AppConfig } from "../config.js";
 
 export type RedisClient = Redis;
 
@@ -13,7 +13,7 @@ export async function createRedisClient(config: AppConfig, logger: Logger): Prom
     enableOfflineQueue: false
   });
 
-  client.on("error", (error) => {
+  client.on("error", (error: unknown) => {
     logger.error({ err: error }, "Redis error");
   });
 

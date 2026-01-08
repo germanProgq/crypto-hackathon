@@ -24,6 +24,11 @@ export interface AppConfig {
     url: string;
     prefix: string;
   };
+  rateLimits: {
+    userPerSecond: number;
+    auctionUserPerSecond: number;
+    ipPerSecond: number;
+  };
   i18n: {
     defaultLocale: Locale;
     supportedLocales: Locale[];
@@ -86,6 +91,9 @@ function createEnvSchema(defaultPort: number) {
       .refine(isRedisUrl, "REDIS_URL must start with redis:// or rediss://")
       .default("redis://127.0.0.1:6379"),
     REDIS_PREFIX: z.string().min(1).default("crypto-hack"),
+    RATE_LIMIT_USER_PER_SECOND: z.coerce.number().int().min(1).default(5),
+    RATE_LIMIT_AUCTION_USER_PER_SECOND: z.coerce.number().int().min(1).default(3),
+    RATE_LIMIT_IP_PER_SECOND: z.coerce.number().int().min(1).default(20),
     I18N_DEFAULT_LOCALE: z.enum(localeValues).default("en"),
     I18N_SUPPORTED_LOCALES: z.string().default("en,ru")
   });
@@ -127,6 +135,11 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
     redis: {
       url: parsed.REDIS_URL,
       prefix: parsed.REDIS_PREFIX
+    },
+    rateLimits: {
+      userPerSecond: parsed.RATE_LIMIT_USER_PER_SECOND,
+      auctionUserPerSecond: parsed.RATE_LIMIT_AUCTION_USER_PER_SECOND,
+      ipPerSecond: parsed.RATE_LIMIT_IP_PER_SECOND
     },
     i18n: {
       defaultLocale: parsed.I18N_DEFAULT_LOCALE,

@@ -1,6 +1,6 @@
 // Localization fallback tests.
 import { describe, expect, it } from "vitest";
-import { resolveLocale, t } from "../src/shared/i18n";
+import { resolveLocale, t } from "../src/shared/i18n/index.js";
 
 describe("i18n", () => {
   it("resolves locale from Accept-Language", () => {

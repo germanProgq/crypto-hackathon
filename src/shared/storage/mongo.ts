@@ -3,22 +3,36 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { MongoClient, type Db } from "mongodb";
 import type { Logger } from "pino";
-import type { AppConfig } from "../config";
-import { mongoCollectionSpecs, mongoIndexSpecs } from "./mongoSchemas";
+import type { AppConfig } from "../config.js";
+import { mongoCollectionSpecs, mongoIndexSpecs } from "./mongoSchemas.js";
 
 const execFileAsync = promisify(execFile);
 const localHosts = new Set(["localhost", "127.0.0.1", "::1", "0.0.0.0"]);
 const dockerImage = "mongo:7.0";
-const dockerTimeoutMs = 20000;
+const dockerTimeoutMs = 60000;
+const replicaSetName = "rs0";
 
 export interface MongoDependencies {
   client: MongoClient;
   db: Db;
 }
 
+type LocalMongoOverride = {
+  uri: string;
+  port: number;
+  fallback: boolean;
+};
+
 export async function connectMongo(config: AppConfig, logger: Logger): Promise<MongoDependencies> {
-  await ensureLocalMongo(config.mongo.uri, logger);
-  const client = new MongoClient(config.mongo.uri, {
+  const localOverride = await ensureLocalMongo(config.mongo.uri, logger);
+  const mongoUri = localOverride?.uri ?? config.mongo.uri;
+  if (localOverride?.fallback) {
+    logger.warn(
+      { port: localOverride.port },
+      "Mongo replica set fallback active for local development."
+    );
+  }
+  const client = new MongoClient(mongoUri, {
     maxPoolSize: 50,
     serverSelectionTimeoutMS: 5000,
     appName: config.serviceName
@@ -114,37 +128,99 @@ export function resolveLocalMongoTarget(uri: string): { port: number } | null {
   return isValidPort(port) ? { port } : null;
 }
 
-async function ensureLocalMongo(uri: string, logger: Logger): Promise<void> {
-  const target = resolveLocalMongoTarget(uri);
-  if (!target) {
-    return;
-  }
-
-  await ensureDockerMongo(target.port, logger);
+export function buildLocalMongoUri(uri: string, port: number): string {
+  return applyReplicaSetParams(updateLocalMongoUriPort(uri, port));
 }
 
-async function ensureDockerMongo(port: number, logger: Logger): Promise<void> {
+async function ensureLocalMongo(
+  uri: string,
+  logger: Logger
+): Promise<LocalMongoOverride | null> {
+  const target = resolveLocalMongoTarget(uri);
+  if (!target) {
+    return null;
+  }
+
+  const port = await ensureDockerMongo(target.port, logger);
+  const updatedUri = buildLocalMongoUri(uri, port);
+  return {
+    uri: updatedUri,
+    port,
+    fallback: port !== target.port
+  };
+}
+
+async function ensureDockerMongo(port: number, logger: Logger): Promise<number> {
+  const candidatePorts = buildCandidatePorts(port);
+  let lastError: Error | undefined;
+
+  for (const candidate of candidatePorts) {
+    const result = await ensureDockerMongoReplica(candidate, logger);
+    if (result.ok) {
+      return candidate;
+    }
+    lastError = result.error;
+  }
+
+  throw lastError ?? new Error("Mongo replica set unavailable.");
+}
+
+type ReplicaEnsureResult =
+  | { ok: true }
+  | { ok: false; error: Error; reason: "replication_disabled" | "port_in_use" };
+
+async function ensureDockerMongoReplica(
+  port: number,
+  logger: Logger
+): Promise<ReplicaEnsureResult> {
   const containerName = `crypto-hack-mongo-${port}`;
   const exists = await dockerContainerExists(containerName);
 
   if (!exists) {
-    await runDocker([
-      "run",
-      "-d",
-      "--name",
-      containerName,
-      "-p",
-      `${port}:27017`,
-      dockerImage
-    ]);
-    logger.info({ container: containerName, port }, "Mongo docker container created");
-    return;
+    try {
+      await runDocker([
+        "run",
+        "-d",
+        "--name",
+        containerName,
+        "-p",
+        `${port}:27017`,
+        dockerImage,
+        "--replSet",
+        replicaSetName,
+        "--bind_ip_all"
+      ]);
+      logger.info({ container: containerName, port }, "Mongo docker container created");
+    } catch (error) {
+      if (isPortInUseError(error)) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error : new Error("Mongo port already in use."),
+          reason: "port_in_use"
+        };
+      }
+      throw error;
+    }
+  } else {
+    const running = await dockerContainerRunning(containerName);
+    if (!running) {
+      await runDocker(["start", containerName]);
+      logger.info({ container: containerName, port }, "Mongo docker container started");
+    }
   }
 
-  const running = await dockerContainerRunning(containerName);
-  if (!running) {
-    await runDocker(["start", containerName]);
-    logger.info({ container: containerName, port }, "Mongo docker container started");
+  try {
+    await ensureReplicaSet(containerName, logger);
+    return { ok: true };
+  } catch (error) {
+    if (isReplicationNotEnabledError(error)) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error : new Error("Mongo replica set not enabled."),
+        reason: "replication_disabled"
+      };
+    }
+    throw error;
   }
 }
 
@@ -181,6 +257,162 @@ async function runDocker(args: string[]): Promise<{ stdout: string; stderr: stri
     const detail = getExecErrorMessage(error);
     throw new Error(`Docker command failed: docker ${args.join(" ")}${detail ? ` (${detail})` : ""}`);
   }
+}
+
+async function ensureReplicaSet(containerName: string, logger: Logger): Promise<void> {
+  const status = await getReplicaSetStatus(containerName);
+  if (status?.ok === 1 && status.set === replicaSetName) {
+    return;
+  }
+
+  const replicaHost = "127.0.0.1:27017";
+  try {
+    await runDocker([
+      "exec",
+      containerName,
+      "mongosh",
+      "--quiet",
+      "--eval",
+      `rs.initiate({_id:"${replicaSetName}",members:[{_id:0,host:"${replicaHost}"}]})`
+    ]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (!message.includes("already initialized") && !message.includes("already initiated")) {
+      throw error;
+    }
+  }
+
+  await waitForReplicaSet(containerName, logger);
+}
+
+function buildCandidatePorts(port: number): number[] {
+  const candidates: number[] = [];
+  for (let offset = 0; offset <= 3; offset += 1) {
+    const candidate = port + offset;
+    if (isValidPort(candidate)) {
+      candidates.push(candidate);
+    }
+  }
+  return candidates;
+}
+
+function updateLocalMongoUriPort(uri: string, port: number): string {
+  if (!uri.startsWith("mongodb://")) {
+    return uri;
+  }
+
+  const protocol = "mongodb://";
+  const remainder = uri.slice(protocol.length);
+  const hostEnd = findHostTerminator(remainder);
+  const hostSection = remainder.slice(0, hostEnd);
+  const tail = remainder.slice(hostEnd);
+  const atIndex = hostSection.lastIndexOf("@");
+  const credentials = atIndex >= 0 ? `${hostSection.slice(0, atIndex)}@` : "";
+  const hostPart = atIndex >= 0 ? hostSection.slice(atIndex + 1) : hostSection;
+  const updatedHost = replaceHostPort(hostPart, port);
+
+  return `${protocol}${credentials}${updatedHost}${tail}`;
+}
+
+function replaceHostPort(hostPart: string, port: number): string {
+  if (hostPart.startsWith("[")) {
+    const closing = hostPart.indexOf("]");
+    if (closing === -1) {
+      return hostPart;
+    }
+    return `${hostPart.slice(0, closing + 1)}:${port}`;
+  }
+
+  const [host] = hostPart.split(":");
+  if (!host) {
+    return hostPart;
+  }
+  return `${host}:${port}`;
+}
+
+function findHostTerminator(value: string): number {
+  const slashIndex = value.indexOf("/");
+  const queryIndex = value.indexOf("?");
+  const candidates = [slashIndex, queryIndex].filter((index) => index !== -1);
+  if (candidates.length === 0) {
+    return value.length;
+  }
+  return Math.min(...candidates);
+}
+
+function applyReplicaSetParams(uri: string): string {
+  const [base = uri, query = ""] = uri.split("?");
+  const params = new URLSearchParams(query);
+  if (!params.has("replicaSet")) {
+    params.set("replicaSet", replicaSetName);
+  }
+  if (!params.has("directConnection")) {
+    params.set("directConnection", "true");
+  }
+  const paramString = params.toString();
+  return paramString ? `${base}?${paramString}` : base;
+}
+
+function isReplicationNotEnabledError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return error.message.includes("not started with replication enabled");
+}
+
+function isPortInUseError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return (
+    error.message.includes("port is already allocated") ||
+    error.message.includes("address already in use") ||
+    error.message.includes("bind: address already in use")
+  );
+}
+
+async function getReplicaSetStatus(
+  containerName: string
+): Promise<{ ok: number; set?: string; myState?: number } | null> {
+  try {
+    const result = await runDocker([
+      "exec",
+      containerName,
+      "mongosh",
+      "--quiet",
+      "--eval",
+      "JSON.stringify(rs.status())"
+    ]);
+    const trimmed = result.stdout.trim();
+    if (!trimmed) {
+      return null;
+    }
+    return JSON.parse(trimmed) as { ok: number; set?: string; myState?: number };
+  } catch (error) {
+    return null;
+  }
+}
+
+async function waitForReplicaSet(containerName: string, logger: Logger): Promise<void> {
+  const attempts = 30;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const status = await getReplicaSetStatus(containerName);
+    if (status?.ok === 1 && status.myState === 1) {
+      logger.info({ container: containerName }, "Mongo replica set ready");
+      return;
+    }
+
+    await delay(1000);
+  }
+
+  throw new Error("Mongo replica set initialization timed out.");
+}
+
+function delay(timeoutMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, timeoutMs);
+  });
 }
 
 function isValidPort(port: number): boolean {

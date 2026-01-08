@@ -1,0 +1,148 @@
+# Local docker compose for crypto-hack services.
+services:
+  mongo:
+    image: mongo:7.0
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ ping: 1 }).ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    volumes:
+      - mongo-data:/data/db
+  mongo-init:
+    image: mongo:7.0
+    depends_on:
+      mongo:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - >
+          until mongosh --host mongo --quiet --eval 'db.runCommand({ ping: 1 }).ok' >/dev/null 2>&1; do
+            sleep 1;
+          done;
+          mongosh --host mongo --quiet --eval 'try { rs.status() } catch (e) { rs.initiate({_id:"rs0",members:[{_id:0,host:"mongo:27017"}]}); }';
+          i=0;
+          while [ "$$i" -lt 30 ]; do
+            state="$$(mongosh --host mongo --quiet --eval 'try { rs.status().myState } catch (e) { print(0) }')";
+            if [ "$$(echo "$$state" | tr -d '\r\n')" = "1" ]; then
+              exit 0;
+            fi;
+            sleep 1;
+            i=$$((i + 1));
+          done;
+          exit 1;
+  redis:
+    image: redis:7.2-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+  auction-engine:
+    image: crypto-hack:local
+    build:
+      context: .
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: auction-engine
+      HTTP_PORT: "4001"
+      MONGO_URI: mongodb://mongo:27017/crypto_hack?replicaSet=rs0&directConnection=true
+      MONGO_DB: crypto_hack
+      REDIS_URL: redis://redis:6379
+    command: ["node", "dist/src/services/auction-engine/index.js"]
+    ports:
+      - "4001:4001"
+  ledger:
+    image: crypto-hack:local
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: ledger
+      HTTP_PORT: "4002"
+      MONGO_URI: mongodb://mongo:27017/crypto_hack?replicaSet=rs0&directConnection=true
+      MONGO_DB: crypto_hack
+      REDIS_URL: redis://redis:6379
+    command: ["node", "dist/src/services/ledger/index.js"]
+    ports:
+      - "4002:4002"
+  crypto-gateway:
+    image: crypto-hack:local
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: crypto-gateway
+      HTTP_PORT: "4003"
+      MONGO_URI: mongodb://mongo:27017/crypto_hack?replicaSet=rs0&directConnection=true
+      MONGO_DB: crypto_hack
+      REDIS_URL: redis://redis:6379
+    command: ["node", "dist/src/services/crypto-gateway/index.js"]
+    ports:
+      - "4003:4003"
+  bot:
+    image: crypto-hack:local
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: bot
+      HTTP_PORT: "4004"
+      MONGO_URI: mongodb://mongo:27017/crypto_hack?replicaSet=rs0&directConnection=true
+      MONGO_DB: crypto_hack
+      REDIS_URL: redis://redis:6379
+    command: ["node", "dist/src/services/bot/index.js"]
+    ports:
+      - "4004:4004"
+  web:
+    image: crypto-hack:local
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: web
+      HTTP_PORT: "4005"
+      MONGO_URI: mongodb://mongo:27017/crypto_hack?replicaSet=rs0&directConnection=true
+      MONGO_DB: crypto_hack
+      REDIS_URL: redis://redis:6379
+    command: ["node", "dist/src/services/web/index.js"]
+    ports:
+      - "4005:4005"
+  workers:
+    image: crypto-hack:local
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: workers
+      HTTP_PORT: "4006"
+      MONGO_URI: mongodb://mongo:27017/crypto_hack?replicaSet=rs0&directConnection=true
+      MONGO_DB: crypto_hack
+      REDIS_URL: redis://redis:6379
+    command: ["node", "dist/src/services/workers/index.js"]
+    ports:
+      - "4006:4006"
+volumes:
+  mongo-data:

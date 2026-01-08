@@ -1,0 +1,17 @@
+# Docker build context exclusions.
+node_modules
+dist
+.git
+.gitignore
+.DS_Store
+coverage
+tmp
+*.log
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+tests
+plan.txt
+task.txt
+app.txt
+questions.txt

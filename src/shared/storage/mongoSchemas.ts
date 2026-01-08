@@ -3,13 +3,16 @@ import type { Document, IndexDescription, ObjectId } from "mongodb";
 
 export const mongoCollections = {
   auctions: "auctions",
+  auctionRoundStates: "auction_round_states",
   bids: "bids",
+  ledgerAccounts: "ledger_accounts",
   ledgerEntries: "ledger_entries",
   roundResults: "round_results",
   deliveryRecords: "delivery_records"
 } as const;
 
 export type AuctionStatus = "draft" | "live" | "closed";
+export type AuctionRoundStatus = "scheduled" | "live" | "closed";
 export type LedgerEntryType =
   | "deposit_confirmed"
   | "hold_created"
@@ -44,6 +47,21 @@ export interface AuctionDocument {
   updatedAt: Date;
 }
 
+export interface AuctionRoundStateDocument {
+  auctionId: ObjectId;
+  roundIndex: number;
+  status: AuctionRoundStatus;
+  scheduledStartAt: Date;
+  scheduledEndAt: Date;
+  effectiveEndAt: Date;
+  extensionCount: number;
+  lastBidAt?: Date;
+  startedAt?: Date;
+  closedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface BidDocument {
   auctionId: ObjectId;
   roundIndex: number;
@@ -51,6 +69,13 @@ export interface BidDocument {
   amount: number;
   createdAt: Date;
   idempotencyKey: string;
+  audit?: {
+    requestId?: string;
+    source?: string;
+    ip?: string;
+    userAgent?: string;
+    actorId?: string;
+  };
 }
 
 export interface LedgerEntryDocument {
@@ -61,6 +86,21 @@ export interface LedgerEntryDocument {
   createdAt: Date;
   idempotencyKey: string;
   metadata?: Record<string, unknown>;
+  audit?: {
+    requestId?: string;
+    source?: string;
+    ip?: string;
+    userAgent?: string;
+    actorId?: string;
+  };
+}
+
+export interface LedgerAccountDocument {
+  userId: string;
+  currency: string;
+  sequence: number;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface RoundResultDocument {
@@ -106,6 +146,37 @@ const roundSchema = {
   }
 };
 
+const roundStateValidator: Document = {
+  $jsonSchema: {
+    bsonType: "object",
+    required: [
+      "auctionId",
+      "roundIndex",
+      "status",
+      "scheduledStartAt",
+      "scheduledEndAt",
+      "effectiveEndAt",
+      "extensionCount",
+      "createdAt",
+      "updatedAt"
+    ],
+    properties: {
+      auctionId: { bsonType: "objectId" },
+      roundIndex: { bsonType: bsonNumber },
+      status: { bsonType: "string", enum: ["scheduled", "live", "closed"] },
+      scheduledStartAt: { bsonType: "date" },
+      scheduledEndAt: { bsonType: "date" },
+      effectiveEndAt: { bsonType: "date" },
+      extensionCount: { bsonType: bsonNumber },
+      lastBidAt: { bsonType: "date" },
+      startedAt: { bsonType: "date" },
+      closedAt: { bsonType: "date" },
+      createdAt: { bsonType: "date" },
+      updatedAt: { bsonType: "date" }
+    }
+  }
+};
+
 const auctionValidator: Document = {
   $jsonSchema: {
     bsonType: "object",
@@ -143,7 +214,17 @@ const bidValidator: Document = {
       userId: { bsonType: "string" },
       amount: { bsonType: bsonNumber },
       createdAt: { bsonType: "date" },
-      idempotencyKey: { bsonType: "string" }
+      idempotencyKey: { bsonType: "string" },
+      audit: {
+        bsonType: "object",
+        properties: {
+          requestId: { bsonType: "string" },
+          source: { bsonType: "string" },
+          ip: { bsonType: "string" },
+          userAgent: { bsonType: "string" },
+          actorId: { bsonType: "string" }
+        }
+      }
     }
   }
 };
@@ -171,7 +252,31 @@ const ledgerValidator: Document = {
       currency: { bsonType: "string" },
       createdAt: { bsonType: "date" },
       idempotencyKey: { bsonType: "string" },
-      metadata: { bsonType: "object" }
+      metadata: { bsonType: "object" },
+      audit: {
+        bsonType: "object",
+        properties: {
+          requestId: { bsonType: "string" },
+          source: { bsonType: "string" },
+          ip: { bsonType: "string" },
+          userAgent: { bsonType: "string" },
+          actorId: { bsonType: "string" }
+        }
+      }
+    }
+  }
+};
+
+const ledgerAccountValidator: Document = {
+  $jsonSchema: {
+    bsonType: "object",
+    required: ["userId", "currency", "sequence", "createdAt", "updatedAt"],
+    properties: {
+      userId: { bsonType: "string" },
+      currency: { bsonType: "string" },
+      sequence: { bsonType: bsonNumber },
+      createdAt: { bsonType: "date" },
+      updatedAt: { bsonType: "date" }
     }
   }
 };
@@ -218,7 +323,9 @@ const deliveryValidator: Document = {
 
 export const mongoCollectionSpecs: Array<{ name: string; validator?: Document }> = [
   { name: mongoCollections.auctions, validator: auctionValidator },
+  { name: mongoCollections.auctionRoundStates, validator: roundStateValidator },
   { name: mongoCollections.bids, validator: bidValidator },
+  { name: mongoCollections.ledgerAccounts, validator: ledgerAccountValidator },
   { name: mongoCollections.ledgerEntries, validator: ledgerValidator },
   { name: mongoCollections.roundResults, validator: roundResultValidator },
   { name: mongoCollections.deliveryRecords, validator: deliveryValidator }
@@ -230,6 +337,19 @@ export const mongoIndexSpecs: Array<{ collection: string; indexes: IndexDescript
     indexes: [
       { key: { status: 1, startsAt: 1 }, name: "auctions_status_startsAt" },
       { key: { createdAt: -1 }, name: "auctions_createdAt" }
+    ]
+  },
+  {
+    collection: mongoCollections.auctionRoundStates,
+    indexes: [
+      {
+        key: { auctionId: 1, roundIndex: 1 },
+        name: "auction_round_state_unique",
+        unique: true
+      },
+      { key: { auctionId: 1, status: 1 }, name: "auction_round_state_status" },
+      { key: { status: 1, scheduledStartAt: 1 }, name: "auction_round_state_startAt" },
+      { key: { status: 1, effectiveEndAt: 1 }, name: "auction_round_state_endAt" }
     ]
   },
   {
@@ -248,7 +368,25 @@ export const mongoIndexSpecs: Array<{ collection: string; indexes: IndexDescript
     collection: mongoCollections.ledgerEntries,
     indexes: [
       { key: { userId: 1, createdAt: -1 }, name: "ledger_user_createdAt" },
-      { key: { idempotencyKey: 1 }, name: "ledger_idempotency", unique: true }
+      { key: { userId: 1, currency: 1, createdAt: -1 }, name: "ledger_user_currency_createdAt" },
+      { key: { idempotencyKey: 1 }, name: "ledger_idempotency", unique: true },
+      {
+        key: { "metadata.holdId": 1 },
+        name: "ledger_hold_id",
+        partialFilterExpression: { "metadata.holdId": { $exists: true } }
+      },
+      {
+        key: { "metadata.withdrawalId": 1 },
+        name: "ledger_withdrawal_id",
+        partialFilterExpression: { "metadata.withdrawalId": { $exists: true } }
+      }
+    ]
+  },
+  {
+    collection: mongoCollections.ledgerAccounts,
+    indexes: [
+      { key: { userId: 1, currency: 1 }, name: "ledger_accounts_user_currency", unique: true },
+      { key: { updatedAt: -1 }, name: "ledger_accounts_updatedAt" }
     ]
   },
   {

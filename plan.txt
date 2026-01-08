@@ -15,42 +15,42 @@ Integration check:
 
 Phase 2 - Ledger and balance core (timebox: 3 hours)
 Steps:
-1) Implement append-only ledger entry schema with idempotency keys and audit metadata.
-2) Build balance derivation for available, held, and spent amounts from ledger entries.
-3) Implement hold creation, hold release, and hold capture with MongoDB transactions.
-4) Add invariants and reconciliation helpers for ledger totals and user balances.
-5) Expose ledger history and balance endpoints for bot and web use.
+1) DONE - Implement append-only ledger entry schema with idempotency keys and audit metadata.
+2) DONE - Build balance derivation for available, held, and spent amounts from ledger entries.
+3) DONE - Implement hold creation, hold release, and hold capture with MongoDB transactions.
+4) DONE - Add invariants and reconciliation helpers for ledger totals and user balances.
+5) DONE - Expose ledger history and balance endpoints for bot and web use.
 Tests:
-- Idempotency tests for duplicate ledger operations.
-- Concurrency tests for holds and releases without negative balances.
+- DONE - Idempotency tests for duplicate ledger operations.
+- DONE - Concurrency tests for holds and releases without negative balances.
 Integration check:
-- Deposit and hold flows produce correct balances and ledger history.
+- DONE - Deposit and hold flows produce correct balances and ledger history.
 
 Phase 3 - Auction model and round state machine (timebox: 3 hours)
 Steps:
-1) Define auction configuration schema with rounds, allocation sizes, and anti-sniping rules.
-2) Implement round lifecycle state machine with deterministic transitions and explicit tie-breakers.
-3) Add anti-sniping extension logic with strict caps and timestamp persistence.
-4) Implement round scheduling worker and locking for single-writer transitions.
-5) Align round timing behavior with documented requirements and add timing validation utilities.
+1) DONE - Define auction configuration schema with rounds, allocation sizes, and anti-sniping rules.
+2) DONE - Implement round lifecycle state machine with deterministic transitions and explicit tie-breakers.
+3) DONE - Add anti-sniping extension logic with strict caps and timestamp persistence.
+4) DONE - Implement round scheduling worker and locking for single-writer transitions.
+5) DONE - Align round timing behavior with documented requirements and add timing validation utilities.
 Tests:
-- Round transition tests including anti-sniping extensions and cap enforcement.
-- Deterministic tie-breaker tests for identical bids.
+- DONE - Round transition tests including anti-sniping extensions and cap enforcement.
+- DONE - Deterministic tie-breaker tests for identical bids.
 Integration check:
-- Auction progresses across rounds with correct timing and state updates.
+- DONE - Auction progresses across rounds with correct timing and state updates.
 
 Phase 4 - Bid placement fast path (timebox: 3 hours)
 Steps:
-1) Implement bid API with validation of user state, auction state, and round timing.
-2) Compute bid delta and acquire per-auction-round lock.
-3) Run MongoDB transaction to write the bid and ledger hold atomically.
-4) Update Redis sorted sets and state snapshots with fine-grained invalidation.
-5) Enforce rate limits per user, per auction, and per IP.
+1) DONE - Implement bid API with validation of user state, auction state, and round timing.
+2) DONE - Compute bid delta and acquire per-auction-round lock.
+3) DONE - Run MongoDB transaction to write the bid and ledger hold atomically.
+4) DONE - Update Redis sorted sets and state snapshots with fine-grained invalidation.
+5) DONE - Enforce rate limits per user, per auction, and per IP.
 Tests:
-- High-concurrency bid tests with idempotent retries.
-- Redis ranking and snapshot consistency tests.
+- DONE - High-concurrency bid tests with idempotent retries.
+- DONE - Redis ranking and snapshot consistency tests.
 Integration check:
-- Live bids update ranking and holds correctly under concurrent load.
+- DONE - Live bids update ranking and holds correctly under concurrent load.
 
 Phase 5 - Round finalization and settlement (timebox: 3 hours)
 Steps:

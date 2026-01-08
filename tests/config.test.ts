@@ -1,6 +1,6 @@
 // Configuration schema tests.
 import { describe, expect, it } from "vitest";
-import { loadConfig } from "../src/shared/config";
+import { loadConfig } from "../src/shared/config.js";
 
 const baseOptions = {
   serviceName: "auction-engine",
