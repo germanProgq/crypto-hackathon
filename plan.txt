@@ -1,0 +1,130 @@
+# Phased delivery plan for the Telegram-native auction platform.
+Phase 1 - Baseline architecture and project setup (timebox: 3 hours)
+Steps:
+1) DONE - Inventory existing code and identify any simplified or placeholder logic to replace.
+2) DONE - Define module boundaries and folder structure: auction engine, ledger, crypto gateway, bot, web, workers, shared libraries.
+3) DONE - Establish configuration and secrets loading with strict schema validation and safe defaults.
+4) DONE - Implement i18n scaffolding with RU/EN catalogs, key conventions, locale detection, and fallback behavior.
+5) DONE - Draft MongoDB schemas and required indexes; draft Redis key patterns, TTLs, and cache invalidation rules.
+6) DONE - Add baseline health and readiness endpoints for each service.
+Tests:
+- DONE - Unit tests for config validation and i18n fallback.
+- DONE - Service boot and health checks succeed with minimal configuration.
+Integration check:
+- DONE - All services start and report readiness in a local environment.
+
+Phase 2 - Ledger and balance core (timebox: 3 hours)
+Steps:
+1) Implement append-only ledger entry schema with idempotency keys and audit metadata.
+2) Build balance derivation for available, held, and spent amounts from ledger entries.
+3) Implement hold creation, hold release, and hold capture with MongoDB transactions.
+4) Add invariants and reconciliation helpers for ledger totals and user balances.
+5) Expose ledger history and balance endpoints for bot and web use.
+Tests:
+- Idempotency tests for duplicate ledger operations.
+- Concurrency tests for holds and releases without negative balances.
+Integration check:
+- Deposit and hold flows produce correct balances and ledger history.
+
+Phase 3 - Auction model and round state machine (timebox: 3 hours)
+Steps:
+1) Define auction configuration schema with rounds, allocation sizes, and anti-sniping rules.
+2) Implement round lifecycle state machine with deterministic transitions and explicit tie-breakers.
+3) Add anti-sniping extension logic with strict caps and timestamp persistence.
+4) Implement round scheduling worker and locking for single-writer transitions.
+5) Align round timing behavior with documented requirements and add timing validation utilities.
+Tests:
+- Round transition tests including anti-sniping extensions and cap enforcement.
+- Deterministic tie-breaker tests for identical bids.
+Integration check:
+- Auction progresses across rounds with correct timing and state updates.
+
+Phase 4 - Bid placement fast path (timebox: 3 hours)
+Steps:
+1) Implement bid API with validation of user state, auction state, and round timing.
+2) Compute bid delta and acquire per-auction-round lock.
+3) Run MongoDB transaction to write the bid and ledger hold atomically.
+4) Update Redis sorted sets and state snapshots with fine-grained invalidation.
+5) Enforce rate limits per user, per auction, and per IP.
+Tests:
+- High-concurrency bid tests with idempotent retries.
+- Redis ranking and snapshot consistency tests.
+Integration check:
+- Live bids update ranking and holds correctly under concurrent load.
+
+Phase 5 - Round finalization and settlement (timebox: 3 hours)
+Steps:
+1) Implement round close worker to pull top-K from Redis and verify against MongoDB.
+2) Persist round results and create delivery records for winners.
+3) Capture holds for winners and release holds for non-winners in batches.
+4) Queue notifications and avoid inline delivery in the close path.
+5) Ensure finalization is re-entrant and safe to retry after partial failure.
+Tests:
+- Idempotent finalization tests with repeated worker runs.
+- Correct capture and release behavior across winners and non-winners.
+Integration check:
+- End-of-round settlement produces correct balances and results.
+
+Phase 6 - Crypto deposits and withdrawals (timebox: 3 hours)
+Steps:
+1) Define wallet strategy interface to support address-per-user or memo/tag attribution.
+2) Implement deposit watcher with confirmation thresholds and idempotent crediting.
+3) Build withdrawal state machine: requested, authorized, broadcasted, confirmed, failed.
+4) Add isolated signer service with strict network and access controls.
+5) Implement withdrawal safety controls: cooldowns, thresholds, allowlists, and anomaly flags.
+Tests:
+- Duplicate deposit event handling and confirmation edge cases.
+- Withdrawal state transitions and signer failure recovery.
+Integration check:
+- End-to-end deposit and withdrawal flows using a controlled test network.
+
+Phase 7 - Telegram bot UX and notifications (timebox: 3 hours)
+Steps:
+1) Implement onboarding, balance, deposit instructions, auctions list, auction detail, bid, and withdraw flows.
+2) Localize all bot messages, buttons, and errors with RU/EN i18n keys.
+3) Add notification queues for bid updates, round results, and settlement status.
+4) Enforce bot-side rate limits and error handling for retries.
+Tests:
+- Conversation flow tests in both locales.
+- Notification delivery and fallback behavior tests.
+Integration check:
+- Telegram bot drives full auction participation with correct balances.
+
+Phase 8 - Web UI and demo observability (timebox: 3 hours)
+Steps:
+1) Build minimal web UI for live auctions and operator visibility.
+2) Implement Telegram-based authentication for web sessions.
+3) Render live auction state from Redis snapshots with periodic refresh.
+4) Apply responsive layout rules for mobile, tablet, and desktop with minimal gradients and low-radius elements.
+5) Add subtle, purposeful animations for state changes consistent with product expectations.
+Tests:
+- Responsive layout tests across screen sizes and input types.
+- Locale toggling and content consistency tests.
+Integration check:
+- Web UI reflects live auction state and user balances.
+
+Phase 9 - Security hardening and auditability (timebox: 3 hours)
+Steps:
+1) Implement strict input validation and request schemas across all endpoints.
+2) Add CORS, CSRF protections, and session security for the web UI.
+3) Enforce secret management, log redaction, and least-privilege access for services.
+4) Implement immutable audit logging for money movement and admin actions.
+5) Add layered rate limiting and abuse detection across API and bot.
+Tests:
+- Security header and CSRF flow tests.
+- Audit log integrity and access control tests.
+Integration check:
+- Security controls active without breaking core flows.
+
+Phase 10 - Observability, load testing, and performance tuning (timebox: 3 hours)
+Steps:
+1) Instrument metrics for bid throughput, lock contention, round extensions, and settlement timing.
+2) Build a load suite for concurrent bidding and last-second anti-sniping stress.
+3) Run reconciliation checks for ledger totals versus balances after load runs.
+4) Tune MongoDB indexes, Redis usage, and worker concurrency for sub-100ms median bid acceptance.
+5) Document operational runbooks and verify timing behavior against requirements.
+Tests:
+- Load tests with no negative balances, no duplicate winners, and consistent reconciliation.
+- Performance benchmarks meet latency and stability targets.
+Integration check:
+- Full system passes load tests and remains consistent under stress.

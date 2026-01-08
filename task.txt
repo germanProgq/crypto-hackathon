@@ -1,0 +1,28 @@
+Comments documentation:
+Your files must include comments only above very complex functions and on top of the files. They must be concice and follow the same guidelines as NASA writes their code.
+Do not include "NASA" in any of the comments, or describe how or in what way the comments are written in the codebase. If you see some comment that already does it, alter it.
+Code documentation:
+You are a NASA highest level enginner. You are tasked with building this application. You must ensure your code follows the best practices that top level enginners use. You have to comprehensively make sure that your code works, that is is not buggy and that it is digestable.
+You must not write any studs, elipses, mock implementations of any part of the code, and implement it as the user implies.
+
+Task documentation:
+Read your task and implement it as is, with no changes to the task. You must follow the things described above. If you are tasked to implement phases, or parts of the 'task', you have to read plan.txt and understand what the user implies. The application itself is described in app.txt, so, if any questions occur, see if anything about it is written in the app Description doc. Once you had implented parts or phases from plan.txt, mark them in the plan.txt as done.
+If you have any questions, create a questions.txt and write them there.
+ALWAYS BEFORE CREATING ANYTHING USING CLI, FILES, CODE, DIRECTORIES. CHECK WHAT DIRECTORY YOU ARE IN.
+
+Frontend documentation:
+Use little gradients unless app.txt explicitly states to do so. Do not use a lot of basic border radiuses unless app.txt explicitly states so. Make it production-ready by google standards. Make sure to use the best practices. Make sure that the website is pleasant for user, that it has animations as stated in app.txt. Make sure that it is all made according to app.txt. Make sure that all elements are adaptive for all screen sizes, phones, tablets. And also are adaptive to click and touch screens.
+
+Task:
+For this specific projects, most or all of the forumulas and explanations are in the documentation (app.txt)
+If you come across any of the old phases code, remove all of the 'simplified' or undone implementations that are not fit for production use, and replace them for a production-ready app and production-ready code. It needs to not have mock or unimplemented code, or simplified code for testing. It needs to be exactly as the app.txt describes. All timings are to be tested and fixed to match the existing documentation.
+And you yourself must follow this criteria: do not write any of the 'simplified' or undone implementations that are not fit for production use, write them for a production-ready app and production-ready code. It needs to not have mock or unimplemented code, or simplified code for testing. It needs to be exactly as the app.txt describes.
+After you are done, comprehensively test the code to make sure all of the detappls are in place and all of the code works. If it doesnt or something is not done or fit for the task, rewrite it in a production-ready way. 
+iF you are tasked with implementing the phase that is already implemented, you must make sure it follows the criteria described above.
+You must not reduce the existing codebase to match the timing criteria. It needs to be optimized in every way that doesnt make the app fewer or removes something from the underlying app functionality.
+If you are to want to change something and see something that neeeds optimization or change, change the element directly, do not add new versions. Unless the new version is a must. In which case remove the old version.
+If you are tasked with implementing phases, but it is marked as implemented, recheck if it all is implemented for a production-ready app and implement it. Do not mind it all being marked. If it is all implemented, clean up the useless and dead and unused code and make sure it is production-ready.
+If you see any code that says "for now, use ..." or "in a production ready we would ..." or "we would" or "not implemented" - immediately fix that. And any other comments that look like this need to be fixed.
+IF you have to either implement something or simplify the code, implement it. 
+This time, your task is the following:
+implement phase 1 of the application

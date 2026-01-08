@@ -1,0 +1,36 @@
+{
+  "name": "crypto-hack",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:auction-engine": "SERVICE_NAME=auction-engine HTTP_PORT=4001 tsx src/services/auction-engine/index.ts",
+    "dev:ledger": "SERVICE_NAME=ledger HTTP_PORT=4002 tsx src/services/ledger/index.ts",
+    "dev:crypto-gateway": "SERVICE_NAME=crypto-gateway HTTP_PORT=4003 tsx src/services/crypto-gateway/index.ts",
+    "dev:bot": "SERVICE_NAME=bot HTTP_PORT=4004 tsx src/services/bot/index.ts",
+    "dev:web": "SERVICE_NAME=web HTTP_PORT=4005 tsx src/services/web/index.ts",
+    "dev:workers": "SERVICE_NAME=workers HTTP_PORT=4006 tsx src/services/workers/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start:auction-engine": "node dist/services/auction-engine/index.js",
+    "start:ledger": "node dist/services/ledger/index.js",
+    "start:crypto-gateway": "node dist/services/crypto-gateway/index.js",
+    "start:bot": "node dist/services/bot/index.js",
+    "start:web": "node dist/services/web/index.js",
+    "start:workers": "node dist/services/workers/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "fastify": "^4.26.2",
+    "ioredis": "^5.3.2",
+    "mongodb": "^6.3.0",
+    "pino": "^8.17.2",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.17",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.2",
+    "vitest": "^1.4.0"
+  }
+}
