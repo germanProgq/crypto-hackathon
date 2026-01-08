@@ -44,6 +44,7 @@ services:
     image: crypto-hack:local
     build:
       context: .
+      target: build
     depends_on:
       mongo-init:
         condition: service_completed_successfully
@@ -56,11 +57,16 @@ services:
       MONGO_URI: mongodb://mongo:27017/crypto_hack?replicaSet=rs0&directConnection=true
       MONGO_DB: crypto_hack
       REDIS_URL: redis://redis:6379
-    command: ["node", "dist/src/services/auction-engine/index.js"]
+    command: ["npm", "run", "dev:auction-engine"]
     ports:
       - "4001:4001"
+    volumes:
+      - ./src:/app/src
   ledger:
     image: crypto-hack:local
+    build:
+      context: .
+      target: build
     depends_on:
       mongo-init:
         condition: service_completed_successfully
@@ -73,11 +79,16 @@ services:
       MONGO_URI: mongodb://mongo:27017/crypto_hack?replicaSet=rs0&directConnection=true
       MONGO_DB: crypto_hack
       REDIS_URL: redis://redis:6379
-    command: ["node", "dist/src/services/ledger/index.js"]
+    command: ["npm", "run", "dev:ledger"]
     ports:
       - "4002:4002"
+    volumes:
+      - ./src:/app/src
   crypto-gateway:
     image: crypto-hack:local
+    build:
+      context: .
+      target: build
     depends_on:
       mongo-init:
         condition: service_completed_successfully
@@ -90,11 +101,16 @@ services:
       MONGO_URI: mongodb://mongo:27017/crypto_hack?replicaSet=rs0&directConnection=true
       MONGO_DB: crypto_hack
       REDIS_URL: redis://redis:6379
-    command: ["node", "dist/src/services/crypto-gateway/index.js"]
+    command: ["npm", "run", "dev:crypto-gateway"]
     ports:
       - "4003:4003"
+    volumes:
+      - ./src:/app/src
   bot:
     image: crypto-hack:local
+    build:
+      context: .
+      target: build
     depends_on:
       mongo-init:
         condition: service_completed_successfully
@@ -107,11 +123,16 @@ services:
       MONGO_URI: mongodb://mongo:27017/crypto_hack?replicaSet=rs0&directConnection=true
       MONGO_DB: crypto_hack
       REDIS_URL: redis://redis:6379
-    command: ["node", "dist/src/services/bot/index.js"]
+    command: ["npm", "run", "dev:bot"]
     ports:
       - "4004:4004"
+    volumes:
+      - ./src:/app/src
   web:
     image: crypto-hack:local
+    build:
+      context: .
+      target: build
     depends_on:
       mongo-init:
         condition: service_completed_successfully
@@ -124,11 +145,16 @@ services:
       MONGO_URI: mongodb://mongo:27017/crypto_hack?replicaSet=rs0&directConnection=true
       MONGO_DB: crypto_hack
       REDIS_URL: redis://redis:6379
-    command: ["node", "dist/src/services/web/index.js"]
+    command: ["npm", "run", "dev:web"]
     ports:
       - "4005:4005"
+    volumes:
+      - ./src:/app/src
   workers:
     image: crypto-hack:local
+    build:
+      context: .
+      target: build
     depends_on:
       mongo-init:
         condition: service_completed_successfully
@@ -141,8 +167,10 @@ services:
       MONGO_URI: mongodb://mongo:27017/crypto_hack?replicaSet=rs0&directConnection=true
       MONGO_DB: crypto_hack
       REDIS_URL: redis://redis:6379
-    command: ["node", "dist/src/services/workers/index.js"]
+    command: ["npm", "run", "dev:workers"]
     ports:
       - "4006:4006"
+    volumes:
+      - ./src:/app/src
 volumes:
   mongo-data:
