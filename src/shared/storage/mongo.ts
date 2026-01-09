@@ -1,4 +1,4 @@
-// MongoDB connection and schema setup.
+// Purpose: MongoDB connection and schema setup.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { MongoClient, type Db } from "mongodb";
@@ -175,6 +175,7 @@ async function ensureDockerMongoReplica(
 ): Promise<ReplicaEnsureResult> {
   const containerName = `crypto-hack-mongo-${port}`;
   const exists = await dockerContainerExists(containerName);
+  let containerReady = exists;
 
   if (!exists) {
     try {
@@ -191,6 +192,7 @@ async function ensureDockerMongoReplica(
         "--bind_ip_all"
       ]);
       logger.info({ container: containerName, port }, "Mongo docker container created");
+      containerReady = true;
     } catch (error) {
       if (isPortInUseError(error)) {
         return {
@@ -199,9 +201,15 @@ async function ensureDockerMongoReplica(
           reason: "port_in_use"
         };
       }
-      throw error;
+      if (isContainerNameConflictError(error)) {
+        containerReady = true;
+      } else {
+        throw error;
+      }
     }
-  } else {
+  }
+
+  if (containerReady) {
     const running = await dockerContainerRunning(containerName);
     if (!running) {
       await runDocker(["start", containerName]);
@@ -369,6 +377,13 @@ function isPortInUseError(error: unknown): boolean {
     error.message.includes("address already in use") ||
     error.message.includes("bind: address already in use")
   );
+}
+
+function isContainerNameConflictError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return error.message.includes("container name") && error.message.includes("already in use");
 }
 
 async function getReplicaSetStatus(

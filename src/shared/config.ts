@@ -33,6 +33,10 @@ export interface AppConfig {
     defaultLocale: Locale;
     supportedLocales: Locale[];
   };
+  telegram: {
+    botToken: string;
+    apiBaseUrl: string;
+  };
 }
 
 export interface LoadConfigOptions {
@@ -95,7 +99,9 @@ function createEnvSchema(defaultPort: number) {
     RATE_LIMIT_AUCTION_USER_PER_SECOND: z.coerce.number().int().min(1).default(3),
     RATE_LIMIT_IP_PER_SECOND: z.coerce.number().int().min(1).default(20),
     I18N_DEFAULT_LOCALE: z.enum(localeValues).default("en"),
-    I18N_SUPPORTED_LOCALES: z.string().default("en,ru")
+    I18N_SUPPORTED_LOCALES: z.string().default("en,ru"),
+    TELEGRAM_BOT_TOKEN: z.string().default(""),
+    TELEGRAM_API_BASE: z.string().url().default("https://api.telegram.org")
   });
 }
 
@@ -144,6 +150,10 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
     i18n: {
       defaultLocale: parsed.I18N_DEFAULT_LOCALE,
       supportedLocales
+    },
+    telegram: {
+      botToken: parsed.TELEGRAM_BOT_TOKEN,
+      apiBaseUrl: parsed.TELEGRAM_API_BASE
     }
   };
 }

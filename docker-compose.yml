@@ -41,7 +41,7 @@ services:
       timeout: 5s
       retries: 12
   auction-engine:
-    image: crypto-hack:local
+    image: crypto-hack-auction-engine:local
     build:
       context: .
       target: build
@@ -63,7 +63,7 @@ services:
     volumes:
       - ./src:/app/src
   ledger:
-    image: crypto-hack:local
+    image: crypto-hack-ledger:local
     build:
       context: .
       target: build
@@ -85,7 +85,7 @@ services:
     volumes:
       - ./src:/app/src
   crypto-gateway:
-    image: crypto-hack:local
+    image: crypto-hack-crypto-gateway:local
     build:
       context: .
       target: build
@@ -107,7 +107,7 @@ services:
     volumes:
       - ./src:/app/src
   bot:
-    image: crypto-hack:local
+    image: crypto-hack-bot:local
     build:
       context: .
       target: build
@@ -123,13 +123,15 @@ services:
       MONGO_URI: mongodb://mongo:27017/crypto_hack?replicaSet=rs0&directConnection=true
       MONGO_DB: crypto_hack
       REDIS_URL: redis://redis:6379
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_API_BASE: ${TELEGRAM_API_BASE:-https://api.telegram.org}
     command: ["npm", "run", "dev:bot"]
     ports:
       - "4004:4004"
     volumes:
       - ./src:/app/src
   web:
-    image: crypto-hack:local
+    image: crypto-hack-web:local
     build:
       context: .
       target: build
@@ -151,7 +153,7 @@ services:
     volumes:
       - ./src:/app/src
   workers:
-    image: crypto-hack:local
+    image: crypto-hack-workers:local
     build:
       context: .
       target: build

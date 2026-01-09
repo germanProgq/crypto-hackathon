@@ -1,4 +1,4 @@
-// MongoDB collection schemas and index specifications.
+// Purpose: MongoDB collection schemas and index specifications.
 import type { Document, IndexDescription, ObjectId } from "mongodb";
 
 export const mongoCollections = {
@@ -8,7 +8,8 @@ export const mongoCollections = {
   ledgerAccounts: "ledger_accounts",
   ledgerEntries: "ledger_entries",
   roundResults: "round_results",
-  deliveryRecords: "delivery_records"
+  deliveryRecords: "delivery_records",
+  notificationQueue: "notification_queue"
 } as const;
 
 export type AuctionStatus = "draft" | "live" | "closed";
@@ -113,6 +114,7 @@ export interface RoundResultDocument {
     rank: number;
   }>;
   finalizedAt: Date;
+  settlementCompletedAt?: Date;
   createdAt: Date;
 }
 
@@ -122,6 +124,21 @@ export interface DeliveryRecordDocument {
   userId: string;
   deliveryRef: string;
   createdAt: Date;
+}
+
+export interface NotificationQueueDocument {
+  type: "round_result";
+  userId: string;
+  auctionId: ObjectId;
+  roundIndex: number;
+  status: "pending" | "sent" | "failed";
+  payload: Record<string, unknown>;
+  idempotencyKey: string;
+  attempts: number;
+  nextAttemptAt: Date;
+  lastError?: string;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 const bsonNumber = ["int", "long", "double", "decimal"] as const;
@@ -302,6 +319,7 @@ const roundResultValidator: Document = {
         }
       },
       finalizedAt: { bsonType: "date" },
+      settlementCompletedAt: { bsonType: "date" },
       createdAt: { bsonType: "date" }
     }
   }
@@ -321,6 +339,39 @@ const deliveryValidator: Document = {
   }
 };
 
+const notificationQueueValidator: Document = {
+  $jsonSchema: {
+    bsonType: "object",
+    required: [
+      "type",
+      "userId",
+      "auctionId",
+      "roundIndex",
+      "status",
+      "payload",
+      "idempotencyKey",
+      "attempts",
+      "nextAttemptAt",
+      "createdAt",
+      "updatedAt"
+    ],
+    properties: {
+      type: { bsonType: "string", enum: ["round_result"] },
+      userId: { bsonType: "string" },
+      auctionId: { bsonType: "objectId" },
+      roundIndex: { bsonType: bsonNumber },
+      status: { bsonType: "string", enum: ["pending", "sent", "failed"] },
+      payload: { bsonType: "object" },
+      idempotencyKey: { bsonType: "string" },
+      attempts: { bsonType: bsonNumber },
+      nextAttemptAt: { bsonType: "date" },
+      lastError: { bsonType: "string" },
+      createdAt: { bsonType: "date" },
+      updatedAt: { bsonType: "date" }
+    }
+  }
+};
+
 export const mongoCollectionSpecs: Array<{ name: string; validator?: Document }> = [
   { name: mongoCollections.auctions, validator: auctionValidator },
   { name: mongoCollections.auctionRoundStates, validator: roundStateValidator },
@@ -328,7 +379,8 @@ export const mongoCollectionSpecs: Array<{ name: string; validator?: Document }>
   { name: mongoCollections.ledgerAccounts, validator: ledgerAccountValidator },
   { name: mongoCollections.ledgerEntries, validator: ledgerValidator },
   { name: mongoCollections.roundResults, validator: roundResultValidator },
-  { name: mongoCollections.deliveryRecords, validator: deliveryValidator }
+  { name: mongoCollections.deliveryRecords, validator: deliveryValidator },
+  { name: mongoCollections.notificationQueue, validator: notificationQueueValidator }
 ];
 
 export const mongoIndexSpecs: Array<{ collection: string; indexes: IndexDescription[] }> = [
@@ -401,6 +453,14 @@ export const mongoIndexSpecs: Array<{ collection: string; indexes: IndexDescript
     indexes: [
       { key: { auctionId: 1, userId: 1 }, name: "delivery_auction_user" },
       { key: { userId: 1, createdAt: -1 }, name: "delivery_user_createdAt" }
+    ]
+  },
+  {
+    collection: mongoCollections.notificationQueue,
+    indexes: [
+      { key: { idempotencyKey: 1 }, name: "notification_idempotency", unique: true },
+      { key: { status: 1, nextAttemptAt: 1 }, name: "notification_status_next" },
+      { key: { userId: 1, createdAt: -1 }, name: "notification_user_createdAt" }
     ]
   }
 ];

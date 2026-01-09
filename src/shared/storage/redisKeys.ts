@@ -59,5 +59,11 @@ export const redisKeySpecs: RedisKeySpec[] = [
     type: "set",
     ttlSeconds: 10,
     invalidationEvents: ["bid.accepted", "round.finalized"]
+  },
+  {
+    key: "notification:{notificationId}:lock",
+    type: "string",
+    ttlSeconds: 15,
+    invalidationEvents: ["lock.expired"]
   }
 ];

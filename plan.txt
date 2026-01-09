@@ -54,16 +54,16 @@ Integration check:
 
 Phase 5 - Round finalization and settlement (timebox: 3 hours)
 Steps:
-1) Implement round close worker to pull top-K from Redis and verify against MongoDB.
-2) Persist round results and create delivery records for winners.
-3) Capture holds for winners and release holds for non-winners in batches.
-4) Queue notifications and avoid inline delivery in the close path.
-5) Ensure finalization is re-entrant and safe to retry after partial failure.
+1) DONE - Implement round close worker to pull top-K from Redis and verify against MongoDB.
+2) DONE - Persist round results and create delivery records for winners.
+3) DONE - Capture holds for winners and release holds for non-winners in batches.
+4) DONE - Queue notifications and avoid inline delivery in the close path.
+5) DONE - Ensure finalization is re-entrant and safe to retry after partial failure.
 Tests:
-- Idempotent finalization tests with repeated worker runs.
-- Correct capture and release behavior across winners and non-winners.
+- DONE - Idempotent finalization tests with repeated worker runs.
+- DONE - Correct capture and release behavior across winners and non-winners.
 Integration check:
-- End-of-round settlement produces correct balances and results.
+- DONE - End-of-round settlement produces correct balances and results.
 
 Phase 6 - Crypto deposits and withdrawals (timebox: 3 hours)
 Steps:

@@ -1,4 +1,4 @@
-// Bid placement integration tests with Redis ranking checks.
+// Purpose: round finalization integration tests.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { Redis } from "ioredis";
@@ -6,46 +6,46 @@ import { ObjectId } from "mongodb";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { loadConfig } from "../src/shared/config.js";
 import { createLogger } from "../src/shared/logger.js";
-import { createServer } from "../src/shared/http/server.js";
 import {
   connectMongo,
   ensureMongoCollections,
   ensureMongoIndexes,
   type MongoDependencies
 } from "../src/shared/storage/mongo.js";
-import { createRedisClient, type RedisClient } from "../src/shared/storage/redis.js";
 import {
   mongoCollections,
   type AuctionDocument,
   type AuctionRoundConfig,
-  type BidDocument,
-  type LedgerEntryDocument
+  type LedgerEntryDocument,
+  type NotificationQueueDocument,
+  type RoundResultDocument
 } from "../src/shared/storage/mongoSchemas.js";
+import { createRedisClient, type RedisClient } from "../src/shared/storage/redis.js";
 import { createAuctionRepository } from "../src/services/auction-engine/auctionStore.js";
-import { registerAuctionRoutes } from "../src/services/auction-engine/routes.js";
-import { buildRankingMember } from "../src/services/auction-engine/bidRanking.js";
-import { createLedgerRepository } from "../src/services/ledger/ledgerStore.js";
+import { createBidService } from "../src/services/auction-engine/bidService.js";
+import { createRoundFinalizationService } from "../src/services/auction-engine/roundFinalizationService.js";
 import { evaluateRoundTransition } from "../src/services/auction-engine/roundStateMachine.js";
+import { createLedgerRepository } from "../src/services/ledger/ledgerStore.js";
 
 const execFileAsync = promisify(execFile);
 const redisDockerImage = "redis:7.2-alpine";
 const dockerTimeoutMs = 60000;
 const localHosts = new Set(["localhost", "127.0.0.1", "::1", "0.0.0.0"]);
 
-describe("bid placement", () => {
+describe("round finalization", () => {
   const testDbName = `crypto_hack_test_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   const redisPrefix = `test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const config = loadConfig({
-    serviceName: "auction-test",
-    defaultPort: 4201,
+    serviceName: "round-finalization-test",
+    defaultPort: 4301,
     env: {
       MONGO_DB: testDbName,
       MONGO_URI: "mongodb://127.0.0.1:27018/?directConnection=true&replicaSet=rs0",
       REDIS_URL: "redis://127.0.0.1:6379",
       REDIS_PREFIX: redisPrefix,
-      RATE_LIMIT_USER_PER_SECOND: "25",
-      RATE_LIMIT_AUCTION_USER_PER_SECOND: "25",
-      RATE_LIMIT_IP_PER_SECOND: "100",
+      RATE_LIMIT_USER_PER_SECOND: "50",
+      RATE_LIMIT_AUCTION_USER_PER_SECOND: "50",
+      RATE_LIMIT_IP_PER_SECOND: "200",
       LOG_LEVEL: "error"
     }
   });
@@ -53,7 +53,6 @@ describe("bid placement", () => {
   let mongo: MongoDependencies;
   let redis: RedisClient;
   let redisRaw: Redis;
-  let app: ReturnType<typeof createServer>;
 
   beforeAll(async () => {
     await ensureRedisAvailable(config.redis.url);
@@ -67,10 +66,6 @@ describe("bid placement", () => {
       enableOfflineQueue: false
     });
     await redisRaw.connect();
-
-    app = createServer({ logger, config });
-    await registerAuctionRoutes(app, { config, logger, mongo, redis });
-    await app.ready();
   }, 60000);
 
   beforeEach(async () => {
@@ -79,13 +74,13 @@ describe("bid placement", () => {
     await mongo.db.collection(mongoCollections.bids).deleteMany({});
     await mongo.db.collection(mongoCollections.ledgerEntries).deleteMany({});
     await mongo.db.collection(mongoCollections.ledgerAccounts).deleteMany({});
+    await mongo.db.collection(mongoCollections.roundResults).deleteMany({});
+    await mongo.db.collection(mongoCollections.deliveryRecords).deleteMany({});
+    await mongo.db.collection(mongoCollections.notificationQueue).deleteMany({});
     await clearRedisPrefix(redisRaw, redisPrefix);
   });
 
   afterAll(async () => {
-    if (app) {
-      await app.close();
-    }
     if (redis) {
       await redis.quit();
     }
@@ -98,149 +93,99 @@ describe("bid placement", () => {
     }
   }, 20000);
 
-  it("handles concurrent bids with idempotent retries", async () => {
-    const auctionId = await seedLiveAuction(mongo);
-    const ledger = createLedgerRepository(mongo);
-    const bidders = ["user-a", "user-b", "user-c", "user-d", "user-e"];
-    await Promise.all(
-      bidders.map((userId) =>
-        ledger.createEntry({
-          userId,
-          entryType: "deposit_confirmed",
-          amount: 1000,
-          currency: "USDT",
-          idempotencyKey: `deposit-${userId}-${Date.now()}`
-        })
-      )
-    );
+  it("finalizes closed rounds with settlement and idempotent retries", async () => {
+    const { auctionId, roundIndex } = await seedClosedRound(mongo, redis, config, logger);
+    const finalizer = createRoundFinalizationService({ config, logger, mongo, redis });
 
-    const url = `/auctions/${auctionId}/rounds/0/bids`;
-    const idempotencyKey = `bid-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const retries = await Promise.all(
-      Array.from({ length: 5 }).map(() =>
-        app.inject({
-          method: "POST",
-          url,
-          payload: {
-            userId: "user-a",
-            amount: 120,
-            idempotencyKey
-          }
-        })
-      )
-    );
+    await finalizer.finalizeRound(auctionId, roundIndex);
 
-    const retryBodies = retries.map((response) => response.json() as Record<string, unknown>);
-    for (const response of retries) {
-      expect(response.statusCode).toBe(200);
+    const roundResults = await mongo.db
+      .collection<RoundResultDocument>(mongoCollections.roundResults)
+      .findOne({ auctionId, roundIndex });
+    expect(roundResults).toBeTruthy();
+    expect(roundResults?.winners).toHaveLength(2);
+    expect(roundResults?.settlementCompletedAt).toBeInstanceOf(Date);
+    expect(roundResults?.winners.map((winner) => winner.userId)).toEqual([
+      "user-2",
+      "user-1"
+    ]);
+
+    const deliveries = await mongo.db
+      .collection(mongoCollections.deliveryRecords)
+      .find({ auctionId, roundIndex })
+      .toArray();
+    expect(deliveries).toHaveLength(2);
+
+    const notifications = await mongo.db
+      .collection<NotificationQueueDocument>(mongoCollections.notificationQueue)
+      .find({ auctionId, roundIndex })
+      .toArray();
+    expect(notifications).toHaveLength(3);
+    for (const notification of notifications) {
+      expect(notification.status).toBe("pending");
+      expect(notification.type).toBe("round_result");
     }
 
-    const bidIds = new Set(retryBodies.map((body) => (body.bid as { _id: string })._id));
-    expect(bidIds.size).toBe(1);
-
-    const bidsCollection = mongo.db.collection<BidDocument>(mongoCollections.bids);
-    const bidCount = await bidsCollection.countDocuments({ idempotencyKey });
-    expect(bidCount).toBe(1);
-
-    const bidId = Array.from(bidIds)[0];
-    const ledgerEntries = mongo.db.collection<LedgerEntryDocument>(mongoCollections.ledgerEntries);
-    const holdEntry = await ledgerEntries.findOne({
-      userId: "user-a",
-      entryType: "hold_created",
-      "metadata.bidId": bidId
-    });
-    expect(holdEntry?.amount).toBe(120);
-
-    const concurrentBids = await Promise.all(
-      bidders.slice(1).map((userId, index) =>
-        app.inject({
-          method: "POST",
-          url,
-          payload: {
-            userId,
-            amount: 200 + index * 10,
-            idempotencyKey: `bid-${userId}-${Date.now()}`
-          }
-        })
-      )
+    const ledgerEntries = mongo.db.collection<LedgerEntryDocument>(
+      mongoCollections.ledgerEntries
     );
+    const capturedCount = await ledgerEntries.countDocuments({ entryType: "hold_captured" });
+    const releasedCount = await ledgerEntries.countDocuments({ entryType: "hold_released" });
+    expect(capturedCount).toBe(3);
+    expect(releasedCount).toBe(1);
 
-    for (const response of concurrentBids) {
-      expect(response.statusCode).toBe(200);
-    }
-
-    const totalBids = await bidsCollection.countDocuments({ auctionId: new ObjectId(auctionId) });
-    expect(totalBids).toBe(1 + bidders.length - 1);
-  }, 20000);
-
-  it("updates redis ranking and snapshots after a bid", async () => {
-    const auctionId = await seedLiveAuction(mongo);
     const ledger = createLedgerRepository(mongo);
-    await ledger.createEntry({
-      userId: "user-redis",
-      entryType: "deposit_confirmed",
-      amount: 1000,
-      currency: "USDT",
-      idempotencyKey: `deposit-${Date.now()}`
-    });
+    const user1 = await ledger.getBalance("user-1", "USDT");
+    const user2 = await ledger.getBalance("user-2", "USDT");
+    const user3 = await ledger.getBalance("user-3", "USDT");
+    expect(user1.spent).toBeCloseTo(150, 6);
+    expect(user2.spent).toBeCloseTo(200, 6);
+    expect(user3.spent).toBeCloseTo(0, 6);
 
-    const response = await app.inject({
-      method: "POST",
-      url: `/auctions/${auctionId}/rounds/0/bids`,
-      payload: {
-        userId: "user-redis",
-        amount: 250,
-        idempotencyKey: `bid-${Date.now()}`
-      }
-    });
+    await finalizer.finalizeRound(auctionId, roundIndex);
 
-    expect(response.statusCode).toBe(200);
-    const body = response.json() as {
-      bid: { _id: string; amount: number; createdAt: string };
-    };
-    const rankingKey = `auction:${auctionId}:round:0:ranking`;
-    const rankingMember = buildRankingMember(body.bid._id, new Date(body.bid.createdAt));
-    const score = await redis.zscore(rankingKey, rankingMember);
-    expect(Number(score)).toBe(body.bid.amount);
+    const capturedAgain = await ledgerEntries.countDocuments({ entryType: "hold_captured" });
+    const releasedAgain = await ledgerEntries.countDocuments({ entryType: "hold_released" });
+    expect(capturedAgain).toBe(capturedCount);
+    expect(releasedAgain).toBe(releasedCount);
 
-    const roundStateKey = `auction:${auctionId}:round:0:state`;
-    const roundState = await redis.hgetall(roundStateKey);
-    expect(roundState.status).toBe("live");
-    expect(roundState.roundIndex).toBe("0");
-    expect(roundState.lastBidAt).toBeTruthy();
-
-    const snapshotKey = `auction:${auctionId}:snapshot`;
-    const snapshot = await redis.hgetall(snapshotKey);
-    expect(snapshot.currentRoundIndex).toBe("0");
-    expect(snapshot.lastBidAmount).toBe(body.bid.amount.toString());
-
-    const topKey = `state:auction:${auctionId}:round:0:top`;
-    const topMembers = await redis.smembers(topKey);
-    expect(topMembers).toContain(body.bid._id);
-  });
+    const deliveryAgain = await mongo.db
+      .collection(mongoCollections.deliveryRecords)
+      .countDocuments({ auctionId, roundIndex });
+    const notificationsAgain = await mongo.db
+      .collection(mongoCollections.notificationQueue)
+      .countDocuments({ auctionId, roundIndex });
+    expect(deliveryAgain).toBe(2);
+    expect(notificationsAgain).toBe(3);
+  }, 30000);
 });
 
-async function seedLiveAuction(mongo: MongoDependencies): Promise<string> {
+async function seedClosedRound(
+  mongo: MongoDependencies,
+  redis: RedisClient,
+  config: ReturnType<typeof loadConfig>,
+  logger: ReturnType<typeof createLogger>
+): Promise<{ auctionId: ObjectId; roundIndex: number }> {
   const now = new Date();
-  const startAt = new Date(now.getTime() - 60_000);
+  const startAt = new Date(now.getTime() - 5_000);
   const endAt = new Date(now.getTime() + 60_000);
   const rounds: AuctionRoundConfig[] = [
     {
       index: 0,
-      allocationSize: 3,
+      allocationSize: 2,
       startAt,
       endAt,
       antiSniping: {
-        triggerWindowSeconds: 10,
-        extensionSeconds: 30,
-        maxExtensions: 2
+        triggerWindowSeconds: 5,
+        extensionSeconds: 10,
+        maxExtensions: 1
       }
     }
   ];
 
   const auction: AuctionDocument = {
-    title: "Test auction",
-    description: "Bid placement test",
+    title: "Finalization test",
+    description: "Settlement verification",
     status: "live",
     currency: "USDT",
     startsAt: startAt,
@@ -264,13 +209,82 @@ async function seedLiveAuction(mongo: MongoDependencies): Promise<string> {
     throw new Error("Round state missing.");
   }
 
-  const transition = evaluateRoundTransition(firstState, now);
-  if (!transition) {
+  const liveTransition = evaluateRoundTransition(firstState, now);
+  if (!liveTransition) {
     throw new Error("Round transition missing.");
   }
-  await repository.applyRoundTransition(firstState, transition, now);
+  const liveState = await repository.applyRoundTransition(firstState, liveTransition, now);
+  if (!liveState) {
+    throw new Error("Round live transition failed.");
+  }
 
-  return inserted.insertedId.toHexString();
+  const ledger = createLedgerRepository(mongo);
+  await Promise.all([
+    ledger.createEntry({
+      userId: "user-1",
+      entryType: "deposit_confirmed",
+      amount: 500,
+      currency: "USDT",
+      idempotencyKey: `deposit-user-1-${Date.now()}`
+    }),
+    ledger.createEntry({
+      userId: "user-2",
+      entryType: "deposit_confirmed",
+      amount: 500,
+      currency: "USDT",
+      idempotencyKey: `deposit-user-2-${Date.now()}`
+    }),
+    ledger.createEntry({
+      userId: "user-3",
+      entryType: "deposit_confirmed",
+      amount: 500,
+      currency: "USDT",
+      idempotencyKey: `deposit-user-3-${Date.now()}`
+    })
+  ]);
+
+  const bidService = createBidService({ config, logger, mongo, redis });
+  await bidService.placeBid({
+    auctionId: inserted.insertedId,
+    roundIndex: 0,
+    userId: "user-1",
+    amount: 100,
+    idempotencyKey: `bid-user-1-1-${Date.now()}`,
+    ip: "127.0.0.1"
+  });
+  await bidService.placeBid({
+    auctionId: inserted.insertedId,
+    roundIndex: 0,
+    userId: "user-1",
+    amount: 150,
+    idempotencyKey: `bid-user-1-2-${Date.now()}`,
+    ip: "127.0.0.1"
+  });
+  await bidService.placeBid({
+    auctionId: inserted.insertedId,
+    roundIndex: 0,
+    userId: "user-2",
+    amount: 200,
+    idempotencyKey: `bid-user-2-${Date.now()}`,
+    ip: "127.0.0.1"
+  });
+  await bidService.placeBid({
+    auctionId: inserted.insertedId,
+    roundIndex: 0,
+    userId: "user-3",
+    amount: 50,
+    idempotencyKey: `bid-user-3-${Date.now()}`,
+    ip: "127.0.0.1"
+  });
+
+  const closeTime = new Date(endAt.getTime() + 1000);
+  const closeTransition = evaluateRoundTransition(liveState, closeTime);
+  if (!closeTransition) {
+    throw new Error("Round close transition missing.");
+  }
+  await repository.applyRoundTransition(liveState, closeTransition, closeTime);
+
+  return { auctionId: inserted.insertedId, roundIndex: 0 };
 }
 
 async function ensureRedisAvailable(url: string): Promise<void> {
