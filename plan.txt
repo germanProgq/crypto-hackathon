@@ -67,16 +67,16 @@ Integration check:
 
 Phase 6 - Crypto deposits and withdrawals (timebox: 3 hours)
 Steps:
-1) Define wallet strategy interface to support address-per-user or memo/tag attribution.
-2) Implement deposit watcher with confirmation thresholds and idempotent crediting.
-3) Build withdrawal state machine: requested, authorized, broadcasted, confirmed, failed.
-4) Add isolated signer service with strict network and access controls.
-5) Implement withdrawal safety controls: cooldowns, thresholds, allowlists, and anomaly flags.
+1) DONE - Define wallet strategy interface to support address-per-user or memo/tag attribution.
+2) DONE - Implement deposit watcher with confirmation thresholds and idempotent crediting.
+3) DONE - Build withdrawal state machine: requested, authorized, broadcasted, confirmed, failed.
+4) DONE - Add isolated signer service with strict network and access controls.
+5) DONE - Implement withdrawal safety controls: cooldowns, thresholds, allowlists, and anomaly flags.
 Tests:
-- Duplicate deposit event handling and confirmation edge cases.
-- Withdrawal state transitions and signer failure recovery.
+- DONE - Duplicate deposit event handling and confirmation edge cases.
+- DONE - Withdrawal state transitions and signer failure recovery.
 Integration check:
-- End-to-end deposit and withdrawal flows using a controlled test network.
+- DONE - End-to-end deposit and withdrawal flows using a controlled test network.
 
 Phase 7 - Telegram bot UX and notifications (timebox: 3 hours)
 Steps:

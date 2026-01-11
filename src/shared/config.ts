@@ -37,6 +37,17 @@ export interface AppConfig {
     botToken: string;
     apiBaseUrl: string;
   };
+  crypto: {
+    walletStrategy: "address_per_user" | "memo_tag";
+    depositConfirmations: Record<string, number>;
+    withdrawalConfirmations: Record<string, number>;
+    withdrawalCooldownSeconds: number;
+    withdrawalDailyLimitUSD: number;
+    withdrawalMinAmount: Record<string, number>;
+    hdDerivationPath?: string;
+    masterPublicKey?: string;
+    hotWalletAddress?: string;
+  };
 }
 
 export interface LoadConfigOptions {
@@ -76,6 +87,35 @@ function parseLocales(value: string): Locale[] {
   return Array.from(unique);
 }
 
+function parseCurrencyMap(value: string): Record<string, number> {
+  const result: Record<string, number> = {};
+  const entries = value.split(",").map((e) => e.trim()).filter((e) => e.length > 0);
+
+  for (const entry of entries) {
+    const parts = entry.split(":");
+    if (parts.length !== 2) {
+      throw new Error(`Invalid currency map entry: ${entry}`);
+    }
+
+    const currency = parts[0];
+    const valueStr = parts[1];
+
+    if (!currency || !valueStr) {
+      throw new Error(`Invalid currency map entry: ${entry}`);
+    }
+
+    const numValue = Number(valueStr);
+
+    if (!Number.isFinite(numValue) || numValue < 0) {
+      throw new Error(`Invalid value for currency ${currency}: ${valueStr}`);
+    }
+
+    result[currency.trim().toUpperCase()] = numValue;
+  }
+
+  return result;
+}
+
 function createEnvSchema(defaultPort: number) {
   return z.object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -101,7 +141,16 @@ function createEnvSchema(defaultPort: number) {
     I18N_DEFAULT_LOCALE: z.enum(localeValues).default("en"),
     I18N_SUPPORTED_LOCALES: z.string().default("en,ru"),
     TELEGRAM_BOT_TOKEN: z.string().default(""),
-    TELEGRAM_API_BASE: z.string().url().default("https://api.telegram.org")
+    TELEGRAM_API_BASE: z.string().url().default("https://api.telegram.org"),
+    CRYPTO_WALLET_STRATEGY: z.enum(["address_per_user", "memo_tag"]).default("address_per_user"),
+    CRYPTO_DEPOSIT_CONFIRMATIONS: z.string().default("BTC:3,ETH:12,USDT:12"),
+    CRYPTO_WITHDRAWAL_CONFIRMATIONS: z.string().default("BTC:3,ETH:12,USDT:12"),
+    CRYPTO_WITHDRAWAL_COOLDOWN_SECONDS: z.coerce.number().int().min(0).default(300),
+    CRYPTO_WITHDRAWAL_DAILY_LIMIT_USD: z.coerce.number().min(0).default(10000),
+    CRYPTO_WITHDRAWAL_MIN_AMOUNT: z.string().default("BTC:0.0001,ETH:0.001,USDT:10"),
+    CRYPTO_HD_DERIVATION_PATH: z.string().optional(),
+    CRYPTO_MASTER_PUBLIC_KEY: z.string().optional(),
+    CRYPTO_HOT_WALLET_ADDRESS: z.string().optional()
   });
 }
 
@@ -125,6 +174,10 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
   if (!supportedLocales.includes(parsed.I18N_DEFAULT_LOCALE)) {
     throw new Error("I18N_DEFAULT_LOCALE must be included in I18N_SUPPORTED_LOCALES.");
   }
+
+  const depositConfirmations = parseCurrencyMap(parsed.CRYPTO_DEPOSIT_CONFIRMATIONS);
+  const withdrawalConfirmations = parseCurrencyMap(parsed.CRYPTO_WITHDRAWAL_CONFIRMATIONS);
+  const withdrawalMinAmount = parseCurrencyMap(parsed.CRYPTO_WITHDRAWAL_MIN_AMOUNT);
 
   return {
     env: parsed.NODE_ENV,
@@ -154,6 +207,17 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
     telegram: {
       botToken: parsed.TELEGRAM_BOT_TOKEN,
       apiBaseUrl: parsed.TELEGRAM_API_BASE
+    },
+    crypto: {
+      walletStrategy: parsed.CRYPTO_WALLET_STRATEGY,
+      depositConfirmations,
+      withdrawalConfirmations,
+      withdrawalCooldownSeconds: parsed.CRYPTO_WITHDRAWAL_COOLDOWN_SECONDS,
+      withdrawalDailyLimitUSD: parsed.CRYPTO_WITHDRAWAL_DAILY_LIMIT_USD,
+      withdrawalMinAmount,
+      hdDerivationPath: parsed.CRYPTO_HD_DERIVATION_PATH,
+      masterPublicKey: parsed.CRYPTO_MASTER_PUBLIC_KEY,
+      hotWalletAddress: parsed.CRYPTO_HOT_WALLET_ADDRESS
     }
   };
 }
