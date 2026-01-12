@@ -20,7 +20,12 @@
     "start:web": "node dist/src/services/web/index.js",
     "start:workers": "node dist/src/services/workers/index.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "load:bot": "node scripts/load/bot-sim.js",
+    "load:stress": "node scripts/load/stress-bids.js",
+    "load:anti-sniping": "node scripts/load/anti-sniping.js",
+    "load:reconcile": "node scripts/load/reconcile.js",
+    "load:all": "node scripts/load/suite.js"
   },
   "dependencies": {
     "fastify": "^4.26.2",

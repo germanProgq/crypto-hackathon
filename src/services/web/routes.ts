@@ -113,7 +113,6 @@ export async function registerWebRoutes(
     const status: AuctionStatus = startAt.getTime() <= now.getTime() ? "live" : "draft";
     const auction: AuctionDocument = {
       title: parsed.data.title,
-      description: parsed.data.description,
       status,
       currency: parsed.data.currency ?? "USDT",
       startsAt: startAt,
@@ -122,6 +121,9 @@ export async function registerWebRoutes(
       createdAt: now,
       updatedAt: now
     };
+    if (parsed.data.description && parsed.data.description.trim().length > 0) {
+      auction.description = parsed.data.description.trim();
+    }
 
     const auctions = deps.mongo.db.collection<AuctionDocument>(mongoCollections.auctions);
     const inserted = await auctions.insertOne(auction);

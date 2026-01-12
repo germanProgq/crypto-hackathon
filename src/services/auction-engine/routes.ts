@@ -396,10 +396,9 @@ function buildAuctionDocument(
   const rounds = normalizeRounds(config.rounds);
   const now = new Date();
 
-  return {
+  const auction: WithId<AuctionDocument> = {
     _id: new ObjectId(),
     title,
-    description,
     status: "draft",
     currency,
     startsAt: config.startsAt,
@@ -408,6 +407,10 @@ function buildAuctionDocument(
     createdAt: now,
     updatedAt: now
   };
+  if (description) {
+    auction.description = description;
+  }
+  return auction;
 }
 
 function normalizeRequiredText(value: string, field: string): string {
