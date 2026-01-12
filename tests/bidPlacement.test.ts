@@ -218,6 +218,88 @@ describe("bid placement", () => {
     const topMembers = await redis.smembers(topKey);
     expect(topMembers).toContain(body.bid._id);
   });
+
+  it("keeps a single active bid per auction and applies bid upgrades", async () => {
+    const auctionId = await seedLiveAuction(mongo);
+    const ledger = createLedgerRepository(mongo);
+    await ledger.createEntry({
+      userId: "user-upgrade",
+      entryType: "deposit_confirmed",
+      amount: 1000,
+      currency: "USDT",
+      idempotencyKey: `deposit-upgrade-${Date.now()}`
+    });
+
+    const url = `/auctions/${auctionId}/bids`;
+    const firstBid = await app.inject({
+      method: "POST",
+      url,
+      payload: {
+        userId: "user-upgrade",
+        amount: 100,
+        idempotencyKey: `bid-upgrade-1-${Date.now()}`
+      }
+    });
+    expect(firstBid.statusCode).toBe(200);
+
+    const secondBid = await app.inject({
+      method: "POST",
+      url,
+      payload: {
+        userId: "user-upgrade",
+        amount: 150,
+        idempotencyKey: `bid-upgrade-2-${Date.now()}`
+      }
+    });
+    expect(secondBid.statusCode).toBe(200);
+
+    const bidsCollection = mongo.db.collection<BidDocument>(mongoCollections.bids);
+    const activeBids = await bidsCollection
+      .find({
+        auctionId: new ObjectId(auctionId),
+        userId: "user-upgrade",
+        active: true
+      })
+      .toArray();
+    expect(activeBids).toHaveLength(1);
+    const activeBid = activeBids[0];
+    if (!activeBid) {
+      throw new Error("Active bid missing after upgrade.");
+    }
+    expect(activeBid.amount).toBe(150);
+
+    const inactiveBids = await bidsCollection
+      .find({
+        auctionId: new ObjectId(auctionId),
+        userId: "user-upgrade",
+        active: false
+      })
+      .toArray();
+    expect(inactiveBids).toHaveLength(1);
+    const inactiveBid = inactiveBids[0];
+    if (!inactiveBid) {
+      throw new Error("Inactive bid missing after upgrade.");
+    }
+    expect(inactiveBid.inactiveAt).toBeInstanceOf(Date);
+
+    const ledgerEntries = mongo.db.collection<LedgerEntryDocument>(
+      mongoCollections.ledgerEntries
+    );
+    const holds = await ledgerEntries
+      .find({ userId: "user-upgrade", entryType: "hold_created" })
+      .toArray();
+    const totalHeld = holds.reduce((sum, entry) => sum + entry.amount, 0);
+    expect(totalHeld).toBeCloseTo(150, 6);
+
+    const rankingKey = `auction:${auctionId}:ranking`;
+    const rankingMember = buildRankingMember(activeBid._id, activeBid.createdAt);
+    const score = await redis.zscore(rankingKey, rankingMember);
+    expect(Number(score)).toBe(activeBid.amount);
+
+    const inactiveMember = buildRankingMember(inactiveBid._id, inactiveBid.createdAt);
+    const inactiveScore = await redis.zscore(rankingKey, inactiveMember);
+    expect(inactiveScore).toBeNull();
+  });
 });
 
 async function seedLiveAuction(mongo: MongoDependencies): Promise<string> {
