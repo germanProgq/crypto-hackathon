@@ -25,4 +25,4 @@ If you are tasked with implementing phases, but it is marked as implemented, rec
 If you see any code that says "for now, use ..." or "in a production ready we would ..." or "we would" or "not implemented" - immediately fix that. And any other comments that look like this need to be fixed.
 IF you have to either implement something or simplify the code, implement it. 
 This time, your task is the following:
-implement phase 5 of the application
+implement phase 7 of the application

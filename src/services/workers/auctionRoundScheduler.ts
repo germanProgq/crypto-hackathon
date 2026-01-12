@@ -2,6 +2,7 @@
 import type { FastifyInstance } from "fastify";
 import type { ServiceDependencies } from "../../shared/service.js";
 import { acquireRedisLock, releaseRedisLock } from "../../shared/storage/redisLock.js";
+import { buildRoundLockKey } from "../auction-engine/auctionKeys.js";
 import { createAuctionRepository } from "../auction-engine/auctionStore.js";
 import { deriveAuctionStatus, evaluateRoundTransition } from "../auction-engine/roundStateMachine.js";
 
@@ -84,8 +85,4 @@ async function runSchedulerTick(
       await repository.updateAuctionStatus(auction._id, auction.status, nextStatus, now);
     }
   }
-}
-
-function buildRoundLockKey(auctionId: string, roundIndex: number): string {
-  return `auction:${auctionId}:round:${roundIndex}:lock`;
 }

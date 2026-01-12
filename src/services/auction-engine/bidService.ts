@@ -16,6 +16,17 @@ import {
   type LedgerBalance,
   type HoldOperationInput
 } from "../ledger/ledgerStore.js";
+import {
+  buildAuctionSnapshotKey,
+  buildAuctionUserRateLimitKey,
+  buildBidIdempotencyKey,
+  buildIpRateLimitKey,
+  buildRankingKey,
+  buildRoundLockKey,
+  buildRoundStateKey,
+  buildRoundTopKey,
+  buildUserRateLimitKey
+} from "./auctionKeys.js";
 import { createAuctionRepository } from "./auctionStore.js";
 import { buildRankingMember, parseRankingMember } from "./bidRanking.js";
 
@@ -509,42 +520,6 @@ function buildHoldId(bidId: ObjectId): string {
 
 function buildHoldIdempotencyKey(idempotencyKey: string): string {
   return `hold:${idempotencyKey}`;
-}
-
-function buildBidIdempotencyKey(idempotencyKey: string): string {
-  return `idempotency:bid:${idempotencyKey}`;
-}
-
-function buildRankingKey(auctionId: string, roundIndex: number): string {
-  return `auction:${auctionId}:round:${roundIndex}:ranking`;
-}
-
-function buildAuctionSnapshotKey(auctionId: string): string {
-  return `auction:${auctionId}:snapshot`;
-}
-
-function buildRoundStateKey(auctionId: string, roundIndex: number): string {
-  return `auction:${auctionId}:round:${roundIndex}:state`;
-}
-
-function buildRoundTopKey(auctionId: string, roundIndex: number): string {
-  return `state:auction:${auctionId}:round:${roundIndex}:top`;
-}
-
-function buildRoundLockKey(auctionId: string, roundIndex: number): string {
-  return `auction:${auctionId}:round:${roundIndex}:lock`;
-}
-
-function buildUserRateLimitKey(userId: string): string {
-  return `rate:user:${userId}`;
-}
-
-function buildAuctionUserRateLimitKey(auctionId: string, userId: string): string {
-  return `rate:auction:${auctionId}:user:${userId}`;
-}
-
-function buildIpRateLimitKey(ip: string): string {
-  return `rate:ip:${ip}`;
 }
 
 function delay(timeoutMs: number): Promise<void> {

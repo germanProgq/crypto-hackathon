@@ -9,7 +9,14 @@ export const mongoCollections = {
   ledgerEntries: "ledger_entries",
   roundResults: "round_results",
   deliveryRecords: "delivery_records",
-  notificationQueue: "notification_queue"
+  notificationQueue: "notification_queue",
+  cryptoWalletAddresses: "crypto_wallet_addresses",
+  cryptoAddressPool: "crypto_address_pool",
+  cryptoDeposits: "crypto_deposits",
+  cryptoWithdrawals: "crypto_withdrawals",
+  cryptoWithdrawalAllowlists: "crypto_withdrawal_allowlists",
+  cryptoGatewayState: "crypto_gateway_state",
+  cryptoCounters: "crypto_counters"
 } as const;
 
 export type AuctionStatus = "draft" | "live" | "closed";
@@ -138,6 +145,95 @@ export interface NotificationQueueDocument {
   nextAttemptAt: Date;
   lastError?: string;
   createdAt: Date;
+  updatedAt: Date;
+}
+
+export type CryptoWalletStrategy = "address_pool" | "memo_tag";
+export type CryptoDepositStatus = "observed" | "confirming" | "confirmed" | "credited";
+export type CryptoWithdrawalStatus =
+  | "requested"
+  | "authorized"
+  | "broadcasted"
+  | "confirmed"
+  | "failed";
+
+export interface CryptoWalletAddressDocument {
+  userId: string;
+  currency: string;
+  address: string;
+  memo?: string;
+  strategy: CryptoWalletStrategy;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface CryptoAddressPoolDocument {
+  currency: string;
+  address: string;
+  assignedTo?: string;
+  assignedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface CryptoDepositDocument {
+  currency: string;
+  txId: string;
+  address: string;
+  memo?: string;
+  amount: number;
+  confirmations: number;
+  status: CryptoDepositStatus;
+  userId?: string;
+  blockHeight?: number;
+  observedAt: Date;
+  createdAt: Date;
+  updatedAt: Date;
+  creditedAt?: Date;
+  ledgerEntryId?: ObjectId;
+}
+
+export interface CryptoWithdrawalDocument {
+  userId: string;
+  currency: string;
+  amount: number;
+  destinationAddress: string;
+  memo?: string;
+  status: CryptoWithdrawalStatus;
+  idempotencyKey: string;
+  requestedAt: Date;
+  authorizedAt?: Date;
+  broadcastedAt?: Date;
+  confirmedAt?: Date;
+  failedAt?: Date;
+  txId?: string;
+  flags?: string[];
+  reviewRequired?: boolean;
+  failureReason?: string;
+  authorizedBy?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface CryptoWithdrawalAllowlistDocument {
+  userId: string;
+  currency: string;
+  address: string;
+  label?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface CryptoGatewayStateDocument {
+  key: string;
+  currency: string;
+  cursor?: string;
+  updatedAt: Date;
+}
+
+export interface CryptoCounterDocument {
+  key: string;
+  sequence: number;
   updatedAt: Date;
 }
 
@@ -372,6 +468,154 @@ const notificationQueueValidator: Document = {
   }
 };
 
+const cryptoWalletAddressValidator: Document = {
+  $jsonSchema: {
+    bsonType: "object",
+    required: ["userId", "currency", "address", "strategy", "createdAt", "updatedAt"],
+    properties: {
+      userId: { bsonType: "string" },
+      currency: { bsonType: "string" },
+      address: { bsonType: "string" },
+      memo: { bsonType: "string" },
+      strategy: { bsonType: "string", enum: ["address_pool", "memo_tag"] },
+      createdAt: { bsonType: "date" },
+      updatedAt: { bsonType: "date" }
+    }
+  }
+};
+
+const cryptoAddressPoolValidator: Document = {
+  $jsonSchema: {
+    bsonType: "object",
+    required: ["currency", "address", "createdAt", "updatedAt"],
+    properties: {
+      currency: { bsonType: "string" },
+      address: { bsonType: "string" },
+      assignedTo: { bsonType: "string" },
+      assignedAt: { bsonType: "date" },
+      createdAt: { bsonType: "date" },
+      updatedAt: { bsonType: "date" }
+    }
+  }
+};
+
+const cryptoDepositValidator: Document = {
+  $jsonSchema: {
+    bsonType: "object",
+    required: [
+      "currency",
+      "txId",
+      "address",
+      "amount",
+      "confirmations",
+      "status",
+      "observedAt",
+      "createdAt",
+      "updatedAt"
+    ],
+    properties: {
+      currency: { bsonType: "string" },
+      txId: { bsonType: "string" },
+      address: { bsonType: "string" },
+      memo: { bsonType: "string" },
+      amount: { bsonType: bsonNumber },
+      confirmations: { bsonType: bsonNumber },
+      status: {
+        bsonType: "string",
+        enum: ["observed", "confirming", "confirmed", "credited"]
+      },
+      userId: { bsonType: "string" },
+      blockHeight: { bsonType: bsonNumber },
+      observedAt: { bsonType: "date" },
+      createdAt: { bsonType: "date" },
+      updatedAt: { bsonType: "date" },
+      creditedAt: { bsonType: "date" },
+      ledgerEntryId: { bsonType: "objectId" }
+    }
+  }
+};
+
+const cryptoWithdrawalValidator: Document = {
+  $jsonSchema: {
+    bsonType: "object",
+    required: [
+      "userId",
+      "currency",
+      "amount",
+      "destinationAddress",
+      "status",
+      "idempotencyKey",
+      "requestedAt",
+      "createdAt",
+      "updatedAt"
+    ],
+    properties: {
+      userId: { bsonType: "string" },
+      currency: { bsonType: "string" },
+      amount: { bsonType: bsonNumber },
+      destinationAddress: { bsonType: "string" },
+      memo: { bsonType: "string" },
+      status: {
+        bsonType: "string",
+        enum: ["requested", "authorized", "broadcasted", "confirmed", "failed"]
+      },
+      idempotencyKey: { bsonType: "string" },
+      requestedAt: { bsonType: "date" },
+      authorizedAt: { bsonType: "date" },
+      broadcastedAt: { bsonType: "date" },
+      confirmedAt: { bsonType: "date" },
+      failedAt: { bsonType: "date" },
+      txId: { bsonType: "string" },
+      flags: { bsonType: "array", items: { bsonType: "string" } },
+      reviewRequired: { bsonType: "bool" },
+      failureReason: { bsonType: "string" },
+      authorizedBy: { bsonType: "string" },
+      createdAt: { bsonType: "date" },
+      updatedAt: { bsonType: "date" }
+    }
+  }
+};
+
+const cryptoWithdrawalAllowlistValidator: Document = {
+  $jsonSchema: {
+    bsonType: "object",
+    required: ["userId", "currency", "address", "createdAt", "updatedAt"],
+    properties: {
+      userId: { bsonType: "string" },
+      currency: { bsonType: "string" },
+      address: { bsonType: "string" },
+      label: { bsonType: "string" },
+      createdAt: { bsonType: "date" },
+      updatedAt: { bsonType: "date" }
+    }
+  }
+};
+
+const cryptoGatewayStateValidator: Document = {
+  $jsonSchema: {
+    bsonType: "object",
+    required: ["key", "currency", "updatedAt"],
+    properties: {
+      key: { bsonType: "string" },
+      currency: { bsonType: "string" },
+      cursor: { bsonType: "string" },
+      updatedAt: { bsonType: "date" }
+    }
+  }
+};
+
+const cryptoCounterValidator: Document = {
+  $jsonSchema: {
+    bsonType: "object",
+    required: ["key", "sequence", "updatedAt"],
+    properties: {
+      key: { bsonType: "string" },
+      sequence: { bsonType: bsonNumber },
+      updatedAt: { bsonType: "date" }
+    }
+  }
+};
+
 export const mongoCollectionSpecs: Array<{ name: string; validator?: Document }> = [
   { name: mongoCollections.auctions, validator: auctionValidator },
   { name: mongoCollections.auctionRoundStates, validator: roundStateValidator },
@@ -380,7 +624,17 @@ export const mongoCollectionSpecs: Array<{ name: string; validator?: Document }>
   { name: mongoCollections.ledgerEntries, validator: ledgerValidator },
   { name: mongoCollections.roundResults, validator: roundResultValidator },
   { name: mongoCollections.deliveryRecords, validator: deliveryValidator },
-  { name: mongoCollections.notificationQueue, validator: notificationQueueValidator }
+  { name: mongoCollections.notificationQueue, validator: notificationQueueValidator },
+  { name: mongoCollections.cryptoWalletAddresses, validator: cryptoWalletAddressValidator },
+  { name: mongoCollections.cryptoAddressPool, validator: cryptoAddressPoolValidator },
+  { name: mongoCollections.cryptoDeposits, validator: cryptoDepositValidator },
+  { name: mongoCollections.cryptoWithdrawals, validator: cryptoWithdrawalValidator },
+  {
+    name: mongoCollections.cryptoWithdrawalAllowlists,
+    validator: cryptoWithdrawalAllowlistValidator
+  },
+  { name: mongoCollections.cryptoGatewayState, validator: cryptoGatewayStateValidator },
+  { name: mongoCollections.cryptoCounters, validator: cryptoCounterValidator }
 ];
 
 export const mongoIndexSpecs: Array<{ collection: string; indexes: IndexDescription[] }> = [
@@ -388,6 +642,7 @@ export const mongoIndexSpecs: Array<{ collection: string; indexes: IndexDescript
     collection: mongoCollections.auctions,
     indexes: [
       { key: { status: 1, startsAt: 1 }, name: "auctions_status_startsAt" },
+      { key: { status: 1, endsAt: -1 }, name: "auctions_status_endsAt" },
       { key: { createdAt: -1 }, name: "auctions_createdAt" }
     ]
   },
@@ -462,5 +717,80 @@ export const mongoIndexSpecs: Array<{ collection: string; indexes: IndexDescript
       { key: { status: 1, nextAttemptAt: 1 }, name: "notification_status_next" },
       { key: { userId: 1, createdAt: -1 }, name: "notification_user_createdAt" }
     ]
+  },
+  {
+    collection: mongoCollections.cryptoWalletAddresses,
+    indexes: [
+      {
+        key: { userId: 1, currency: 1 },
+        name: "crypto_wallet_user_currency",
+        unique: true
+      },
+      {
+        key: { currency: 1, address: 1 },
+        name: "crypto_wallet_currency_address",
+        unique: true
+      },
+      {
+        key: { currency: 1, memo: 1 },
+        name: "crypto_wallet_currency_memo",
+        unique: true,
+        partialFilterExpression: { memo: { $exists: true } }
+      }
+    ]
+  },
+  {
+    collection: mongoCollections.cryptoAddressPool,
+    indexes: [
+      {
+        key: { currency: 1, address: 1 },
+        name: "crypto_pool_currency_address",
+        unique: true
+      },
+      { key: { currency: 1, assignedTo: 1 }, name: "crypto_pool_currency_assigned" }
+    ]
+  },
+  {
+    collection: mongoCollections.cryptoDeposits,
+    indexes: [
+      { key: { currency: 1, txId: 1 }, name: "crypto_deposits_tx", unique: true },
+      { key: { status: 1, updatedAt: 1 }, name: "crypto_deposits_status_updated" },
+      { key: { userId: 1, observedAt: -1 }, name: "crypto_deposits_user_observed" }
+    ]
+  },
+  {
+    collection: mongoCollections.cryptoWithdrawals,
+    indexes: [
+      { key: { idempotencyKey: 1 }, name: "crypto_withdrawals_idempotency", unique: true },
+      { key: { status: 1, updatedAt: 1 }, name: "crypto_withdrawals_status_updated" },
+      { key: { userId: 1, requestedAt: -1 }, name: "crypto_withdrawals_user_requested" },
+      {
+        key: { txId: 1 },
+        name: "crypto_withdrawals_tx",
+        unique: true,
+        partialFilterExpression: { txId: { $exists: true } }
+      }
+    ]
+  },
+  {
+    collection: mongoCollections.cryptoWithdrawalAllowlists,
+    indexes: [
+      {
+        key: { userId: 1, currency: 1, address: 1 },
+        name: "crypto_allowlist_user_currency_address",
+        unique: true
+      },
+      { key: { userId: 1, currency: 1 }, name: "crypto_allowlist_user_currency" }
+    ]
+  },
+  {
+    collection: mongoCollections.cryptoGatewayState,
+    indexes: [
+      { key: { key: 1, currency: 1 }, name: "crypto_gateway_state_unique", unique: true }
+    ]
+  },
+  {
+    collection: mongoCollections.cryptoCounters,
+    indexes: [{ key: { key: 1 }, name: "crypto_counters_unique", unique: true }]
   }
 ];

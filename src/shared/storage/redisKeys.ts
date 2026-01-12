@@ -65,5 +65,23 @@ export const redisKeySpecs: RedisKeySpec[] = [
     type: "string",
     ttlSeconds: 15,
     invalidationEvents: ["lock.expired"]
+  },
+  {
+    key: "crypto:deposits:lock",
+    type: "string",
+    ttlSeconds: 15,
+    invalidationEvents: ["lock.expired"]
+  },
+  {
+    key: "crypto:withdrawals:broadcast:lock",
+    type: "string",
+    ttlSeconds: 20,
+    invalidationEvents: ["lock.expired"]
+  },
+  {
+    key: "crypto:withdrawals:confirm:lock",
+    type: "string",
+    ttlSeconds: 20,
+    invalidationEvents: ["lock.expired"]
   }
 ];

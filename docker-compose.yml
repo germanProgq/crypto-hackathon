@@ -101,9 +101,35 @@ services:
       MONGO_URI: mongodb://mongo:27017/crypto_hack?replicaSet=rs0&directConnection=true
       MONGO_DB: crypto_hack
       REDIS_URL: redis://redis:6379
+      CRYPTO_SUPPORTED_CURRENCIES: USDT
+      CRYPTO_WALLET_STRATEGY: memo_tag
+      CRYPTO_MEMO_DEPOSIT_ADDRESS: USDT:DEMO_DEPOSIT_ADDRESS
+      CRYPTO_HOT_WALLET_ADDRESS: USDT:DEMO_HOT_WALLET
+      CRYPTO_SIGNER_URL: http://signer:4007
+      CRYPTO_SIGNER_TOKEN: ${SIGNER_API_TOKEN:-dev-signer-token}
+      CRYPTO_ADMIN_TOKEN: ${CRYPTO_ADMIN_TOKEN:-dev-admin-token}
+      CRYPTO_OBSERVER_URL: ${CRYPTO_OBSERVER_URL:-http://observer:9000}
     command: ["npm", "run", "dev:crypto-gateway"]
     ports:
       - "4003:4003"
+    volumes:
+      - ./src:/app/src
+  signer:
+    image: crypto-hack-signer:local
+    build:
+      context: .
+      target: build
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: signer
+      HTTP_HOST: 0.0.0.0
+      HTTP_PORT: "4007"
+      SIGNER_API_TOKEN: ${SIGNER_API_TOKEN:-dev-signer-token}
+      SIGNER_PRIVATE_KEY: ${SIGNER_PRIVATE_KEY}
+      SIGNER_ALLOWED_IPS: ${SIGNER_ALLOWED_IPS:-}
+    command: ["npm", "run", "dev:signer"]
+    ports:
+      - "4007:4007"
     volumes:
       - ./src:/app/src
   bot:

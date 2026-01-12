@@ -184,6 +184,20 @@ export function createLedgerRepository(mongo: MongoDependencies) {
   }
 
   async function createEntry(input: LedgerEntryInput): Promise<LedgerMutationResult> {
+    return runMongoTransaction(mongo, (session) => createEntryWithSession(input, session));
+  }
+
+  async function createEntryInSession(
+    input: LedgerEntryInput,
+    session: ClientSession
+  ): Promise<LedgerMutationResult> {
+    return createEntryWithSession(input, session);
+  }
+
+  async function createEntryWithSession(
+    input: LedgerEntryInput,
+    session: ClientSession
+  ): Promise<LedgerMutationResult> {
     if (!mutationEntryTypes.has(input.entryType)) {
       throw new LedgerError(
         "invalid_request",
@@ -193,37 +207,40 @@ export function createLedgerRepository(mongo: MongoDependencies) {
     }
 
     if (input.entryType === "withdrawal_requested") {
-      return requestWithdrawal(toWithdrawalInput(input));
+      return requestWithdrawalWithSession(toWithdrawalInput(input), session);
     }
 
     if (input.entryType === "withdrawal_broadcasted") {
-      const entry = await broadcastWithdrawal(toWithdrawalInput(input));
-      const balance = await getBalance(input.userId, input.currency);
-      return { entry, balance };
-    }
-
-    if (input.entryType === "withdrawal_confirmed") {
-      return confirmWithdrawal(toWithdrawalInput(input));
-    }
-
-    if (input.entryType === "withdrawal_failed") {
-      return failWithdrawal(toWithdrawalInput(input));
-    }
-
-    validateEntryInput(input);
-
-    return runMongoTransaction(mongo, async (session) => {
-      await touchAccount(ledgerAccounts, input.userId, input.currency, session);
-      const entry = await insertLedgerEntry(ledgerEntries, input, session);
+      const entry = await broadcastWithdrawalWithSession(toWithdrawalInput(input), session);
       const balance = await getBalanceWithSession(
         ledgerEntries,
         input.userId,
         input.currency,
         session
       );
-      assertNonNegative(balance);
       return { entry, balance };
-    });
+    }
+
+    if (input.entryType === "withdrawal_confirmed") {
+      return resolveWithdrawalWithSession(toWithdrawalInput(input), "withdrawal_confirmed", session);
+    }
+
+    if (input.entryType === "withdrawal_failed") {
+      return resolveWithdrawalWithSession(toWithdrawalInput(input), "withdrawal_failed", session);
+    }
+
+    validateEntryInput(input);
+
+    await touchAccount(ledgerAccounts, input.userId, input.currency, session);
+    const entry = await insertLedgerEntry(ledgerEntries, input, session);
+    const balance = await getBalanceWithSession(
+      ledgerEntries,
+      input.userId,
+      input.currency,
+      session
+    );
+    assertNonNegative(balance);
+    return { entry, balance };
   }
 
   async function createHold(input: HoldOperationInput): Promise<LedgerMutationResult> {
@@ -311,65 +328,77 @@ export function createLedgerRepository(mongo: MongoDependencies) {
   async function requestWithdrawal(input: WithdrawalOperationInput): Promise<LedgerMutationResult> {
     validateWithdrawalInput(input);
 
-    return runMongoTransaction(mongo, async (session) => {
-      await touchAccount(ledgerAccounts, input.userId, input.currency, session);
-      const existing = await findWithdrawalEntry(
-        ledgerEntries,
-        input.userId,
-        input.currency,
-        input.withdrawalId,
-        "withdrawal_requested",
-        session
-      );
+    return runMongoTransaction(mongo, (session) => requestWithdrawalWithSession(input, session));
+  }
 
-      if (existing) {
-        if (existing.idempotencyKey === input.idempotencyKey) {
-          const balance = await getBalanceWithSession(
-            ledgerEntries,
-            input.userId,
-            input.currency,
-            session
-          );
-          return { entry: existing, balance };
-        }
+  async function requestWithdrawalInSession(
+    input: WithdrawalOperationInput,
+    session: ClientSession
+  ): Promise<LedgerMutationResult> {
+    return requestWithdrawalWithSession(input, session);
+  }
 
-        throw new LedgerError("withdrawal_exists", "Withdrawal already requested.", 409);
+  async function requestWithdrawalWithSession(
+    input: WithdrawalOperationInput,
+    session: ClientSession
+  ): Promise<LedgerMutationResult> {
+    await touchAccount(ledgerAccounts, input.userId, input.currency, session);
+    const existing = await findWithdrawalEntry(
+      ledgerEntries,
+      input.userId,
+      input.currency,
+      input.withdrawalId,
+      "withdrawal_requested",
+      session
+    );
+
+    if (existing) {
+      if (existing.idempotencyKey === input.idempotencyKey) {
+        const balance = await getBalanceWithSession(
+          ledgerEntries,
+          input.userId,
+          input.currency,
+          session
+        );
+        return { entry: existing, balance };
       }
 
-      const balance = await getBalanceWithSession(
-        ledgerEntries,
-        input.userId,
-        input.currency,
-        session
-      );
+      throw new LedgerError("withdrawal_exists", "Withdrawal already requested.", 409);
+    }
 
-      if (balance.available < input.amount) {
-        throw new LedgerError("insufficient_funds", "Insufficient available balance.", 409);
-      }
+    const balance = await getBalanceWithSession(
+      ledgerEntries,
+      input.userId,
+      input.currency,
+      session
+    );
 
-      const entry = await insertLedgerEntry(
-        ledgerEntries,
-        {
-          userId: input.userId,
-          entryType: "withdrawal_requested",
-          amount: input.amount,
-          currency: input.currency,
-          idempotencyKey: input.idempotencyKey,
-          metadata: mergeReferenceMetadata("withdrawalId", input.withdrawalId, input.metadata),
-          audit: input.audit
-        },
-        session
-      );
+    if (balance.available < input.amount) {
+      throw new LedgerError("insufficient_funds", "Insufficient available balance.", 409);
+    }
 
-      const updated = await getBalanceWithSession(
-        ledgerEntries,
-        input.userId,
-        input.currency,
-        session
-      );
-      assertNonNegative(updated);
-      return { entry, balance: updated };
-    });
+    const entry = await insertLedgerEntry(
+      ledgerEntries,
+      {
+        userId: input.userId,
+        entryType: "withdrawal_requested",
+        amount: input.amount,
+        currency: input.currency,
+        idempotencyKey: input.idempotencyKey,
+        metadata: mergeReferenceMetadata("withdrawalId", input.withdrawalId, input.metadata),
+        audit: input.audit
+      },
+      session
+    );
+
+    const updated = await getBalanceWithSession(
+      ledgerEntries,
+      input.userId,
+      input.currency,
+      session
+    );
+    assertNonNegative(updated);
+    return { entry, balance: updated };
   }
 
   async function broadcastWithdrawal(
@@ -377,60 +406,90 @@ export function createLedgerRepository(mongo: MongoDependencies) {
   ): Promise<WithId<LedgerEntryDocument>> {
     validateWithdrawalInput(input);
 
-    return runMongoTransaction(mongo, async (session) => {
-      await touchAccount(ledgerAccounts, input.userId, input.currency, session);
-      const existing = await findWithdrawalEntry(
-        ledgerEntries,
-        input.userId,
-        input.currency,
-        input.withdrawalId,
-        "withdrawal_broadcasted",
-        session
-      );
+    return runMongoTransaction(mongo, (session) => broadcastWithdrawalWithSession(input, session));
+  }
 
-      if (existing) {
-        if (existing.idempotencyKey === input.idempotencyKey) {
-          return existing;
-        }
+  async function broadcastWithdrawalInSession(
+    input: WithdrawalOperationInput,
+    session: ClientSession
+  ): Promise<WithId<LedgerEntryDocument>> {
+    return broadcastWithdrawalWithSession(input, session);
+  }
 
-        throw new LedgerError("withdrawal_exists", "Withdrawal already broadcasted.", 409);
+  async function broadcastWithdrawalWithSession(
+    input: WithdrawalOperationInput,
+    session: ClientSession
+  ): Promise<WithId<LedgerEntryDocument>> {
+    await touchAccount(ledgerAccounts, input.userId, input.currency, session);
+    const existing = await findWithdrawalEntry(
+      ledgerEntries,
+      input.userId,
+      input.currency,
+      input.withdrawalId,
+      "withdrawal_broadcasted",
+      session
+    );
+
+    if (existing) {
+      if (existing.idempotencyKey === input.idempotencyKey) {
+        return existing;
       }
 
-      const requested = await findWithdrawalEntry(
-        ledgerEntries,
-        input.userId,
-        input.currency,
-        input.withdrawalId,
-        "withdrawal_requested",
-        session
-      );
+      throw new LedgerError("withdrawal_exists", "Withdrawal already broadcasted.", 409);
+    }
 
-      if (!requested) {
-        throw new LedgerError("withdrawal_not_found", "Withdrawal not found.", 404);
-      }
+    const requested = await findWithdrawalEntry(
+      ledgerEntries,
+      input.userId,
+      input.currency,
+      input.withdrawalId,
+      "withdrawal_requested",
+      session
+    );
 
-      return insertLedgerEntry(
-        ledgerEntries,
-        {
-          userId: input.userId,
-          entryType: "withdrawal_broadcasted",
-          amount: input.amount,
-          currency: input.currency,
-          idempotencyKey: input.idempotencyKey,
-          metadata: mergeReferenceMetadata("withdrawalId", input.withdrawalId, input.metadata),
-          audit: input.audit
-        },
-        session
-      );
-    });
+    if (!requested) {
+      throw new LedgerError("withdrawal_not_found", "Withdrawal not found.", 404);
+    }
+
+    return insertLedgerEntry(
+      ledgerEntries,
+      {
+        userId: input.userId,
+        entryType: "withdrawal_broadcasted",
+        amount: input.amount,
+        currency: input.currency,
+        idempotencyKey: input.idempotencyKey,
+        metadata: mergeReferenceMetadata("withdrawalId", input.withdrawalId, input.metadata),
+        audit: input.audit
+      },
+      session
+    );
   }
 
   async function confirmWithdrawal(input: WithdrawalOperationInput): Promise<LedgerMutationResult> {
-    return resolveWithdrawal(input, "withdrawal_confirmed");
+    return runMongoTransaction(mongo, (session) =>
+      resolveWithdrawalWithSession(input, "withdrawal_confirmed", session)
+    );
+  }
+
+  async function confirmWithdrawalInSession(
+    input: WithdrawalOperationInput,
+    session: ClientSession
+  ): Promise<LedgerMutationResult> {
+    return resolveWithdrawalWithSession(input, "withdrawal_confirmed", session);
   }
 
   async function failWithdrawal(input: WithdrawalOperationInput): Promise<LedgerMutationResult> {
-    return resolveWithdrawal(input, "withdrawal_failed");
+    return runMongoTransaction(mongo, (session) =>
+      resolveWithdrawalWithSession(input, "withdrawal_failed", session)
+    );
+  }
+
+  async function failWithdrawalInSession(
+    input: WithdrawalOperationInput,
+    session: ClientSession
+  ): Promise<LedgerMutationResult> {
+    return resolveWithdrawalWithSession(input, "withdrawal_failed", session);
   }
 
   async function resolveHold(
@@ -515,87 +574,86 @@ export function createLedgerRepository(mongo: MongoDependencies) {
     });
   }
 
-  async function resolveWithdrawal(
+  async function resolveWithdrawalWithSession(
     input: WithdrawalOperationInput,
-    entryType: "withdrawal_confirmed" | "withdrawal_failed"
+    entryType: "withdrawal_confirmed" | "withdrawal_failed",
+    session: ClientSession
   ): Promise<LedgerMutationResult> {
     validateWithdrawalInput(input);
 
-    return runMongoTransaction(mongo, async (session) => {
-      await touchAccount(ledgerAccounts, input.userId, input.currency, session);
-      const requested = await findWithdrawalEntry(
-        ledgerEntries,
-        input.userId,
-        input.currency,
-        input.withdrawalId,
-        "withdrawal_requested",
-        session
-      );
+    await touchAccount(ledgerAccounts, input.userId, input.currency, session);
+    const requested = await findWithdrawalEntry(
+      ledgerEntries,
+      input.userId,
+      input.currency,
+      input.withdrawalId,
+      "withdrawal_requested",
+      session
+    );
 
-      if (!requested) {
-        throw new LedgerError("withdrawal_not_found", "Withdrawal not found.", 404);
+    if (!requested) {
+      throw new LedgerError("withdrawal_not_found", "Withdrawal not found.", 404);
+    }
+
+    if (requested.amount !== input.amount) {
+      throw new LedgerError("invalid_request", "Withdrawal amount mismatch.", 409);
+    }
+
+    const resolved = await findWithdrawalResolution(
+      ledgerEntries,
+      input.userId,
+      input.currency,
+      input.withdrawalId,
+      session
+    );
+
+    if (resolved) {
+      if (resolved.entryType === entryType && resolved.idempotencyKey === input.idempotencyKey) {
+        const balance = await getBalanceWithSession(
+          ledgerEntries,
+          input.userId,
+          input.currency,
+          session
+        );
+        return { entry: resolved, balance };
       }
 
-      if (requested.amount !== input.amount) {
-        throw new LedgerError("invalid_request", "Withdrawal amount mismatch.", 409);
-      }
+      throw new LedgerError("withdrawal_resolved", "Withdrawal already resolved.", 409);
+    }
 
-      const resolved = await findWithdrawalResolution(
-        ledgerEntries,
-        input.userId,
-        input.currency,
-        input.withdrawalId,
-        session
-      );
+    const balance = await getBalanceWithSession(
+      ledgerEntries,
+      input.userId,
+      input.currency,
+      session
+    );
 
-      if (resolved) {
-        if (resolved.entryType === entryType && resolved.idempotencyKey === input.idempotencyKey) {
-          const balance = await getBalanceWithSession(
-            ledgerEntries,
-            input.userId,
-            input.currency,
-            session
-          );
-          return { entry: resolved, balance };
-        }
+    if (balance.held < input.amount) {
+      throw new LedgerError("insufficient_funds", "Insufficient held balance.", 409);
+    }
 
-        throw new LedgerError("withdrawal_resolved", "Withdrawal already resolved.", 409);
-      }
+    const entry = await insertLedgerEntry(
+      ledgerEntries,
+      {
+        userId: input.userId,
+        entryType,
+        amount: input.amount,
+        currency: input.currency,
+        idempotencyKey: input.idempotencyKey,
+        metadata: mergeReferenceMetadata("withdrawalId", input.withdrawalId, input.metadata),
+        audit: input.audit
+      },
+      session
+    );
 
-      const balance = await getBalanceWithSession(
-        ledgerEntries,
-        input.userId,
-        input.currency,
-        session
-      );
-
-      if (balance.held < input.amount) {
-        throw new LedgerError("insufficient_funds", "Insufficient held balance.", 409);
-      }
-
-      const entry = await insertLedgerEntry(
-        ledgerEntries,
-        {
-          userId: input.userId,
-          entryType,
-          amount: input.amount,
-          currency: input.currency,
-          idempotencyKey: input.idempotencyKey,
-          metadata: mergeReferenceMetadata("withdrawalId", input.withdrawalId, input.metadata),
-          audit: input.audit
-        },
-        session
-      );
-
-      const updated = await getBalanceWithSession(
-        ledgerEntries,
-        input.userId,
-        input.currency,
-        session
-      );
-      assertNonNegative(updated);
-      return { entry, balance: updated };
-    });
+    const updated = await getBalanceWithSession(
+      ledgerEntries,
+      input.userId,
+      input.currency,
+      session
+    );
+    assertNonNegative(updated);
+    return { entry, balance: updated };
   }
 
   return {
@@ -604,14 +662,19 @@ export function createLedgerRepository(mongo: MongoDependencies) {
     getHistory,
     reconcile,
     createEntry,
+    createEntryInSession,
     createHold,
     createHoldInSession,
     releaseHold,
     captureHold,
     requestWithdrawal,
+    requestWithdrawalInSession,
     broadcastWithdrawal,
+    broadcastWithdrawalInSession,
     confirmWithdrawal,
-    failWithdrawal
+    confirmWithdrawalInSession,
+    failWithdrawal,
+    failWithdrawalInSession
   };
 }
 

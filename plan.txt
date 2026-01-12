@@ -67,18 +67,31 @@ Integration check:
 
 Phase 6 - Crypto deposits and withdrawals (timebox: 3 hours)
 Steps:
-1) Define wallet strategy interface to support address-per-user or memo/tag attribution.
-2) Implement deposit watcher with confirmation thresholds and idempotent crediting.
-3) Build withdrawal state machine: requested, authorized, broadcasted, confirmed, failed.
-4) Add isolated signer service with strict network and access controls.
-5) Implement withdrawal safety controls: cooldowns, thresholds, allowlists, and anomaly flags.
+1) DONE - Define wallet strategy interface to support address-per-user or memo/tag attribution.
+2) DONE - Implement deposit watcher with confirmation thresholds and idempotent crediting.
+3) DONE - Build withdrawal state machine: requested, authorized, broadcasted, confirmed, failed.
+4) DONE - Add isolated signer service with strict network and access controls.
+5) DONE - Implement withdrawal safety controls: cooldowns, thresholds, allowlists, and anomaly flags.
 Tests:
-- Duplicate deposit event handling and confirmation edge cases.
-- Withdrawal state transitions and signer failure recovery.
+DONE - Duplicate deposit event handling and confirmation edge cases.
+DONE - Withdrawal state transitions and signer failure recovery.
 Integration check:
-- End-to-end deposit and withdrawal flows using a controlled test network.
+DONE - End-to-end deposit and withdrawal flows using a controlled test network.
 
-Phase 7 - Telegram bot UX and notifications (timebox: 3 hours)
+Phase 7 - Auction creation/listing/state APIs (timebox: 3 hours)
+Steps:
+1) DONE - Implement auction creation endpoint with config validation and timing checks.
+2) DONE - Add listing endpoint for active/upcoming/closed auctions with pagination.
+3) DONE - Add auction detail endpoint including rounds, allocations, and timing.
+4) DONE - Add round state endpoint with current status, timers, and extension counts.
+5) DONE - Add Redis-backed snapshot read paths with MongoDB fallback for consistency.
+Tests:
+- DONE - Auction creation validation and timing rejection tests.
+- DONE - Listing/state endpoints return consistent snapshots across MongoDB/Redis.
+Integration check:
+- DONE - Auction creation and reads work end-to-end for draft/live/closed auctions.
+
+Phase 8 - Telegram bot UX and notifications (timebox: 3 hours)
 Steps:
 1) Implement onboarding, balance, deposit instructions, auctions list, auction detail, bid, and withdraw flows.
 2) Localize all bot messages, buttons, and errors with RU/EN i18n keys.
@@ -90,7 +103,7 @@ Tests:
 Integration check:
 - Telegram bot drives full auction participation with correct balances.
 
-Phase 8 - Web UI and demo observability (timebox: 3 hours)
+Phase 9 - Web UI and demo observability (timebox: 3 hours)
 Steps:
 1) Build minimal web UI for live auctions and operator visibility.
 2) Implement Telegram-based authentication for web sessions.
@@ -103,7 +116,7 @@ Tests:
 Integration check:
 - Web UI reflects live auction state and user balances.
 
-Phase 9 - Security hardening and auditability (timebox: 3 hours)
+Phase 10 - Security hardening and auditability (timebox: 3 hours)
 Steps:
 1) Implement strict input validation and request schemas across all endpoints.
 2) Add CORS, CSRF protections, and session security for the web UI.
@@ -116,7 +129,7 @@ Tests:
 Integration check:
 - Security controls active without breaking core flows.
 
-Phase 10 - Observability, load testing, and performance tuning (timebox: 3 hours)
+Phase 11 - Observability, load testing, and performance tuning (timebox: 3 hours)
 Steps:
 1) Instrument metrics for bid throughput, lock contention, round extensions, and settlement timing.
 2) Build a load suite for concurrent bidding and last-second anti-sniping stress.

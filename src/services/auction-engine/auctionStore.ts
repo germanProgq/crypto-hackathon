@@ -52,7 +52,8 @@ export function createAuctionRepository(mongo: MongoDependencies) {
   }
 
   async function ensureRoundStates(
-    auction: WithId<AuctionDocument>
+    auction: WithId<AuctionDocument>,
+    session?: ClientSession
   ): Promise<Array<WithId<AuctionRoundStateDocument>>> {
     if (auction.rounds.length === 0) {
       return [];
@@ -82,10 +83,13 @@ export function createAuctionRepository(mongo: MongoDependencies) {
     );
 
     if (operations.length > 0) {
-      await roundStates.bulkWrite(operations, { ordered: false });
+      await roundStates.bulkWrite(operations, { ordered: false, session });
     }
 
-    return roundStates.find({ auctionId: auction._id }).sort({ roundIndex: 1 }).toArray();
+    return roundStates
+      .find({ auctionId: auction._id }, { session })
+      .sort({ roundIndex: 1 })
+      .toArray();
   }
 
   async function applyRoundTransition(

@@ -13,6 +13,7 @@ import {
   type RoundResultDocument
 } from "../../shared/storage/mongoSchemas.js";
 import { createLedgerRepository, LedgerError } from "../ledger/ledgerStore.js";
+import { buildRankingKey } from "./auctionKeys.js";
 import { parseRankingMember } from "./bidRanking.js";
 
 const holdLookupBatchSize = 500;
@@ -496,10 +497,6 @@ function findRoundConfig(rounds: AuctionRoundConfig[], roundIndex: number): Auct
     throw new Error(`Round config missing for index ${roundIndex}.`);
   }
   return round;
-}
-
-function buildRankingKey(auctionId: string, roundIndex: number): string {
-  return `auction:${auctionId}:round:${roundIndex}:ranking`;
 }
 
 function buildHoldId(bidId: string): string {
