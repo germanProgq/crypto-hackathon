@@ -13,25 +13,24 @@ import {
   createAuction,
   getRoundState,
   readNumber,
-  readText,
-  sleep
+  readText
 } from "./lib.js";
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const config = resolveConfig(args);
   const runId = buildRunId(args);
+  const roundDurationSeconds = Math.max(
+    4,
+    Math.floor(readNumber(args.roundDuration, process.env.ANTI_ROUND_DURATION, 6))
+  );
   const triggerWindowSeconds = Math.max(
     2,
-    Math.floor(readNumber(args.triggerWindow, process.env.ANTI_TRIGGER_WINDOW, 6))
+    Math.floor(readNumber(args.triggerWindow, process.env.ANTI_TRIGGER_WINDOW, roundDurationSeconds))
   );
   const extensionSeconds = Math.max(
     1,
-    Math.floor(readNumber(args.extensionSeconds, process.env.ANTI_EXTENSION_SECONDS, 12))
-  );
-  const roundDurationSeconds = Math.max(
-    triggerWindowSeconds + 6,
-    Math.floor(readNumber(args.roundDuration, process.env.ANTI_ROUND_DURATION, 30))
+    Math.floor(readNumber(args.extensionSeconds, process.env.ANTI_EXTENSION_SECONDS, 4))
   );
   const depositAmount = readNumber(args.deposit, process.env.ANTI_DEPOSIT, 200);
   const baseBid = readNumber(args.baseBid, process.env.ANTI_BASE_BID, 80);
@@ -64,8 +63,8 @@ async function main() {
     auctionId,
     roundIndex: 0,
     status: "live",
-    timeoutMs: 30000,
-    pollMs: 500
+    timeoutMs: 8000,
+    pollMs: 100
   });
 
   await seedDeposits({
@@ -82,12 +81,6 @@ async function main() {
     auctionId,
     roundIndex: 0
   });
-  const effectiveEnd = new Date(stateBefore.effectiveEndAt).getTime();
-  const targetTime = effectiveEnd - (triggerWindowSeconds - 1) * 1000;
-  const delayMs = targetTime - Date.now();
-  if (delayMs > 0) {
-    await sleep(delayMs);
-  }
 
   const response = await placeBid({
     auctionUrl: config.auctionUrl,

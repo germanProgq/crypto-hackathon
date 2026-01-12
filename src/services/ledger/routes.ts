@@ -26,7 +26,7 @@ const baseBodySchema = z.object({
   amount: z.number().positive(),
   currency: z.string().min(1),
   idempotencyKey: z.string().min(1),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   audit: auditSchema.optional()
 });
 

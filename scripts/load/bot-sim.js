@@ -17,8 +17,7 @@ import {
   createAuction,
   readNumber,
   readText,
-  runTasksWithLimit,
-  sleep
+  runTasksWithLimit
 } from "./lib.js";
 
 async function main() {
@@ -31,8 +30,6 @@ async function main() {
   const baseBid = readNumber(args.baseBid, process.env.BOT_BASE_BID, 50);
   const minIncrement = readNumber(args.minIncrement, process.env.BOT_MIN_INCREMENT, 5);
   const maxIncrement = readNumber(args.maxIncrement, process.env.BOT_MAX_INCREMENT, 25);
-  const minDelayMs = readNumber(args.minDelayMs, process.env.BOT_MIN_DELAY_MS, 350);
-  const maxDelayMs = readNumber(args.maxDelayMs, process.env.BOT_MAX_DELAY_MS, 900);
   const concurrency = Math.max(
     1,
     Math.floor(readNumber(args.concurrency, process.env.BOT_CONCURRENCY, 12))
@@ -53,7 +50,7 @@ async function main() {
     currency: config.currency,
     rounds: 2,
     allocationSize: Math.max(1, Math.floor(userCount / 5)),
-    roundDurationSeconds: Math.max(60, bidsPerUser * 8),
+    roundDurationSeconds: Math.max(8, bidsPerUser * 2),
     startOffsetSeconds: 0,
     antiSniping: {
       triggerWindowSeconds: 10,
@@ -69,8 +66,8 @@ async function main() {
     auctionId,
     roundIndex: 0,
     status: "live",
-    timeoutMs: 30000,
-    pollMs: 500
+    timeoutMs: 8000,
+    pollMs: 100
   });
 
   const users = buildUserList({ prefix, runId, count: userCount });
@@ -102,7 +99,6 @@ async function main() {
       }).catch((error) => ({ ok: false, status: "error", error }));
 
       recordResponse(response, durations, statusCounts);
-      await sleep(randomBetween(minDelayMs, maxDelayMs));
     }
   });
 

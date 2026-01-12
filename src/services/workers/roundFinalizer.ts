@@ -8,7 +8,7 @@ import {
 } from "../../shared/storage/mongoSchemas.js";
 import { createRoundFinalizationService } from "../auction-engine/roundFinalizationService.js";
 
-const finalizerIntervalMs = 2000;
+const finalizerIntervalMs = 200;
 const finalizerLockTtlMs = 20000;
 const finalizerBatchSize = 50;
 

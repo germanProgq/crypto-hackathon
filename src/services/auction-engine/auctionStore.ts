@@ -61,6 +61,28 @@ export function createAuctionRepository(mongo: MongoDependencies) {
     );
   }
 
+  async function listRoundStates(
+    auctionId: ObjectId,
+    session?: ClientSession
+  ): Promise<Array<WithId<AuctionRoundStateDocument>>> {
+    return roundStates
+      .find({ auctionId }, { session })
+      .sort({ roundIndex: 1 })
+      .toArray();
+  }
+
+  async function listDueRoundStates(
+    now: Date,
+    limit = 200
+  ): Promise<Array<WithId<AuctionRoundStateDocument>>> {
+    return roundStates
+      .find(
+        { status: { $in: ["scheduled", "live"] }, nextTransitionAt: { $lte: now } },
+        { sort: { nextTransitionAt: 1, auctionId: 1, roundIndex: 1 }, limit }
+      )
+      .toArray();
+  }
+
   async function ensureRoundStates(
     auction: WithId<AuctionDocument>,
     session?: ClientSession
@@ -72,24 +94,25 @@ export function createAuctionRepository(mongo: MongoDependencies) {
     const now = new Date();
     const operations: Array<AnyBulkWriteOperation<AuctionRoundStateDocument>> = auction.rounds.map(
       (round) => ({
-      updateOne: {
-        filter: { auctionId: auction._id, roundIndex: round.index },
-        update: {
-          $setOnInsert: {
-            auctionId: auction._id,
-            roundIndex: round.index,
-            status: "scheduled",
-            scheduledStartAt: round.startAt,
-            scheduledEndAt: round.endAt,
-            effectiveEndAt: round.endAt,
-            extensionCount: 0,
-            createdAt: now,
-            updatedAt: now
-          }
-        },
-        upsert: true
-      }
-    })
+        updateOne: {
+          filter: { auctionId: auction._id, roundIndex: round.index },
+          update: {
+            $setOnInsert: {
+              auctionId: auction._id,
+              roundIndex: round.index,
+              status: "scheduled",
+              scheduledStartAt: round.startAt,
+              scheduledEndAt: round.endAt,
+              effectiveEndAt: round.endAt,
+              nextTransitionAt: round.startAt,
+              extensionCount: 0,
+              createdAt: now,
+              updatedAt: now
+            }
+          },
+          upsert: true
+        }
+      })
     );
 
     if (operations.length > 0) {
@@ -102,13 +125,68 @@ export function createAuctionRepository(mongo: MongoDependencies) {
       .toArray();
   }
 
+  async function backfillMissingNextTransitionAt(
+    now: Date,
+    limit = 200
+  ): Promise<number> {
+    const missing = await roundStates
+      .find({ nextTransitionAt: { $exists: false } })
+      .limit(limit)
+      .toArray();
+
+    if (missing.length === 0) {
+      return 0;
+    }
+
+    const operations: Array<AnyBulkWriteOperation<AuctionRoundStateDocument>> = missing.map(
+      (state) => ({
+        updateOne: {
+          filter: { _id: state._id },
+          update: {
+            $set: {
+              nextTransitionAt: resolveNextTransitionAt(state),
+              updatedAt: now
+            }
+          }
+        }
+      })
+    );
+
+    await roundStates.bulkWrite(operations, { ordered: false });
+    return operations.length;
+  }
+
+  async function refreshNextTransitionAt(
+    state: WithId<AuctionRoundStateDocument>,
+    now: Date
+  ): Promise<WithId<AuctionRoundStateDocument> | null> {
+    const nextTransitionAt = resolveNextTransitionAt(state);
+    if (state.nextTransitionAt?.getTime() === nextTransitionAt.getTime()) {
+      return state;
+    }
+
+    const updated = await roundStates.findOneAndUpdate(
+      { _id: state._id, updatedAt: state.updatedAt },
+      { $set: { nextTransitionAt, updatedAt: now } },
+      { returnDocument: "after" }
+    );
+    return updated ?? null;
+  }
+
   async function applyRoundTransition(
     state: WithId<AuctionRoundStateDocument>,
     transition: RoundTransition,
     now: Date
   ): Promise<WithId<AuctionRoundStateDocument> | null> {
+    const nextTransitionAt = resolveNextTransitionAt({
+      status: transition.status,
+      scheduledStartAt: state.scheduledStartAt,
+      effectiveEndAt: state.effectiveEndAt,
+      closedAt: transition.closedAt ?? state.closedAt
+    });
     const updateFields: Record<string, unknown> = {
       status: transition.status,
+      nextTransitionAt,
       updatedAt: now
     };
 
@@ -173,6 +251,7 @@ export function createAuctionRepository(mongo: MongoDependencies) {
         lastBidAt: update.state.lastBidAt ?? state.lastBidAt,
         extensionCount: update.state.extensionCount,
         effectiveEndAt: update.state.effectiveEndAt,
+        nextTransitionAt: resolveNextTransitionAt(update.state),
         updatedAt: now
       };
 
@@ -195,7 +274,11 @@ export function createAuctionRepository(mongo: MongoDependencies) {
     getAuctionById,
     getRoundState,
     getLiveRoundState,
+    listRoundStates,
+    listDueRoundStates,
     ensureRoundStates,
+    backfillMissingNextTransitionAt,
+    refreshNextTransitionAt,
     applyRoundTransition,
     updateAuctionStatus,
     applyBidAntiSniping
@@ -250,3 +333,22 @@ type RoundStateSnapshot = {
   effectiveEndAt: Date;
   lastBidAt?: Date;
 };
+
+type NextTransitionState = {
+  status: AuctionRoundStateDocument["status"];
+  scheduledStartAt: Date;
+  effectiveEndAt: Date;
+  closedAt?: Date;
+};
+
+function resolveNextTransitionAt(state: NextTransitionState): Date {
+  if (state.status === "scheduled") {
+    return state.scheduledStartAt;
+  }
+
+  if (state.status === "live") {
+    return state.effectiveEndAt;
+  }
+
+  return state.closedAt ?? state.effectiveEndAt;
+}

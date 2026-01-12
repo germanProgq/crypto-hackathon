@@ -35,7 +35,7 @@ const bidBodySchema = z
     userId: z.string().min(1),
     amount: z.number().positive().finite(),
     idempotencyKey: z.string().min(1),
-    metadata: z.record(z.unknown()).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
     audit: auditSchema.optional()
   })
   .strict();
@@ -562,7 +562,10 @@ async function resolveAuctionSnapshot(
     throw new AuctionApiError("auction_not_found", "Auction not found.", 404);
   }
 
-  const roundStates = await repository.ensureRoundStates(auction);
+  let roundStates = await repository.listRoundStates(auctionId);
+  if (roundStates.length === 0) {
+    roundStates = await repository.ensureRoundStates(auction);
+  }
   const orderedStates = [...roundStates].sort((left, right) => left.roundIndex - right.roundIndex);
   const current =
     orderedStates.find((state) => state.status === "live") ??
@@ -574,7 +577,7 @@ async function resolveAuctionSnapshot(
   let roundLastBidAt: Date | null = current?.lastBidAt ?? null;
   if (current) {
     const lastBid = await bids
-      .find({ auctionId, roundIndex: current.roundIndex })
+      .find({ auctionId, active: true })
       .project<{ amount: number; createdAt: Date }>({ amount: 1, createdAt: 1 })
       .sort({ createdAt: -1, _id: -1 })
       .limit(1)

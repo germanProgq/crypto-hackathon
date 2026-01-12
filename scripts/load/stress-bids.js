@@ -44,7 +44,7 @@ async function main() {
     currency: config.currency,
     rounds: 1,
     allocationSize: Math.max(1, Math.floor(userCount / 4)),
-    roundDurationSeconds: 120,
+    roundDurationSeconds: Math.max(6, Math.ceil(totalBids / Math.max(1, concurrency)) + 2),
     startOffsetSeconds: 0,
     antiSniping: {
       triggerWindowSeconds: 8,
@@ -58,8 +58,8 @@ async function main() {
     auctionId,
     roundIndex: 0,
     status: "live",
-    timeoutMs: 30000,
-    pollMs: 500
+    timeoutMs: 8000,
+    pollMs: 100
   });
 
   const users = buildUserList({ prefix, runId, count: userCount });

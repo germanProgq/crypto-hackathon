@@ -74,6 +74,7 @@ export interface AuctionRoundStateDocument {
   scheduledStartAt: Date;
   scheduledEndAt: Date;
   effectiveEndAt: Date;
+  nextTransitionAt: Date;
   extensionCount: number;
   lastBidAt?: Date;
   startedAt?: Date;
@@ -355,6 +356,7 @@ const roundStateValidator: Document = {
       "scheduledStartAt",
       "scheduledEndAt",
       "effectiveEndAt",
+      "nextTransitionAt",
       "extensionCount",
       "createdAt",
       "updatedAt"
@@ -366,6 +368,7 @@ const roundStateValidator: Document = {
       scheduledStartAt: { bsonType: "date" },
       scheduledEndAt: { bsonType: "date" },
       effectiveEndAt: { bsonType: "date" },
+      nextTransitionAt: { bsonType: "date" },
       extensionCount: { bsonType: bsonNumber },
       lastBidAt: { bsonType: "date" },
       startedAt: { bsonType: "date" },
@@ -859,6 +862,10 @@ export const mongoIndexSpecs: Array<{ collection: string; indexes: IndexDescript
         name: "auction_round_state_unique",
         unique: true
       },
+      {
+        key: { status: 1, nextTransitionAt: 1, auctionId: 1 },
+        name: "auction_round_state_next"
+      },
       { key: { auctionId: 1, status: 1 }, name: "auction_round_state_status" },
       { key: { status: 1, scheduledStartAt: 1 }, name: "auction_round_state_startAt" },
       { key: { status: 1, effectiveEndAt: 1 }, name: "auction_round_state_endAt" }
@@ -870,6 +877,10 @@ export const mongoIndexSpecs: Array<{ collection: string; indexes: IndexDescript
       {
         key: { auctionId: 1, active: 1, amount: -1, createdAt: 1 },
         name: "bids_rank_active"
+      },
+      {
+        key: { auctionId: 1, active: 1, createdAt: -1, _id: -1 },
+        name: "bids_auction_active_createdAt"
       },
       { key: { userId: 1, createdAt: -1 }, name: "bids_user_createdAt" },
       { key: { auctionId: 1, userId: 1 }, name: "bids_auction_user" },
