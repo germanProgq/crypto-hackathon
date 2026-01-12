@@ -100,12 +100,8 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
       userId: input.userId,
       currency: normalized,
       address: input.address,
-      createdAt: now,
-      updatedAt: now
+      createdAt: now
     };
-    if (input.label) {
-      setOnInsert.label = input.label;
-    }
     const update: Record<string, unknown> = {
       updatedAt: now
     };
@@ -171,13 +167,15 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
       currency: normalized,
       amount: input.amount,
       destinationAddress: input.destinationAddress,
-      memo: input.memo,
       status: "requested",
       idempotencyKey: input.idempotencyKey,
       requestedAt: now,
       createdAt: now,
       updatedAt: now
     };
+    if (typeof input.memo === "string" && input.memo.trim().length > 0) {
+      record.memo = input.memo;
+    }
 
     const metadata = buildWithdrawalMetadata(record);
     let ledgerResult: { balance: LedgerBalance };
@@ -403,8 +401,7 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
           confirmations: transaction.confirmations,
           status,
           updatedAt: now,
-          blockHeight: transaction.blockHeight,
-          userId: attribution.userId
+          blockHeight: transaction.blockHeight
         }
       },
       { upsert: true, returnDocument: "after" }
@@ -516,6 +513,7 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
         },
         { session }
       );
+      return entry;
     });
   }
 
@@ -556,7 +554,7 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
       );
 
       if (!updated) {
-        return;
+        return null;
       }
 
       await ledger.broadcastWithdrawalInSession(
@@ -570,6 +568,7 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
         },
         session
       );
+      return updated;
     });
   }
 
@@ -601,7 +600,7 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
       );
 
       if (!updated) {
-        return;
+        return null;
       }
 
       await ledger.confirmWithdrawalInSession(
@@ -615,6 +614,7 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
         },
         session
       );
+      return updated;
     });
   }
 

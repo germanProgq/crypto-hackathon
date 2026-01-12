@@ -22,15 +22,14 @@ import {
   buildBidIdempotencyKey,
   buildIpRateLimitKey,
   buildRankingKey,
-  buildRoundLockKey,
   buildRoundStateKey,
-  buildRoundTopKey,
+  buildTopKey,
   buildUserRateLimitKey
 } from "./auctionKeys.js";
 import { createAuctionRepository } from "./auctionStore.js";
 import { buildRankingMember, parseRankingMember } from "./bidRanking.js";
 
-const roundLockTtlMs = 8000;
+const bidLockTtlMs = 8000;
 const rateLimitWindowSeconds = 1;
 const snapshotTtlSeconds = 5;
 const roundStateTtlSeconds = 5;
@@ -38,8 +37,8 @@ const topSetTtlSeconds = 10;
 const bidIdempotencyTtlSeconds = 600;
 const idempotencyWaitMs = 750;
 const idempotencyPollMs = 50;
-const roundLockWaitMs = 1500;
-const roundLockPollMs = 25;
+const bidLockWaitMs = 1500;
+const bidLockPollMs = 25;
 
 const rateLimitScript = `
 local current = redis.call("INCR", KEYS[1])
@@ -73,7 +72,6 @@ export class BidError extends Error {
 
 export interface BidPlacementInput {
   auctionId: ObjectId;
-  roundIndex: number;
   userId: string;
   amount: number;
   idempotencyKey: string;
@@ -110,8 +108,8 @@ export function createBidService(deps: ServiceDependencies) {
       return toPlacementResult(existing);
     }
 
-    const lockKey = buildRoundLockKey(input.auctionId.toHexString(), input.roundIndex);
-    const lock = await acquireRoundLock(deps.redis, lockKey, roundLockTtlMs, roundLockWaitMs);
+    const lockKey = buildBidLockKey(input.auctionId.toHexString());
+    const lock = await acquireBidLock(deps.redis, lockKey, bidLockTtlMs, bidLockWaitMs);
     if (!lock) {
       const waited = await waitForIdempotentBid(input, idempotencyWaitMs);
       if (waited) {
@@ -127,15 +125,11 @@ export function createBidService(deps: ServiceDependencies) {
           throw new BidError("auction_not_found", "Auction not found.", 404);
         }
 
-        const roundConfig = findRoundConfig(auction.rounds, input.roundIndex);
-        const roundState = await auctionRepository.getRoundState(
-          input.auctionId,
-          input.roundIndex,
-          session
-        );
+        const roundState = await auctionRepository.getLiveRoundState(input.auctionId, session);
         if (!roundState) {
-          throw new BidError("round_not_found", "Round state not found.", 404);
+          throw new BidError("round_not_live", "No live round available.", 409);
         }
+        const roundConfig = findRoundConfig(auction.rounds, roundState.roundIndex);
 
         const existingBid = await bids.findOne(
           { idempotencyKey: input.idempotencyKey },
@@ -150,17 +144,19 @@ export function createBidService(deps: ServiceDependencies) {
             );
           }
 
-          const userTopBid = await bids.findOne(
-            {
-              auctionId: input.auctionId,
-              roundIndex: input.roundIndex,
-              userId: input.userId
-            },
-            {
-              session,
-              sort: { amount: -1, createdAt: 1, _id: 1 }
-            }
-          );
+          const resolvedRoundIndex = existingBid.roundIndex ?? roundState.roundIndex;
+          const resolvedRoundState =
+            existingBid.roundIndex !== undefined
+              ? await auctionRepository.getRoundState(
+                  input.auctionId,
+                  existingBid.roundIndex,
+                  session
+                )
+              : roundState;
+          if (!resolvedRoundState) {
+            throw new BidError("round_not_found", "Round state not found.", 404);
+          }
+          const resolvedRoundConfig = findRoundConfig(auction.rounds, resolvedRoundIndex);
 
           const balance = await ledger.getBalanceInSession(
             input.userId,
@@ -171,12 +167,12 @@ export function createBidService(deps: ServiceDependencies) {
           return {
             bid: existingBid,
             balance,
-            roundState,
+            roundState: resolvedRoundState,
             extended: false,
             idempotent: true,
             auction,
-            roundConfig,
-            updateRanking: !userTopBid || userTopBid._id.equals(existingBid._id)
+            roundConfig: resolvedRoundConfig,
+            updateRanking: existingBid.active
           };
         }
 
@@ -187,12 +183,12 @@ export function createBidService(deps: ServiceDependencies) {
         const previousBid = await bids.findOne(
           {
             auctionId: input.auctionId,
-            roundIndex: input.roundIndex,
-            userId: input.userId
+            userId: input.userId,
+            active: true
           },
           {
             session,
-            sort: { amount: -1, createdAt: 1, _id: 1 }
+            sort: { createdAt: -1, _id: -1 }
           }
         );
 
@@ -206,14 +202,23 @@ export function createBidService(deps: ServiceDependencies) {
         }
 
         const bidId = new ObjectId();
+        if (previousBid) {
+          await bids.updateOne(
+            { _id: previousBid._id, active: true },
+            { $set: { active: false, inactiveAt: now } },
+            { session }
+          );
+        }
+
         const bidDoc: WithId<BidDocument> = {
           _id: bidId,
           auctionId: input.auctionId,
-          roundIndex: input.roundIndex,
           userId: input.userId,
           amount: input.amount,
           createdAt: now,
-          idempotencyKey: input.idempotencyKey
+          idempotencyKey: input.idempotencyKey,
+          active: true,
+          roundIndex: roundState.roundIndex
         };
 
         if (input.audit) {
@@ -231,7 +236,7 @@ export function createBidService(deps: ServiceDependencies) {
           metadata: buildHoldMetadata(
             input.metadata,
             auction._id.toHexString(),
-            input.roundIndex,
+            roundState.roundIndex,
             bidId.toHexString(),
             input.amount
           ),
@@ -241,7 +246,7 @@ export function createBidService(deps: ServiceDependencies) {
         const holdResult = await ledger.createHoldInSession(holdInput, session);
         const antiSniping = await auctionRepository.applyBidAntiSniping(
           auction,
-          input.roundIndex,
+          roundState.roundIndex,
           now,
           session
         );
@@ -287,22 +292,14 @@ export function createBidService(deps: ServiceDependencies) {
       throw new BidError("auction_not_found", "Auction not found.", 404);
     }
 
-    const roundConfig = findRoundConfig(auction.rounds, input.roundIndex);
-    const roundState = await auctionRepository.getRoundState(input.auctionId, input.roundIndex);
+    const roundState =
+      existingBid.roundIndex !== undefined
+        ? await auctionRepository.getRoundState(input.auctionId, existingBid.roundIndex)
+        : await auctionRepository.getLiveRoundState(input.auctionId);
     if (!roundState) {
-      throw new BidError("round_not_found", "Round state not found.", 404);
+      throw new BidError("round_not_live", "No live round available.", 409);
     }
-
-    const userTopBid = await bids.findOne(
-      {
-        auctionId: input.auctionId,
-        roundIndex: input.roundIndex,
-        userId: input.userId
-      },
-      {
-        sort: { amount: -1, createdAt: 1, _id: 1 }
-      }
-    );
+    const roundConfig = findRoundConfig(auction.rounds, roundState.roundIndex);
 
     const balance = await ledger.getBalance(input.userId, auction.currency);
 
@@ -314,7 +311,7 @@ export function createBidService(deps: ServiceDependencies) {
       idempotent: true,
       auction,
       roundConfig,
-      updateRanking: !userTopBid || userTopBid._id.equals(existingBid._id)
+      updateRanking: existingBid.active
     };
   }
 
@@ -347,13 +344,13 @@ function toPlacementResult(result: BidTransactionResult): BidPlacementResult {
 }
 
 async function updateRedisCaches(redis: RedisClient, result: BidTransactionResult): Promise<void> {
-  const rankingKey = buildRankingKey(result.auction._id.toHexString(), result.roundState.roundIndex);
+  const rankingKey = buildRankingKey(result.auction._id.toHexString());
   const roundStateKey = buildRoundStateKey(
     result.auction._id.toHexString(),
     result.roundState.roundIndex
   );
   const auctionSnapshotKey = buildAuctionSnapshotKey(result.auction._id.toHexString());
-  const topKey = buildRoundTopKey(result.auction._id.toHexString(), result.roundState.roundIndex);
+  const topKey = buildTopKey(result.auction._id.toHexString());
   const idempotencyKey = buildBidIdempotencyKey(result.bid.idempotencyKey);
 
   const rankingMember = buildRankingMember(result.bid._id, result.bid.createdAt);
@@ -483,7 +480,6 @@ function findRoundConfig(rounds: AuctionRoundConfig[], roundIndex: number): Auct
 function matchesIdempotentBid(bid: BidDocument, input: BidPlacementInput): boolean {
   return (
     bid.userId === input.userId &&
-    bid.roundIndex === input.roundIndex &&
     bid.amount === input.amount &&
     bid.auctionId.equals(input.auctionId)
   );
@@ -522,13 +518,17 @@ function buildHoldIdempotencyKey(idempotencyKey: string): string {
   return `hold:${idempotencyKey}`;
 }
 
+function buildBidLockKey(auctionId: string): string {
+  return `auction:${auctionId}:bid:lock`;
+}
+
 function delay(timeoutMs: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, timeoutMs);
   });
 }
 
-async function acquireRoundLock(
+async function acquireBidLock(
   redis: RedisClient,
   key: string,
   ttlMs: number,
@@ -540,7 +540,7 @@ async function acquireRoundLock(
     if (lock) {
       return lock;
     }
-    await delay(roundLockPollMs);
+    await delay(bidLockPollMs);
   }
   return null;
 }

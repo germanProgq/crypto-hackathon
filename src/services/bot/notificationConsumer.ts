@@ -109,17 +109,46 @@ async function deliverNotification(
   deps: ServiceDependencies,
   notification: WithId<NotificationQueueDocument>
 ): Promise<void> {
-  if (notification.type !== "round_result") {
-    throw new Error(`Unsupported notification type: ${notification.type}.`);
-  }
-
-  const payload = parseRoundResultPayload(notification.payload);
   const locale = resolveLocale(
-    payload.locale,
+    (notification.payload.locale as string | undefined) ?? undefined,
     deps.config.i18n.defaultLocale,
     deps.config.i18n.supportedLocales
   );
-  const message = buildRoundResultMessage(locale, payload);
+
+  let message: string;
+
+  switch (notification.type) {
+    case "round_result":
+      message = buildRoundResultMessage(locale, parseRoundResultPayload(notification.payload));
+      break;
+    case "bid_confirmed":
+      message = buildBidConfirmedMessage(locale, parseBidConfirmedPayload(notification.payload));
+      break;
+    case "withdrawal_broadcasted":
+      message = buildWithdrawalBroadcastedMessage(
+        locale,
+        parseWithdrawalPayload(notification.payload)
+      );
+      break;
+    case "withdrawal_confirmed":
+      message = buildWithdrawalConfirmedMessage(
+        locale,
+        parseWithdrawalPayload(notification.payload)
+      );
+      break;
+    case "withdrawal_failed":
+      message = buildWithdrawalFailedMessage(locale, parseWithdrawalPayload(notification.payload));
+      break;
+    case "auction_starting":
+      message = buildAuctionStartingMessage(locale, parseAuctionPayload(notification.payload));
+      break;
+    case "round_starting":
+      message = buildRoundStartingMessage(locale, parseRoundPayload(notification.payload));
+      break;
+    default:
+      throw new Error(`Unsupported notification type: ${notification.type}.`);
+  }
+
   await sendTelegramMessage(deps.config, notification.userId, message);
 }
 
@@ -324,6 +353,119 @@ function readOptionalNumber(payload: Record<string, unknown>, key: string): numb
     throw new Error(`Notification payload invalid ${key}.`);
   }
   return value;
+}
+
+type BidConfirmedPayload = {
+  auctionId: string;
+  amount: number;
+  currency: string;
+};
+
+type WithdrawalPayload = {
+  amount: number;
+  currency: string;
+  txHash?: string;
+  error?: string;
+};
+
+type AuctionPayload = {
+  name: string;
+};
+
+type RoundPayload = {
+  auctionId: string;
+  roundIndex: number;
+};
+
+function buildBidConfirmedMessage(locale: string, payload: BidConfirmedPayload): string {
+  const amount = formatAmount(payload.amount, locale);
+  return t("bot.notification.bidConfirmed", locale, {
+    auctionId: payload.auctionId,
+    amount,
+    currency: payload.currency
+  });
+}
+
+function buildWithdrawalBroadcastedMessage(locale: string, payload: WithdrawalPayload): string {
+  const amount = formatAmount(payload.amount, locale);
+  return t("bot.notification.withdrawalBroadcasted", locale, {
+    amount,
+    currency: payload.currency,
+    txHash: payload.txHash ?? "pending"
+  });
+}
+
+function buildWithdrawalConfirmedMessage(locale: string, payload: WithdrawalPayload): string {
+  const amount = formatAmount(payload.amount, locale);
+  return t("bot.notification.withdrawalConfirmed", locale, {
+    amount,
+    currency: payload.currency
+  });
+}
+
+function buildWithdrawalFailedMessage(locale: string, payload: WithdrawalPayload): string {
+  const amount = formatAmount(payload.amount, locale);
+  return t("bot.notification.withdrawalFailed", locale, {
+    amount,
+    currency: payload.currency,
+    error: payload.error ?? "Unknown error"
+  });
+}
+
+function buildAuctionStartingMessage(locale: string, payload: AuctionPayload): string {
+  return t("bot.notification.auctionStarting", locale, {
+    name: payload.name
+  });
+}
+
+function buildRoundStartingMessage(locale: string, payload: RoundPayload): string {
+  const round = payload.roundIndex + 1;
+  return t("bot.notification.roundStarting", locale, {
+    auctionId: payload.auctionId,
+    round
+  });
+}
+
+function parseBidConfirmedPayload(payload: Record<string, unknown>): BidConfirmedPayload {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Notification payload missing.");
+  }
+  return {
+    auctionId: readString(payload, "auctionId"),
+    amount: readNumber(payload, "amount"),
+    currency: readString(payload, "currency")
+  };
+}
+
+function parseWithdrawalPayload(payload: Record<string, unknown>): WithdrawalPayload {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Notification payload missing.");
+  }
+  return {
+    amount: readNumber(payload, "amount"),
+    currency: readString(payload, "currency"),
+    txHash: readOptionalString(payload, "txHash") ?? undefined,
+    error: readOptionalString(payload, "error") ?? undefined
+  };
+}
+
+function parseAuctionPayload(payload: Record<string, unknown>): AuctionPayload {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Notification payload missing.");
+  }
+  return {
+    name: readString(payload, "name")
+  };
+}
+
+function parseRoundPayload(payload: Record<string, unknown>): RoundPayload {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Notification payload missing.");
+  }
+  return {
+    auctionId: readString(payload, "auctionId"),
+    roundIndex: readNumber(payload, "roundIndex")
+  };
 }
 
 function buildNotificationLockKey(notificationId: ObjectId): string {

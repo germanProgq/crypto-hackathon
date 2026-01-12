@@ -46,12 +46,12 @@ registerHealthRoutes(app, {
 });
 
 app.addHook("preHandler", async (request, reply) => {
-  if (!isIpAllowed(request, config)) {
-    reply.code(403).send({ error: "forbidden", message: "IP not allowed." });
-    return reply;
+  if (isHealthRoute(request)) {
+    return;
   }
 
-  if (isHealthRoute(request)) {
+  if (!isIpAllowed(request, config)) {
+    reply.code(403).send({ error: "forbidden", message: "IP not allowed." });
     return reply;
   }
 
@@ -157,11 +157,28 @@ function authorizeSigner(request: FastifyRequest, cfg: typeof config): boolean {
 }
 
 function isIpAllowed(request: FastifyRequest, cfg: typeof config): boolean {
-  const ip = normalizeIp(request.ip);
+  const candidates = new Set(
+    [request.ip, request.socket.remoteAddress]
+      .map((value) => (value ? normalizeIp(value) : null))
+      .filter((value): value is string => Boolean(value))
+  );
+
   if (cfg.signer.allowedIps.length > 0) {
-    return cfg.signer.allowedIps.includes(ip);
+    for (const ip of candidates) {
+      if (cfg.signer.allowedIps.includes(ip)) {
+        return true;
+      }
+    }
+    return false;
   }
-  return localOnlyIps.has(ip);
+
+  for (const ip of candidates) {
+    if (localOnlyIps.has(ip) || isPrivateIp(ip)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function normalizeIp(ip: string): string {
@@ -169,6 +186,29 @@ function normalizeIp(ip: string): string {
     return ip.slice("::ffff:".length);
   }
   return ip;
+}
+
+function isPrivateIp(ip: string): boolean {
+  if (ip === "::1") {
+    return true;
+  }
+
+  const parts = ip.split(".").map((entry) => Number(entry));
+  if (parts.length !== 4 || parts.some((part) => !Number.isFinite(part))) {
+    return false;
+  }
+
+  const [first, second] = parts;
+  if (first === 10 || first === 127) {
+    return true;
+  }
+  if (first === 192 && second === 168) {
+    return true;
+  }
+  if (first === 172 && second !== undefined && second >= 16 && second <= 31) {
+    return true;
+  }
+  return false;
 }
 
 function isHealthRoute(request: FastifyRequest): boolean {

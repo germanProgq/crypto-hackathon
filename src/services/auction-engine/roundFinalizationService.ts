@@ -13,12 +13,13 @@ import {
   type RoundResultDocument
 } from "../../shared/storage/mongoSchemas.js";
 import { createLedgerRepository, LedgerError } from "../ledger/ledgerStore.js";
-import { buildRankingKey } from "./auctionKeys.js";
-import { parseRankingMember } from "./bidRanking.js";
+import { buildRankingKey, buildTopKey } from "./auctionKeys.js";
+import { buildRankingMember, parseRankingMember } from "./bidRanking.js";
 
 const holdLookupBatchSize = 500;
 const holdBatchSize = 25;
 const notificationBatchSize = 200;
+const topSetTtlSeconds = 10;
 
 type MongoRankedBid = {
   bidId: ObjectId;
@@ -86,6 +87,7 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
     const existingResult = await roundResults.findOne({ auctionId, roundIndex });
     let winners = existingResult?.winners ?? [];
     let settlementCompleted = Boolean(existingResult?.settlementCompletedAt);
+    const isFinalRound = isFinalRoundIndex(auction.rounds, roundIndex);
 
     if (!existingResult) {
       winners = await resolveRoundWinners(auction, roundIndex);
@@ -106,16 +108,29 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
     }
 
     if (!settlementCompleted) {
+      const activeBids = await loadActiveBids(auctionId);
       const deliveryRefs = await ensureDeliveryRecords(auctionId, roundIndex, winners);
-      const roundBids = await loadRoundBids(auctionId, roundIndex);
-      await settleRoundHolds(auction, roundIndex, roundBids, winners);
-      await queueRoundNotifications(
+      const winnerUsers = new Set(winners.map((winner) => winner.userId));
+      const winnerUserIds = Array.from(winnerUsers);
+      const loserUserIds = Array.from(
+        new Set(
+          activeBids.filter((bid) => !winnerUsers.has(bid.userId)).map((bid) => bid.userId)
+        )
+      );
+
+      const winnerBids = await loadUnsettledBids(auctionId, winnerUserIds);
+      const loserBids = isFinalRound ? await loadUnsettledBids(auctionId, loserUserIds) : [];
+
+      await settleRoundHolds(auction, roundIndex, winnerBids, loserBids);
+      await markBidSettlement(auctionId, roundIndex, winnerUserIds, loserUserIds, isFinalRound);
+      await updateRedisRankingAfterSettlement(
         auction,
         roundIndex,
-        roundBids,
-        winners,
-        deliveryRefs
+        activeBids,
+        winnerUsers,
+        isFinalRound
       );
+      await queueRoundNotifications(auction, roundIndex, activeBids, winners, deliveryRefs);
       const settledAt = new Date();
       await roundResults.updateOne(
         { auctionId, roundIndex },
@@ -145,10 +160,9 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
     const redisTop = await loadRedisTopBids(
       deps,
       auction._id.toHexString(),
-      roundIndex,
       allocationSize
     );
-    const mongoTop = await loadMongoTopBids(auction._id, roundIndex, allocationSize);
+    const mongoTop = await loadMongoTopBids(auction._id, allocationSize);
     const redisBidIds = redisTop.map((entry) => entry.bidId);
     const mongoBidIds = mongoTop.map((entry) => entry.bidId.toHexString());
     const rankingMatch = rankingsMatch(redisTop, mongoTop);
@@ -167,12 +181,34 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
     }));
   }
 
-  async function loadRoundBids(
-    auctionId: ObjectId,
-    roundIndex: number
+  async function loadActiveBids(
+    auctionId: ObjectId
   ): Promise<Array<Pick<WithId<BidDocument>, "_id" | "userId" | "amount" | "createdAt">>> {
     return bids
-      .find({ auctionId, roundIndex })
+      .find({ auctionId, active: true })
+      .project<Pick<WithId<BidDocument>, "_id" | "userId" | "amount" | "createdAt">>({
+        _id: 1,
+        userId: 1,
+        amount: 1,
+        createdAt: 1
+      })
+      .toArray();
+  }
+
+  async function loadUnsettledBids(
+    auctionId: ObjectId,
+    userIds: string[]
+  ): Promise<Array<Pick<WithId<BidDocument>, "_id" | "userId" | "amount" | "createdAt">>> {
+    if (userIds.length === 0) {
+      return [];
+    }
+
+    return bids
+      .find({
+        auctionId,
+        userId: { $in: userIds },
+        settledAt: { $exists: false }
+      })
       .project<Pick<WithId<BidDocument>, "_id" | "userId" | "amount" | "createdAt">>({
         _id: 1,
         userId: 1,
@@ -184,39 +220,37 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
 
   async function loadMongoTopBids(
     auctionId: ObjectId,
-    roundIndex: number,
     allocationSize: number
   ): Promise<MongoRankedBid[]> {
-    return bids
-      .aggregate<MongoRankedBid>([
-        { $match: { auctionId, roundIndex } },
-        { $sort: { amount: -1, createdAt: 1, _id: 1, userId: 1 } },
-        {
-          $group: {
-            _id: "$userId",
-            bidId: { $first: "$_id" },
-            userId: { $first: "$userId" },
-            amount: { $first: "$amount" },
-            createdAt: { $first: "$createdAt" }
-          }
-        },
-        { $sort: { amount: -1, createdAt: 1, bidId: 1, userId: 1 } },
-        { $limit: allocationSize }
-      ])
+    const docs = await bids
+      .find({ auctionId, active: true })
+      .sort({ amount: -1, createdAt: 1, _id: 1, userId: 1 })
+      .limit(allocationSize)
+      .project<Pick<WithId<BidDocument>, "_id" | "userId" | "amount" | "createdAt">>({
+        _id: 1,
+        userId: 1,
+        amount: 1,
+        createdAt: 1
+      })
       .toArray();
+    return docs.map((doc) => ({
+      bidId: doc._id,
+      userId: doc.userId,
+      amount: doc.amount,
+      createdAt: doc.createdAt
+    }));
   }
 
   async function loadRedisTopBids(
     serviceDeps: ServiceDependencies,
     auctionId: string,
-    roundIndex: number,
     allocationSize: number
   ): Promise<Array<{ bidId: string; amount: number }>> {
     if (allocationSize <= 0) {
       return [];
     }
 
-    const rankingKey = buildRankingKey(auctionId, roundIndex);
+    const rankingKey = buildRankingKey(auctionId);
     const entries = await serviceDeps.redis.zrevrange(
       rankingKey,
       0,
@@ -288,24 +322,38 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
     return deliveryRefByUser;
   }
 
-  // Settle holds for winners and non-winners in batches.
+  // Settle holds for winners (capture) and optional losers (release) in batches.
   async function settleRoundHolds(
     auction: WithId<AuctionDocument>,
     roundIndex: number,
-    roundBids: Array<Pick<WithId<BidDocument>, "_id" | "userId" | "amount" | "createdAt">>,
-    winners: RoundResultDocument["winners"]
+    captureBids: Array<Pick<WithId<BidDocument>, "_id" | "userId" | "amount" | "createdAt">>,
+    releaseBids: Array<Pick<WithId<BidDocument>, "_id" | "userId" | "amount" | "createdAt">>
   ): Promise<void> {
-    if (roundBids.length === 0) {
+    if (captureBids.length === 0 && releaseBids.length === 0) {
       return;
     }
 
-    const winnerUsers = new Set(winners.map((winner) => winner.userId));
-    const holdIds = roundBids.map((bid) => buildHoldId(bid._id.toHexString()));
-    const holdEntries = await loadHoldEntries(holdIds);
-    const captureOps: HoldSettlement[] = [];
-    const releaseOps: HoldSettlement[] = [];
+    const captureOps = await buildHoldSettlements(auction, captureBids, "capture");
+    const releaseOps = await buildHoldSettlements(auction, releaseBids, "release");
 
-    for (const bid of roundBids) {
+    await settleHoldOperations(auction, roundIndex, captureOps);
+    await settleHoldOperations(auction, roundIndex, releaseOps);
+  }
+
+  async function buildHoldSettlements(
+    auction: WithId<AuctionDocument>,
+    bidsForSettlement: Array<Pick<WithId<BidDocument>, "_id" | "userId" | "amount" | "createdAt">>,
+    action: HoldSettlement["action"]
+  ): Promise<HoldSettlement[]> {
+    if (bidsForSettlement.length === 0) {
+      return [];
+    }
+
+    const holdIds = bidsForSettlement.map((bid) => buildHoldId(bid._id.toHexString()));
+    const holdEntries = await loadHoldEntries(holdIds);
+    const settlements: HoldSettlement[] = [];
+
+    for (const bid of bidsForSettlement) {
       const holdId = buildHoldId(bid._id.toHexString());
       const holdEntry = holdEntries.get(holdId);
       if (!holdEntry) {
@@ -320,25 +368,17 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
         throw new Error(`Hold currency mismatch for bid ${bid._id.toHexString()}.`);
       }
 
-      const action: HoldSettlement["action"] = winnerUsers.has(bid.userId) ? "capture" : "release";
-      const settlement: HoldSettlement = {
+      settlements.push({
         holdId,
         bidId: bid._id,
         userId: bid.userId,
         amount: holdEntry.amount,
         currency: holdEntry.currency,
         action
-      };
-
-      if (action === "capture") {
-        captureOps.push(settlement);
-      } else {
-        releaseOps.push(settlement);
-      }
+      });
     }
 
-    await settleHoldOperations(auction, roundIndex, captureOps);
-    await settleHoldOperations(auction, roundIndex, releaseOps);
+    return settlements;
   }
 
   async function loadHoldEntries(holdIds: string[]): Promise<Map<string, LedgerEntryDocument>> {
@@ -422,14 +462,14 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
   async function queueRoundNotifications(
     auction: WithId<AuctionDocument>,
     roundIndex: number,
-    roundBids: Array<Pick<WithId<BidDocument>, "_id" | "userId" | "amount" | "createdAt">>,
+    activeBids: Array<Pick<WithId<BidDocument>, "_id" | "userId" | "amount" | "createdAt">>,
     winners: RoundResultDocument["winners"],
     deliveryRefs: Map<string, string>
   ): Promise<void> {
     const winnerByUser = new Map(
       winners.map((winner) => [winner.userId, winner] as const)
     );
-    const topBidByUser = resolveTopBidsByUser(roundBids);
+    const topBidByUser = resolveTopBidsByUser(activeBids);
     const entries = Array.from(topBidByUser.entries());
 
     for (let index = 0; index < entries.length; index += notificationBatchSize) {
@@ -485,6 +525,82 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
     }
   }
 
+  async function markBidSettlement(
+    auctionId: ObjectId,
+    roundIndex: number,
+    winnerUserIds: string[],
+    loserUserIds: string[],
+    isFinalRound: boolean
+  ): Promise<void> {
+    const now = new Date();
+    if (winnerUserIds.length > 0) {
+      await bids.updateMany(
+        { auctionId, userId: { $in: winnerUserIds }, settledAt: { $exists: false } },
+        {
+          $set: {
+            active: false,
+            inactiveAt: now,
+            settledAt: now,
+            settlementAction: "captured",
+            settlementRoundIndex: roundIndex
+          }
+        }
+      );
+    }
+
+    if (isFinalRound && loserUserIds.length > 0) {
+      await bids.updateMany(
+        { auctionId, userId: { $in: loserUserIds }, settledAt: { $exists: false } },
+        {
+          $set: {
+            active: false,
+            inactiveAt: now,
+            settledAt: now,
+            settlementAction: "released",
+            settlementRoundIndex: roundIndex
+          }
+        }
+      );
+    }
+  }
+
+  async function updateRedisRankingAfterSettlement(
+    auction: WithId<AuctionDocument>,
+    roundIndex: number,
+    activeBids: Array<Pick<WithId<BidDocument>, "_id" | "userId" | "amount" | "createdAt">>,
+    winnerUsers: Set<string>,
+    isFinalRound: boolean
+  ): Promise<void> {
+    if (activeBids.length === 0) {
+      return;
+    }
+
+    const auctionId = auction._id.toHexString();
+    const rankingKey = buildRankingKey(auctionId);
+    const removeMembers = activeBids
+      .filter((bid) => isFinalRound || winnerUsers.has(bid.userId))
+      .map((bid) => buildRankingMember(bid._id, bid.createdAt));
+
+    if (removeMembers.length > 0) {
+      await deps.redis.zrem(rankingKey, ...removeMembers);
+    }
+
+    const roundConfig = findRoundConfig(auction.rounds, roundIndex);
+    const topCount = Math.max(1, Math.floor(roundConfig.allocationSize));
+    const topMembers = await deps.redis.zrevrange(rankingKey, 0, topCount - 1);
+    const topBidIds = topMembers
+      .map((member) => parseRankingMember(member).bidId)
+      .filter((bidId) => bidId.length > 0);
+    const topKey = buildTopKey(auctionId);
+    const pipeline = deps.redis.multi();
+    pipeline.del(topKey);
+    if (topBidIds.length > 0) {
+      pipeline.sadd(topKey, ...topBidIds);
+    }
+    pipeline.expire(topKey, topSetTtlSeconds);
+    await pipeline.exec();
+  }
+
   return {
     finalizeRound,
     finalizeClosedRounds
@@ -499,6 +615,14 @@ function findRoundConfig(rounds: AuctionRoundConfig[], roundIndex: number): Auct
   return round;
 }
 
+function isFinalRoundIndex(rounds: AuctionRoundConfig[], roundIndex: number): boolean {
+  const firstIndex = rounds[0]?.index;
+  if (firstIndex === undefined) {
+    return true;
+  }
+  const maxIndex = rounds.reduce((max, round) => Math.max(max, round.index), firstIndex);
+  return roundIndex >= maxIndex;
+}
 function buildHoldId(bidId: string): string {
   return `bid:${bidId}`;
 }

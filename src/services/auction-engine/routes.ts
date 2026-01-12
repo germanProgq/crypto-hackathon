@@ -41,6 +41,10 @@ const bidBodySchema = z
   .strict();
 
 const bidParamsSchema = z.object({
+  auctionId: z.string().min(1)
+});
+
+const roundParamsSchema = z.object({
   auctionId: z.string().min(1),
   roundIndex: z.string().min(1)
 });
@@ -244,7 +248,7 @@ export async function registerAuctionRoutes(
   });
 
   app.get("/auctions/:auctionId/rounds/:roundIndex/state", async (request, reply) => {
-    const params = bidParamsSchema.safeParse(request.params);
+    const params = roundParamsSchema.safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: "invalid_request", message: "Invalid route params." });
     }
@@ -274,15 +278,10 @@ export async function registerAuctionRoutes(
     }
   });
 
-  app.post("/auctions/:auctionId/rounds/:roundIndex/bids", async (request, reply) => {
+  app.post("/auctions/:auctionId/bids", async (request, reply) => {
     const params = bidParamsSchema.safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: "invalid_request", message: "Invalid route params." });
-    }
-
-    const roundIndex = parseRoundIndex(params.data.roundIndex);
-    if (roundIndex === null) {
-      return reply.code(400).send({ error: "invalid_request", message: "Invalid round index." });
     }
 
     if (!ObjectId.isValid(params.data.auctionId)) {
@@ -306,7 +305,6 @@ export async function registerAuctionRoutes(
     try {
       const result = await bidService.placeBid({
         auctionId: new ObjectId(params.data.auctionId),
-        roundIndex,
         userId: body.data.userId,
         amount: body.data.amount,
         idempotencyKey: body.data.idempotencyKey,
@@ -347,11 +345,12 @@ function serializeBid(bid: WithId<BidDocument>) {
   return {
     _id: bid._id.toHexString(),
     auctionId: bid.auctionId.toHexString(),
-    roundIndex: bid.roundIndex,
+    roundIndex: bid.roundIndex ?? null,
     userId: bid.userId,
     amount: bid.amount,
     createdAt: bid.createdAt,
-    idempotencyKey: bid.idempotencyKey
+    idempotencyKey: bid.idempotencyKey,
+    active: bid.active
   };
 }
 

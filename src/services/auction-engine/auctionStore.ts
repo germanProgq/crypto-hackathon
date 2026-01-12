@@ -51,6 +51,16 @@ export function createAuctionRepository(mongo: MongoDependencies) {
     return roundStates.findOne({ auctionId, roundIndex }, { session });
   }
 
+  async function getLiveRoundState(
+    auctionId: ObjectId,
+    session?: ClientSession
+  ): Promise<WithId<AuctionRoundStateDocument> | null> {
+    return roundStates.findOne(
+      { auctionId, status: "live" },
+      { session, sort: { roundIndex: 1 } }
+    );
+  }
+
   async function ensureRoundStates(
     auction: WithId<AuctionDocument>,
     session?: ClientSession
@@ -184,6 +194,7 @@ export function createAuctionRepository(mongo: MongoDependencies) {
     listActiveAuctions,
     getAuctionById,
     getRoundState,
+    getLiveRoundState,
     ensureRoundStates,
     applyRoundTransition,
     updateAuctionStatus,

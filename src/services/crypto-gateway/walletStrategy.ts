@@ -7,7 +7,8 @@ import {
   mongoCollections,
   type CryptoAddressPoolDocument,
   type CryptoCounterDocument,
-  type CryptoWalletAddressDocument
+  type CryptoWalletAddressDocument,
+  type WalletStrategy as WalletStrategyMode
 } from "../../shared/storage/mongoSchemas.js";
 import type { ObserverTransaction } from "./types.js";
 
@@ -26,6 +27,23 @@ export interface WalletStrategy {
     transaction: ObserverTransaction
   ): Promise<DepositDestination | null>;
   listWatchedAddresses(currency: string): Promise<string[]>;
+}
+
+export interface DepositAddressRequest {
+  userId: string;
+  currency: string;
+}
+
+export interface DepositAddressResult {
+  address: string;
+  memo?: string;
+  strategy: WalletStrategyMode;
+}
+
+export interface WalletStrategyProvider {
+  getStrategy(): WalletStrategyMode;
+  generateDepositAddress(request: DepositAddressRequest): Promise<DepositAddressResult>;
+  verifyAddress(address: string, currency: string): boolean;
 }
 
 export function createWalletStrategy(
@@ -187,7 +205,7 @@ export function createWalletStrategy(
     const result = await counters.findOneAndUpdate(
       { key },
       {
-        $setOnInsert: { key, sequence: 0, updatedAt: now },
+        $setOnInsert: { key },
         $inc: { sequence: 1 },
         $set: { updatedAt: now }
       },

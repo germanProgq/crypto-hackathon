@@ -8,7 +8,7 @@ export type RedisKeySpec = {
 
 export const redisKeySpecs: RedisKeySpec[] = [
   {
-    key: "auction:{auctionId}:round:{roundIndex}:ranking",
+    key: "auction:{auctionId}:ranking",
     type: "zset",
     invalidationEvents: ["bid.accepted", "round.finalized"]
   },
@@ -26,6 +26,12 @@ export const redisKeySpecs: RedisKeySpec[] = [
   },
   {
     key: "auction:{auctionId}:round:{roundIndex}:lock",
+    type: "string",
+    ttlSeconds: 15,
+    invalidationEvents: ["lock.expired"]
+  },
+  {
+    key: "auction:{auctionId}:bid:lock",
     type: "string",
     ttlSeconds: 15,
     invalidationEvents: ["lock.expired"]
@@ -55,7 +61,7 @@ export const redisKeySpecs: RedisKeySpec[] = [
     invalidationEvents: ["bid.persisted"]
   },
   {
-    key: "state:auction:{auctionId}:round:{roundIndex}:top",
+    key: "state:auction:{auctionId}:top",
     type: "set",
     ttlSeconds: 10,
     invalidationEvents: ["bid.accepted", "round.finalized"]

@@ -291,7 +291,7 @@ describe("auction api", () => {
 
     const bidResponse = await app.inject({
       method: "POST",
-      url: `/auctions/${auctionId}/rounds/0/bids`,
+      url: `/auctions/${auctionId}/bids`,
       payload: {
         userId: "user-redis",
         amount: 120,

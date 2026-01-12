@@ -16,7 +16,10 @@ export const mongoCollections = {
   cryptoWithdrawals: "crypto_withdrawals",
   cryptoWithdrawalAllowlists: "crypto_withdrawal_allowlists",
   cryptoGatewayState: "crypto_gateway_state",
-  cryptoCounters: "crypto_counters"
+  cryptoCounters: "crypto_counters",
+  depositAddresses: "deposit_addresses",
+  depositWatchlist: "deposit_watchlist",
+  withdrawalRequests: "withdrawal_requests"
 } as const;
 
 export type AuctionStatus = "draft" | "live" | "closed";
@@ -30,6 +33,15 @@ export type LedgerEntryType =
   | "withdrawal_broadcasted"
   | "withdrawal_confirmed"
   | "withdrawal_failed";
+
+export type DepositStatus = "pending" | "confirmed" | "credited";
+export type WithdrawalStatus =
+  | "requested"
+  | "authorized"
+  | "broadcasted"
+  | "confirmed"
+  | "failed";
+export type WalletStrategy = "address_per_user" | "memo_tag";
 
 export interface AuctionRoundConfig {
   index: number;
@@ -72,11 +84,16 @@ export interface AuctionRoundStateDocument {
 
 export interface BidDocument {
   auctionId: ObjectId;
-  roundIndex: number;
   userId: string;
   amount: number;
   createdAt: Date;
   idempotencyKey: string;
+  active: boolean;
+  roundIndex?: number;
+  inactiveAt?: Date;
+  settledAt?: Date;
+  settlementAction?: "captured" | "released";
+  settlementRoundIndex?: number;
   audit?: {
     requestId?: string;
     source?: string;
@@ -133,17 +150,87 @@ export interface DeliveryRecordDocument {
   createdAt: Date;
 }
 
+export type NotificationType =
+  | "round_result"
+  | "bid_confirmed"
+  | "withdrawal_broadcasted"
+  | "withdrawal_confirmed"
+  | "withdrawal_failed"
+  | "auction_starting"
+  | "round_starting";
+
 export interface NotificationQueueDocument {
-  type: "round_result";
+  type: NotificationType;
   userId: string;
-  auctionId: ObjectId;
-  roundIndex: number;
+  auctionId?: ObjectId;
+  roundIndex?: number;
   status: "pending" | "sent" | "failed";
   payload: Record<string, unknown>;
   idempotencyKey: string;
   attempts: number;
   nextAttemptAt: Date;
   lastError?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface DepositAddressDocument {
+  userId: string;
+  currency: string;
+  strategy: WalletStrategy;
+  address: string;
+  memo?: string;
+  derivationPath?: string;
+  createdAt: Date;
+  lastUsedAt?: Date;
+}
+
+export interface DepositWatchlistDocument {
+  txHash: string;
+  currency: string;
+  userId: string;
+  address: string;
+  memo?: string;
+  amount: number;
+  confirmations: number;
+  requiredConfirmations: number;
+  status: DepositStatus;
+  detectedAt: Date;
+  confirmedAt?: Date;
+  creditedAt?: Date;
+  ledgerEntryId?: ObjectId;
+  idempotencyKey: string;
+  metadata?: Record<string, unknown>;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface WithdrawalRequestDocument {
+  userId: string;
+  currency: string;
+  amount: number;
+  destinationAddress: string;
+  destinationMemo?: string;
+  status: WithdrawalStatus;
+  requestedAt: Date;
+  authorizedAt?: Date;
+  broadcastedAt?: Date;
+  confirmedAt?: Date;
+  failedAt?: Date;
+  txHash?: string;
+  confirmations: number;
+  requiredConfirmations: number;
+  ledgerWithdrawalId: string;
+  idempotencyKey: string;
+  metadata?: Record<string, unknown>;
+  safetyChecks?: {
+    addressAllowlisted: boolean;
+    underDailyLimit: boolean;
+    cooldownPassed: boolean;
+    anomalyDetected: boolean;
+    anomalyReasons?: string[];
+  };
+  failureReason?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -236,7 +323,6 @@ export interface CryptoCounterDocument {
   sequence: number;
   updatedAt: Date;
 }
-
 const bsonNumber = ["int", "long", "double", "decimal"] as const;
 
 const roundSchema = {
@@ -320,14 +406,19 @@ const auctionValidator: Document = {
 const bidValidator: Document = {
   $jsonSchema: {
     bsonType: "object",
-    required: ["auctionId", "roundIndex", "userId", "amount", "createdAt", "idempotencyKey"],
+    required: ["auctionId", "userId", "amount", "createdAt", "idempotencyKey", "active"],
     properties: {
       auctionId: { bsonType: "objectId" },
-      roundIndex: { bsonType: bsonNumber },
       userId: { bsonType: "string" },
       amount: { bsonType: bsonNumber },
       createdAt: { bsonType: "date" },
       idempotencyKey: { bsonType: "string" },
+      active: { bsonType: "bool" },
+      roundIndex: { bsonType: bsonNumber },
+      inactiveAt: { bsonType: "date" },
+      settledAt: { bsonType: "date" },
+      settlementAction: { bsonType: "string", enum: ["captured", "released"] },
+      settlementRoundIndex: { bsonType: bsonNumber },
       audit: {
         bsonType: "object",
         properties: {
@@ -441,8 +532,6 @@ const notificationQueueValidator: Document = {
     required: [
       "type",
       "userId",
-      "auctionId",
-      "roundIndex",
       "status",
       "payload",
       "idempotencyKey",
@@ -452,7 +541,18 @@ const notificationQueueValidator: Document = {
       "updatedAt"
     ],
     properties: {
-      type: { bsonType: "string", enum: ["round_result"] },
+      type: {
+        bsonType: "string",
+        enum: [
+          "round_result",
+          "bid_confirmed",
+          "withdrawal_broadcasted",
+          "withdrawal_confirmed",
+          "withdrawal_failed",
+          "auction_starting",
+          "round_starting"
+        ]
+      },
       userId: { bsonType: "string" },
       auctionId: { bsonType: "objectId" },
       roundIndex: { bsonType: bsonNumber },
@@ -468,6 +568,23 @@ const notificationQueueValidator: Document = {
   }
 };
 
+const depositAddressValidator: Document = {
+  $jsonSchema: {
+    bsonType: "object",
+    required: ["userId", "currency", "strategy", "address", "createdAt"],
+    properties: {
+      userId: { bsonType: "string" },
+      currency: { bsonType: "string" },
+      strategy: { bsonType: "string", enum: ["address_per_user", "memo_tag"] },
+      address: { bsonType: "string" },
+      memo: { bsonType: "string" },
+      derivationPath: { bsonType: "string" },
+      createdAt: { bsonType: "date" },
+      lastUsedAt: { bsonType: "date" }
+    }
+  }
+};
+
 const cryptoWalletAddressValidator: Document = {
   $jsonSchema: {
     bsonType: "object",
@@ -478,6 +595,45 @@ const cryptoWalletAddressValidator: Document = {
       address: { bsonType: "string" },
       memo: { bsonType: "string" },
       strategy: { bsonType: "string", enum: ["address_pool", "memo_tag"] },
+      createdAt: { bsonType: "date" },
+      updatedAt: { bsonType: "date" }
+    }
+  }
+};
+
+const depositWatchlistValidator: Document = {
+  $jsonSchema: {
+    bsonType: "object",
+    required: [
+      "txHash",
+      "currency",
+      "userId",
+      "address",
+      "amount",
+      "confirmations",
+      "requiredConfirmations",
+      "status",
+      "detectedAt",
+      "idempotencyKey",
+      "createdAt",
+      "updatedAt"
+    ],
+    properties: {
+      txHash: { bsonType: "string" },
+      currency: { bsonType: "string" },
+      userId: { bsonType: "string" },
+      address: { bsonType: "string" },
+      memo: { bsonType: "string" },
+      amount: { bsonType: bsonNumber },
+      confirmations: { bsonType: bsonNumber },
+      requiredConfirmations: { bsonType: bsonNumber },
+      status: { bsonType: "string", enum: ["pending", "confirmed", "credited"] },
+      detectedAt: { bsonType: "date" },
+      confirmedAt: { bsonType: "date" },
+      creditedAt: { bsonType: "date" },
+      ledgerEntryId: { bsonType: "objectId" },
+      idempotencyKey: { bsonType: "string" },
+      metadata: { bsonType: "object" },
       createdAt: { bsonType: "date" },
       updatedAt: { bsonType: "date" }
     }
@@ -531,6 +687,52 @@ const cryptoDepositValidator: Document = {
       updatedAt: { bsonType: "date" },
       creditedAt: { bsonType: "date" },
       ledgerEntryId: { bsonType: "objectId" }
+    }
+  }
+};
+
+const withdrawalRequestValidator: Document = {
+  $jsonSchema: {
+    bsonType: "object",
+    required: [
+      "userId",
+      "currency",
+      "amount",
+      "destinationAddress",
+      "status",
+      "requestedAt",
+      "confirmations",
+      "requiredConfirmations",
+      "ledgerWithdrawalId",
+      "idempotencyKey",
+      "createdAt",
+      "updatedAt"
+    ],
+    properties: {
+      userId: { bsonType: "string" },
+      currency: { bsonType: "string" },
+      amount: { bsonType: bsonNumber },
+      destinationAddress: { bsonType: "string" },
+      destinationMemo: { bsonType: "string" },
+      status: {
+        bsonType: "string",
+        enum: ["requested", "authorized", "broadcasted", "confirmed", "failed"]
+      },
+      requestedAt: { bsonType: "date" },
+      authorizedAt: { bsonType: "date" },
+      broadcastedAt: { bsonType: "date" },
+      confirmedAt: { bsonType: "date" },
+      failedAt: { bsonType: "date" },
+      txHash: { bsonType: "string" },
+      confirmations: { bsonType: bsonNumber },
+      requiredConfirmations: { bsonType: bsonNumber },
+      ledgerWithdrawalId: { bsonType: "string" },
+      idempotencyKey: { bsonType: "string" },
+      metadata: { bsonType: "object" },
+      safetyChecks: { bsonType: "object" },
+      failureReason: { bsonType: "string" },
+      createdAt: { bsonType: "date" },
+      updatedAt: { bsonType: "date" }
     }
   }
 };
@@ -634,7 +836,10 @@ export const mongoCollectionSpecs: Array<{ name: string; validator?: Document }>
     validator: cryptoWithdrawalAllowlistValidator
   },
   { name: mongoCollections.cryptoGatewayState, validator: cryptoGatewayStateValidator },
-  { name: mongoCollections.cryptoCounters, validator: cryptoCounterValidator }
+  { name: mongoCollections.cryptoCounters, validator: cryptoCounterValidator },
+  { name: mongoCollections.depositAddresses, validator: depositAddressValidator },
+  { name: mongoCollections.depositWatchlist, validator: depositWatchlistValidator },
+  { name: mongoCollections.withdrawalRequests, validator: withdrawalRequestValidator }
 ];
 
 export const mongoIndexSpecs: Array<{ collection: string; indexes: IndexDescription[] }> = [
@@ -663,11 +868,21 @@ export const mongoIndexSpecs: Array<{ collection: string; indexes: IndexDescript
     collection: mongoCollections.bids,
     indexes: [
       {
-        key: { auctionId: 1, roundIndex: 1, amount: -1, createdAt: 1 },
-        name: "bids_rank"
+        key: { auctionId: 1, active: 1, amount: -1, createdAt: 1 },
+        name: "bids_rank_active"
       },
       { key: { userId: 1, createdAt: -1 }, name: "bids_user_createdAt" },
-      { key: { auctionId: 1, roundIndex: 1, userId: 1 }, name: "bids_user_round" },
+      { key: { auctionId: 1, userId: 1 }, name: "bids_auction_user" },
+      {
+        key: { auctionId: 1, userId: 1, active: 1 },
+        name: "bids_active_unique",
+        unique: true,
+        partialFilterExpression: { active: true }
+      },
+      {
+        key: { auctionId: 1, userId: 1, settledAt: 1 },
+        name: "bids_settlement_lookup"
+      },
       { key: { idempotencyKey: 1 }, name: "bids_idempotency", unique: true }
     ]
   },
@@ -792,5 +1007,38 @@ export const mongoIndexSpecs: Array<{ collection: string; indexes: IndexDescript
   {
     collection: mongoCollections.cryptoCounters,
     indexes: [{ key: { key: 1 }, name: "crypto_counters_unique", unique: true }]
+  },
+  {
+    collection: mongoCollections.depositAddresses,
+    indexes: [
+      { key: { userId: 1, currency: 1 }, name: "deposit_address_user_currency", unique: true },
+      { key: { address: 1, currency: 1 }, name: "deposit_address_lookup" },
+      { key: { address: 1, memo: 1, currency: 1 }, name: "deposit_address_memo_lookup" },
+      { key: { createdAt: -1 }, name: "deposit_address_created" }
+    ]
+  },
+  {
+    collection: mongoCollections.depositWatchlist,
+    indexes: [
+      { key: { txHash: 1, currency: 1 }, name: "deposit_watchlist_tx", unique: true },
+      { key: { idempotencyKey: 1 }, name: "deposit_watchlist_idempotency", unique: true },
+      { key: { userId: 1, createdAt: -1 }, name: "deposit_watchlist_user" },
+      { key: { status: 1, confirmations: 1 }, name: "deposit_watchlist_status" },
+      { key: { status: 1, updatedAt: 1 }, name: "deposit_watchlist_processing" }
+    ]
+  },
+  {
+    collection: mongoCollections.withdrawalRequests,
+    indexes: [
+      { key: { ledgerWithdrawalId: 1 }, name: "withdrawal_ledger_id", unique: true },
+      { key: { idempotencyKey: 1 }, name: "withdrawal_idempotency", unique: true },
+      { key: { userId: 1, createdAt: -1 }, name: "withdrawal_user_created" },
+      { key: { status: 1, updatedAt: 1 }, name: "withdrawal_status_updated" },
+      { key: { txHash: 1 }, name: "withdrawal_tx_hash" },
+      {
+        key: { userId: 1, status: 1, requestedAt: -1 },
+        name: "withdrawal_user_status_requested"
+      }
+    ]
   }
 ];

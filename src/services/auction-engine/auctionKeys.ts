@@ -1,6 +1,6 @@
 // Auction Redis key builders for cached state.
-export function buildRankingKey(auctionId: string, roundIndex: number): string {
-  return `auction:${auctionId}:round:${roundIndex}:ranking`;
+export function buildRankingKey(auctionId: string): string {
+  return `auction:${auctionId}:ranking`;
 }
 
 export function buildAuctionSnapshotKey(auctionId: string): string {
@@ -9,6 +9,10 @@ export function buildAuctionSnapshotKey(auctionId: string): string {
 
 export function buildRoundStateKey(auctionId: string, roundIndex: number): string {
   return `auction:${auctionId}:round:${roundIndex}:state`;
+}
+
+export function buildTopKey(auctionId: string): string {
+  return `state:auction:${auctionId}:top`;
 }
 
 export function buildRoundTopKey(auctionId: string, roundIndex: number): string {

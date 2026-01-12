@@ -46,9 +46,14 @@ Steps:
 3) DONE - Run MongoDB transaction to write the bid and ledger hold atomically.
 4) DONE - Update Redis sorted sets and state snapshots with fine-grained invalidation.
 5) DONE - Enforce rate limits per user, per auction, and per IP.
+⚠️ CRITICAL FIX NEEDED - Bid model doesn't match Telegram Gift Auctions mechanics:
+   - Current: Bids are tied to roundIndex (user must place new bid in each round)
+   - Required: One active bid per auction that automatically carries over to next round
+   - Fix: Refactor to support "active bid per auction" model instead of "bid per round"
 Tests:
 - DONE - High-concurrency bid tests with idempotent retries.
 - DONE - Redis ranking and snapshot consistency tests.
+- ⚠️ NEEDS UPDATE - Tests need to be updated after bid model refactoring
 Integration check:
 - DONE - Live bids update ranking and holds correctly under concurrent load.
 
@@ -59,11 +64,17 @@ Steps:
 3) DONE - Capture holds for winners and release holds for non-winners in batches.
 4) DONE - Queue notifications and avoid inline delivery in the close path.
 5) DONE - Ensure finalization is re-entrant and safe to retry after partial failure.
+⚠️ CRITICAL FIX NEEDED - Missing automatic bid carry-over:
+   - Current: Non-winners' holds are released, but bids don't carry to next round
+   - Required: Non-winners' active bids must automatically participate in next round
+   - Fix: After settlement, ensure non-winners' bids are available for next round ranking
 Tests:
 - DONE - Idempotent finalization tests with repeated worker runs.
 - DONE - Correct capture and release behavior across winners and non-winners.
+- ⚠️ NEEDS ADDITION - Test automatic bid carry-over between rounds
 Integration check:
 - DONE - End-of-round settlement produces correct balances and results.
+- ⚠️ NEEDS UPDATE - Verify bids carry over correctly after finalization
 
 Phase 6 - Crypto deposits and withdrawals (timebox: 3 hours)
 Steps:
@@ -73,10 +84,10 @@ Steps:
 4) DONE - Add isolated signer service with strict network and access controls.
 5) DONE - Implement withdrawal safety controls: cooldowns, thresholds, allowlists, and anomaly flags.
 Tests:
-DONE - Duplicate deposit event handling and confirmation edge cases.
-DONE - Withdrawal state transitions and signer failure recovery.
+- DONE - Duplicate deposit event handling and confirmation edge cases.
+- DONE - Withdrawal state transitions and signer failure recovery.
 Integration check:
-DONE - End-to-end deposit and withdrawal flows using a controlled test network.
+- DONE - End-to-end deposit and withdrawal flows using a controlled test network.
 
 Phase 7 - Auction creation/listing/state APIs (timebox: 3 hours)
 Steps:
@@ -93,28 +104,72 @@ Integration check:
 
 Phase 8 - Telegram bot UX and notifications (timebox: 3 hours)
 Steps:
-1) Implement onboarding, balance, deposit instructions, auctions list, auction detail, bid, and withdraw flows.
-2) Localize all bot messages, buttons, and errors with RU/EN i18n keys.
-3) Add notification queues for bid updates, round results, and settlement status.
-4) Enforce bot-side rate limits and error handling for retries.
+1) ✅ DONE - Implement onboarding, balance, deposit instructions, auctions list, auction detail, bid, and withdraw flows.
+2) ✅ DONE - Localize all bot messages, buttons, and errors with RU/EN i18n keys.
+3) ✅ DONE - Add notification queues for bid updates, round results, and settlement status.
+4) ✅ DONE - Enforce bot-side rate limits and error handling for retries.
+ℹ️ NOTE - Telegram bot is optional for contest, but Web UI is mandatory (Phase 8).
 Tests:
-- Conversation flow tests in both locales.
-- Notification delivery and fallback behavior tests.
+- ✅ DONE - Conversation flow tests in both locales.
+- ✅ DONE - Notification delivery and fallback behavior tests.
 Integration check:
-- Telegram bot drives full auction participation with correct balances.
+- ✅ DONE - Telegram bot drives full auction participation with correct balances.
+
+---
+
+CRITICAL FIXES REQUIRED FOR CONTEST:
+
+Phase 11 - Fix bid mechanics to match Telegram Gift Auctions (timebox: 4 hours)
+Steps:
+1) ⚠️ CRITICAL - Refactor bid model from "bid per round" to "active bid per auction".
+   - Change BidDocument schema: remove roundIndex requirement, add active flag
+   - Update bidService: placeBid should update active bid instead of creating round-specific bid
+   - Modify ranking logic: use active bids across all rounds, not round-specific
+2) ⚠️ CRITICAL - Implement automatic bid carry-over in round finalization.
+   - Update roundFinalizationService: ensure non-winners' bids remain active for next round
+   - After settlement: winners' bids are removed, non-winners' bids stay active
+3) Update routes: change bid endpoint from /auctions/:auctionId/rounds/:roundIndex/bids to /auctions/:auctionId/bids
+4) Update Redis ranking keys: use auction-level keys instead of round-level
+5) Update all tests to reflect new bid model
+Tests:
+- Test that user can have only one active bid per auction
+- Test that bids automatically carry over to next round for non-winners
+- Test that winners' bids are removed after round completion
+- Test bid upgrades (increasing bid amount) work correctly
+Integration check:
+- Full auction flow with automatic carry-over works correctly
+- Financial correctness maintained (holds, captures, releases)
+
+Phase 12 - README and documentation (timebox: 2 hours)
+Steps:
+1) ⚠️ CRITICAL - Create README.md with:
+   - Description of Telegram Gift Auctions mechanics (as we understand them)
+   - Our assumptions and decisions
+   - Architecture decisions (microservices, ledger-first, Redis caching)
+   - Setup and run instructions (docker-compose)
+   - API endpoint examples
+2) Document key design decisions and trade-offs
+3) Include load testing results and financial reconciliation proofs
+Tests:
+- Verify README is complete and accurate
+- Test setup instructions work from scratch
+Integration check:
+- New developer can understand and run the project using README
 
 Phase 9 - Web UI and demo observability (timebox: 3 hours)
 Steps:
-1) Build minimal web UI for live auctions and operator visibility.
-2) Implement Telegram-based authentication for web sessions.
-3) Render live auction state from Redis snapshots with periodic refresh.
-4) Apply responsive layout rules for mobile, tablet, and desktop with minimal gradients and low-radius elements.
-5) Add subtle, purposeful animations for state changes consistent with product expectations.
+1) ❌ NOT STARTED - Build minimal web UI for live auctions and operator visibility.
+   Required for contest: List auctions, auction detail page, bid form, balance view, create auction
+2) ❌ NOT STARTED - Implement Telegram-based authentication for web sessions (can be simplified for demo).
+3) ❌ NOT STARTED - Render live auction state from Redis snapshots with periodic refresh.
+4) ❌ NOT STARTED - Apply responsive layout rules for mobile, tablet, and desktop with minimal gradients and low-radius elements.
+5) ❌ NOT STARTED - Add subtle, purposeful animations for state changes consistent with product expectations.
+⚠️ CRITICAL - Web UI is mandatory for contest submission. Must be implemented.
 Tests:
-- Responsive layout tests across screen sizes and input types.
-- Locale toggling and content consistency tests.
+- ❌ NOT STARTED - Responsive layout tests across screen sizes and input types.
+- ❌ NOT STARTED - Locale toggling and content consistency tests.
 Integration check:
-- Web UI reflects live auction state and user balances.
+- ❌ NOT STARTED - Web UI reflects live auction state and user balances.
 
 Phase 10 - Security hardening and auditability (timebox: 3 hours)
 Steps:
@@ -131,13 +186,20 @@ Integration check:
 
 Phase 11 - Observability, load testing, and performance tuning (timebox: 3 hours)
 Steps:
-1) Instrument metrics for bid throughput, lock contention, round extensions, and settlement timing.
-2) Build a load suite for concurrent bidding and last-second anti-sniping stress.
-3) Run reconciliation checks for ledger totals versus balances after load runs.
-4) Tune MongoDB indexes, Redis usage, and worker concurrency for sub-100ms median bid acceptance.
-5) Document operational runbooks and verify timing behavior against requirements.
+1) ❌ NOT STARTED - Instrument metrics for bid throughput, lock contention, round extensions, and settlement timing.
+2) ❌ CRITICAL - Build a load suite for concurrent bidding and last-second anti-sniping stress.
+   Required for contest: Bot scripts, concurrent requests, anti-sniping stress test
+3) ❌ CRITICAL - Run reconciliation checks for ledger totals versus balances after load runs.
+   Required for contest: Verify financial correctness under load
+4) ❌ NOT STARTED - Tune MongoDB indexes, Redis usage, and worker concurrency for sub-100ms median bid acceptance.
+5) ❌ NOT STARTED - Document operational runbooks and verify timing behavior against requirements.
+⚠️ CRITICAL - Load testing scripts are mandatory for contest submission. Must include:
+   - Bot simulation script (multiple bots placing bids)
+   - Concurrent request stress test
+   - Anti-sniping edge case test (bids in last seconds)
+   - Financial reconciliation verification
 Tests:
-- Load tests with no negative balances, no duplicate winners, and consistent reconciliation.
-- Performance benchmarks meet latency and stability targets.
+- ❌ NOT STARTED - Load tests with no negative balances, no duplicate winners, and consistent reconciliation.
+- ❌ NOT STARTED - Performance benchmarks meet latency and stability targets.
 Integration check:
-- Full system passes load tests and remains consistent under stress.
+- ❌ NOT STARTED - Full system passes load tests and remains consistent under stress.
