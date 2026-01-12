@@ -114,7 +114,7 @@ describe("bid placement", () => {
       )
     );
 
-    const url = `/auctions/${auctionId}/rounds/0/bids`;
+    const url = `/auctions/${auctionId}/bids`;
     const idempotencyKey = `bid-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const retries = await Promise.all(
       Array.from({ length: 5 }).map(() =>
@@ -186,7 +186,7 @@ describe("bid placement", () => {
 
     const response = await app.inject({
       method: "POST",
-      url: `/auctions/${auctionId}/rounds/0/bids`,
+      url: `/auctions/${auctionId}/bids`,
       payload: {
         userId: "user-redis",
         amount: 250,
@@ -198,7 +198,7 @@ describe("bid placement", () => {
     const body = response.json() as {
       bid: { _id: string; amount: number; createdAt: string };
     };
-    const rankingKey = `auction:${auctionId}:round:0:ranking`;
+    const rankingKey = `auction:${auctionId}:ranking`;
     const rankingMember = buildRankingMember(body.bid._id, new Date(body.bid.createdAt));
     const score = await redis.zscore(rankingKey, rankingMember);
     expect(Number(score)).toBe(body.bid.amount);
@@ -214,7 +214,7 @@ describe("bid placement", () => {
     expect(snapshot.currentRoundIndex).toBe("0");
     expect(snapshot.lastBidAmount).toBe(body.bid.amount.toString());
 
-    const topKey = `state:auction:${auctionId}:round:0:top`;
+    const topKey = `state:auction:${auctionId}:top`;
     const topMembers = await redis.smembers(topKey);
     expect(topMembers).toContain(body.bid._id);
   });

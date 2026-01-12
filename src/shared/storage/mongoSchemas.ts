@@ -77,11 +77,16 @@ export interface AuctionRoundStateDocument {
 
 export interface BidDocument {
   auctionId: ObjectId;
-  roundIndex: number;
   userId: string;
   amount: number;
   createdAt: Date;
   idempotencyKey: string;
+  active: boolean;
+  roundIndex?: number;
+  inactiveAt?: Date;
+  settledAt?: Date;
+  settlementAction?: "captured" | "released";
+  settlementRoundIndex?: number;
   audit?: {
     requestId?: string;
     source?: string;
@@ -138,11 +143,20 @@ export interface DeliveryRecordDocument {
   createdAt: Date;
 }
 
+export type NotificationType =
+  | "round_result"
+  | "bid_confirmed"
+  | "withdrawal_broadcasted"
+  | "withdrawal_confirmed"
+  | "withdrawal_failed"
+  | "auction_starting"
+  | "round_starting";
+
 export interface NotificationQueueDocument {
-  type: "round_result";
+  type: NotificationType;
   userId: string;
-  auctionId: ObjectId;
-  roundIndex: number;
+  auctionId?: ObjectId;
+  roundIndex?: number;
   status: "pending" | "sent" | "failed";
   payload: Record<string, unknown>;
   idempotencyKey: string;
@@ -297,14 +311,19 @@ const auctionValidator: Document = {
 const bidValidator: Document = {
   $jsonSchema: {
     bsonType: "object",
-    required: ["auctionId", "roundIndex", "userId", "amount", "createdAt", "idempotencyKey"],
+    required: ["auctionId", "userId", "amount", "createdAt", "idempotencyKey", "active"],
     properties: {
       auctionId: { bsonType: "objectId" },
-      roundIndex: { bsonType: bsonNumber },
       userId: { bsonType: "string" },
       amount: { bsonType: bsonNumber },
       createdAt: { bsonType: "date" },
       idempotencyKey: { bsonType: "string" },
+      active: { bsonType: "bool" },
+      roundIndex: { bsonType: bsonNumber },
+      inactiveAt: { bsonType: "date" },
+      settledAt: { bsonType: "date" },
+      settlementAction: { bsonType: "string", enum: ["captured", "released"] },
+      settlementRoundIndex: { bsonType: bsonNumber },
       audit: {
         bsonType: "object",
         properties: {
@@ -418,8 +437,6 @@ const notificationQueueValidator: Document = {
     required: [
       "type",
       "userId",
-      "auctionId",
-      "roundIndex",
       "status",
       "payload",
       "idempotencyKey",
@@ -429,7 +446,18 @@ const notificationQueueValidator: Document = {
       "updatedAt"
     ],
     properties: {
-      type: { bsonType: "string", enum: ["round_result"] },
+      type: {
+        bsonType: "string",
+        enum: [
+          "round_result",
+          "bid_confirmed",
+          "withdrawal_broadcasted",
+          "withdrawal_confirmed",
+          "withdrawal_failed",
+          "auction_starting",
+          "round_starting"
+        ]
+      },
       userId: { bsonType: "string" },
       auctionId: { bsonType: "objectId" },
       roundIndex: { bsonType: bsonNumber },
@@ -586,11 +614,21 @@ export const mongoIndexSpecs: Array<{ collection: string; indexes: IndexDescript
     collection: mongoCollections.bids,
     indexes: [
       {
-        key: { auctionId: 1, roundIndex: 1, amount: -1, createdAt: 1 },
-        name: "bids_rank"
+        key: { auctionId: 1, active: 1, amount: -1, createdAt: 1 },
+        name: "bids_rank_active"
       },
       { key: { userId: 1, createdAt: -1 }, name: "bids_user_createdAt" },
-      { key: { auctionId: 1, roundIndex: 1, userId: 1 }, name: "bids_user_round" },
+      { key: { auctionId: 1, userId: 1 }, name: "bids_auction_user" },
+      {
+        key: { auctionId: 1, userId: 1, active: 1 },
+        name: "bids_active_unique",
+        unique: true,
+        partialFilterExpression: { active: true }
+      },
+      {
+        key: { auctionId: 1, userId: 1, settledAt: 1 },
+        name: "bids_settlement_lookup"
+      },
       { key: { idempotencyKey: 1 }, name: "bids_idempotency", unique: true }
     ]
   },

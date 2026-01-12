@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Gift Auctions</title>
+  <style>
+    /* === BASE STYLES === */
+    :root {
+      color-scheme: light dark;
+      --tg-bg: var(--tg-theme-bg-color, #0a0a0a);
+      --tg-text: var(--tg-theme-text-color, #ffffff);
+      --tg-hint: var(--tg-theme-hint-color, #8e8e93);
+      --tg-accent: var(--tg-theme-button-color, #2aabee);
+      --tg-accent-text: var(--tg-theme-button-text-color, #ffffff);
+      --tg-card: var(--tg-theme-secondary-bg-color, #1c1c1e);
+      --tg-section: var(--tg-theme-section-bg-color, #141414);
+      --tg-divider: var(--tg-theme-section-separator-color, #2c2c2e);
+      --tg-header: var(--tg-theme-header-bg-color, #1c1c1e);
+      --radius-sm: 12px;
+      --radius-md: 16px;
+      --radius-lg: 20px;
+      --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.1);
+      --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.15);
+      --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.2);
+      --gradient-primary: linear-gradient(135deg, #2aabee 0%, #1a8ad1 100%);
+      --gradient-success: linear-gradient(135deg, #34c759 0%, #2aa746 100%);
+      --gradient-danger: linear-gradient(135deg, #ff3b30 0%, #d93025 100%);
+      --gradient-card: linear-gradient(145deg, rgba(28, 28, 30, 0.95), rgba(28, 28, 30, 0.8));
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+      background: var(--tg-bg);
+      color: var(--tg-text);
+      min-height: 100vh;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    /* === ENHANCED GRADIENT BACKGROUND === */
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(800px 600px at 10% 0%, rgba(42, 171, 238, 0.15), transparent 60%),
+        radial-gradient(600px 500px at 90% 100%, rgba(52, 199, 89, 0.12), transparent 60%),
+        radial-gradient(1000px 800px at 50% 50%, rgba(255, 59, 48, 0.08), transparent 70%);
+      z-index: -1;
+      animation: gradient-shift 20s ease infinite;
+    }
+
+    @keyframes gradient-shift {
+      0%, 100% { opacity: 0.4; }
+      50% { opacity: 0.6; }
+    }
+
+    /* === APP CONTAINER === */
+    .app {
+      max-width: 480px;
+      margin: 0 auto;
+      padding: 0 0 100px;
+      position: relative;
+    }
+
+    /* === HEADER === */
+    .header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      padding: 16px;
+      background: rgba(28, 28, 30, 0.95);
+      backdrop-filter: blur(20px) saturate(180%);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .header-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .header-logo {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: var(--gradient-primary);
+      display: grid;
+      place-items: center;
+      font-size: 20px;
+      font-weight: 700;
+      color: white;
+      box-shadow: 0 4px 12px rgba(42, 171, 238, 0.4);
+    }
+
+    .header-title {
+      font-size: 17px;
+      font-weight: 600;
+      letter-spacing: -0.3px;
+    }
+
+    .header-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: rgba(52, 199, 89, 0.15);
+      color: #34c759;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #34c759;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(1.1); }
+    }
+
+    /* === BALANCE CARD === */
+    .balance-card {
+      margin: 16px 16px 24px;
+      padding: 24px 20px;
+      border-radius: var(--radius-lg);
+      background: var(--gradient-card);
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: var(--shadow-lg);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .balance-card::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 200px;
+      height: 200px;
+      background: radial-gradient(circle, rgba(42, 171, 238, 0.2), transparent 70%);
+      border-radius: 50%;
+      transform: translate(50%, -50%);
+    }
+
+    .balance-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    .balance-label {
+      font-size: 15px;
+      color: var(--tg-hint);
+      font-weight: 500;
+    }
+
+    .balance-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(42, 171, 238, 0.2);
+      display: grid;
+      place-items: center;
+      font-size: 18px;
+    }
+
+    .balance-amount {
+      font-size: 40px;
+      font-weight: 700;
+      letter-spacing: -1px;
+      margin-bottom: 4px;
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+
+    .balance-currency {
+      font-size: 24px;
+      color: var(--tg-hint);
+      font-weight: 600;
+    }
+
+    .balance-usd {
+      font-size: 15px;
+      color: var(--tg-hint);
+      margin-bottom: 20px;
+    }
+
+    .balance-actions {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+
+    .balance-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 8px;
+      border-radius: var(--radius-sm);
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--tg-text);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .balance-btn:active {
+      transform: scale(0.95);
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .balance-btn-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: var(--gradient-primary);
+      display: grid;
+      place-items: center;
+      font-size: 18px;
+    }
+
+    /* === SECTION === */
+    .section {
+      padding: 0 16px 16px;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .section-title {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+
+    .section-link {
+      font-size: 15px;
+      color: var(--tg-accent);
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    /* === AUCTION CARDS === */
+    .auction-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .auction-card {
+      padding: 16px;
+      border-radius: var(--radius-md);
+      background: var(--gradient-card);
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: var(--shadow-md);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .auction-card::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(42, 171, 238, 0.1), transparent);
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+
+    .auction-card:active {
+      transform: scale(0.98);
+    }
+
+    .auction-card:active::before {
+      opacity: 1;
+    }
+
+    .auction-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .auction-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: var(--radius-sm);
+      background: var(--gradient-primary);
+      display: grid;
+      place-items: center;
+      font-size: 24px;
+      box-shadow: 0 4px 12px rgba(42, 171, 238, 0.3);
+    }
+
+    .auction-status {
+      padding: 4px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .auction-status.live {
+      background: rgba(52, 199, 89, 0.2);
+      color: #34c759;
+    }
+
+    .auction-status.draft {
+      background: rgba(255, 159, 10, 0.2);
+      color: #ff9f0a;
+    }
+
+    .auction-status.closed {
+      background: rgba(142, 142, 147, 0.2);
+      color: #8e8e93;
+    }
+
+    .auction-title {
+      font-size: 17px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      letter-spacing: -0.3px;
+    }
+
+    .auction-desc {
+      font-size: 14px;
+      color: var(--tg-hint);
+      margin-bottom: 12px;
+      line-height: 1.4;
+    }
+
+    .auction-stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+
+    .stat {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .stat-label {
+      font-size: 12px;
+      color: var(--tg-hint);
+      font-weight: 500;
+    }
+
+    .stat-value {
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    /* === TABS === */
+    .tabs {
+      display: flex;
+      gap: 8px;
+      padding: 0 16px;
+      margin-bottom: 16px;
+    }
+
+    .tab {
+      flex: 1;
+      padding: 10px 16px;
+      border-radius: var(--radius-sm);
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--tg-hint);
+      font-size: 15px;
+      font-weight: 600;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .tab.active {
+      background: var(--gradient-primary);
+      color: var(--tg-accent-text);
+      border-color: transparent;
+      box-shadow: 0 4px 12px rgba(42, 171, 238, 0.3);
+    }
+
+    /* === BOTTOM NAV === */
+    .bottom-nav {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+      background: rgba(28, 28, 30, 0.95);
+      backdrop-filter: blur(20px) saturate(180%);
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 4px;
+      z-index: 100;
+    }
+
+    .nav-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      padding: 8px;
+      border-radius: var(--radius-sm);
+      background: transparent;
+      border: none;
+      color: var(--tg-hint);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .nav-btn.active {
+      color: var(--tg-accent);
+      background: rgba(42, 171, 238, 0.1);
+    }
+
+    .nav-btn-icon {
+      font-size: 24px;
+    }
+
+    /* === BUTTONS === */
+    .btn {
+      padding: 14px 24px;
+      border-radius: var(--radius-md);
+      font-size: 16px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .btn-primary {
+      background: var(--gradient-primary);
+      color: var(--tg-accent-text);
+      box-shadow: 0 4px 12px rgba(42, 171, 238, 0.3);
+    }
+
+    .btn-primary:active {
+      transform: scale(0.98);
+    }
+
+    /* === UTILITY === */
+    .hidden {
+      display: none !important;
+    }
+
+    .fade-in {
+      animation: fadeIn 0.3s ease both;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* === LOADING === */
+    .loading {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 40px;
+    }
+
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid rgba(255, 255, 255, 0.1);
+      border-top-color: var(--tg-accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* === EMPTY STATE === */
+    .empty-state {
+      text-align: center;
+      padding: 60px 24px;
+    }
+
+    .empty-icon {
+      font-size: 64px;
+      margin-bottom: 16px;
+      opacity: 0.5;
+    }
+
+    .empty-title {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .empty-text {
+      font-size: 15px;
+      color: var(--tg-hint);
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- HEADER -->
+    <header class="header">
+      <div class="header-brand">
+        <div class="header-logo">🎁</div>
+        <div class="header-title">Gift Auctions</div>
+      </div>
+      <div class="header-badge">
+        <span class="status-dot"></span>
+        <span>Live</span>
+      </div>
+    </header>
+
+    <!-- BALANCE CARD -->
+    <div class="balance-card">
+      <div class="balance-header">
+        <span class="balance-label">Общий баланс</span>
+        <div class="balance-icon">👁</div>
+      </div>
+      <div class="balance-amount">
+        <span id="total-balance">0</span>
+        <span class="balance-currency">USD</span>
+      </div>
+      <div class="balance-usd">Available: <span id="available-balance">0</span> USD</div>
+      <div class="balance-actions">
+        <button class="balance-btn" onclick="handleDeposit()">
+          <div class="balance-btn-icon">↓</div>
+          <span>Пополнить</span>
+        </button>
+        <button class="balance-btn" onclick="handleWithdraw()">
+          <div class="balance-btn-icon">↑</div>
+          <span>Вывести</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- TABS -->
+    <div class="tabs">
+      <div class="tab active" onclick="switchTab('auctions')">🔨 Аукционы</div>
+      <div class="tab" onclick="switchTab('create')">➕ Создать</div>
+    </div>
+
+    <!-- AUCTIONS SECTION -->
+    <section class="section" id="auctions-section">
+      <div class="section-header">
+        <h2 class="section-title">Активные</h2>
+        <a class="section-link" onclick="loadAuctions()">Обновить</a>
+      </div>
+      <div class="auction-list" id="auctions-list">
+        <div class="loading">
+          <div class="spinner"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CREATE SECTION -->
+    <section class="section hidden" id="create-section">
+      <div class="section-header">
+        <h2 class="section-title">Создать аукцион</h2>
+      </div>
+      <div class="empty-state">
+        <div class="empty-icon">🎨</div>
+        <div class="empty-title">Скоро</div>
+        <div class="empty-text">Функция создания аукционов в разработке</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- BOTTOM NAV -->
+  <nav class="bottom-nav">
+    <button class="nav-btn active" onclick="switchTab('auctions')">
+      <span class="nav-btn-icon">🔨</span>
+      <span>Аукционы</span>
+    </button>
+    <button class="nav-btn" onclick="switchTab('create')">
+      <span class="nav-btn-icon">➕</span>
+      <span>Создать</span>
+    </button>
+  </nav>
+
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script>
+    // Initialize Telegram WebApp
+    const tg = window.Telegram?.WebApp;
+    if (tg) {
+      tg.ready();
+      tg.expand();
+    }
+
+    // State
+    const state = {
+      currentUser: null,
+      auctions: [],
+      balance: { available: 0, held: 0, total: 0 }
+    };
+
+    // Initialize
+    async function init() {
+      await loadUser();
+      await loadBalance();
+      await loadAuctions();
+    }
+
+    // Load user
+    async function loadUser() {
+      if (tg?.initDataUnsafe?.user) {
+        state.currentUser = tg.initDataUnsafe.user;
+      } else {
+        state.currentUser = { id: 'demo', first_name: 'Demo', username: 'demo' };
+      }
+    }
+
+    // Load balance
+    async function loadBalance() {
+      try {
+        const userId = state.currentUser?.id || 'demo';
+        const response = await fetch(`/api/balance/${userId}`);
+        if (response.ok) {
+          const data = await response.json();
+          state.balance = data;
+          updateBalanceUI();
+        }
+      } catch (error) {
+        console.error('Failed to load balance:', error);
+      }
+    }
+
+    // Update balance UI
+    function updateBalanceUI() {
+      document.getElementById('total-balance').textContent = state.balance.total.toFixed(2);
+      document.getElementById('available-balance').textContent = state.balance.available.toFixed(2);
+    }
+
+    // Load auctions
+    async function loadAuctions() {
+      const container = document.getElementById('auctions-list');
+      container.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+      try {
+        const response = await fetch('/api/auctions');
+        if (response.ok) {
+          state.auctions = await response.json();
+          renderAuctions();
+        }
+      } catch (error) {
+        console.error('Failed to load auctions:', error);
+        container.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-icon">😕</div>
+            <div class="empty-title">Ошибка загрузки</div>
+            <div class="empty-text">Не удалось загрузить аукционы</div>
+          </div>
+        `;
+      }
+    }
+
+    // Render auctions
+    function renderAuctions() {
+      const container = document.getElementById('auctions-list');
+
+      if (state.auctions.length === 0) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-icon">🔨</div>
+            <div class="empty-title">Нет активных аукционов</div>
+            <div class="empty-text">Новые аукционы скоро появятся</div>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = state.auctions.map(auction => `
+        <div class="auction-card fade-in" onclick="openAuction('${auction._id}')">
+          <div class="auction-header">
+            <div class="auction-icon">🎁</div>
+            <span class="auction-status ${auction.status}">${auction.status}</span>
+          </div>
+          <h3 class="auction-title">${auction.title}</h3>
+          ${auction.description ? `<p class="auction-desc">${auction.description}</p>` : ''}
+          <div class="auction-stats">
+            <div class="stat">
+              <span class="stat-label">Раундов</span>
+              <span class="stat-value">${auction.rounds.length}</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Валюта</span>
+              <span class="stat-value">${auction.currency}</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Места</span>
+              <span class="stat-value">${auction.rounds[0]?.allocationSize || 0}</span>
+            </div>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    // Switch tab
+    function switchTab(tab) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
+
+      if (event && event.target) {
+        if (event.target.classList.contains('tab')) {
+          event.target.classList.add('active');
+        } else if (event.target.closest('.nav-btn')) {
+          event.target.closest('.nav-btn').classList.add('active');
+        }
+      }
+
+      if (tab === 'auctions') {
+        document.getElementById('auctions-section').classList.remove('hidden');
+        document.getElementById('create-section').classList.add('hidden');
+        document.querySelectorAll('.tab')[0].classList.add('active');
+        document.querySelectorAll('.nav-btn')[0].classList.add('active');
+      } else {
+        document.getElementById('auctions-section').classList.add('hidden');
+        document.getElementById('create-section').classList.remove('hidden');
+        document.querySelectorAll('.tab')[1].classList.add('active');
+        document.querySelectorAll('.nav-btn')[1].classList.add('active');
+      }
+
+      if (tg) {
+        tg.HapticFeedback.impactOccurred('light');
+      }
+    }
+
+    // Actions
+    function handleDeposit() {
+      if (tg) tg.showAlert('Deposit functionality coming soon!');
+    }
+
+    function handleWithdraw() {
+      if (tg) tg.showAlert('Withdraw functionality coming soon!');
+    }
+
+    function openAuction(id) {
+      if (tg) tg.HapticFeedback.impactOccurred('medium');
+      window.location.href = `/auction/${id}`;
+    }
+
+    // Start app
+    init();
+  </script>
+</body>
+</html>

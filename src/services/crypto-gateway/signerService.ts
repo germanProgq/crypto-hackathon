@@ -164,10 +164,14 @@ function signData(txData: TransactionData, privateKey: string): string {
   const hash = createHash("sha256").update(payload).digest();
   const keyHash = createHash("sha256").update(privateKey).digest();
 
+  if (!hash || !keyHash || hash.length < 32 || keyHash.length < 32) {
+    throw new Error("Failed to generate hash for signing");
+  }
+
   const signature = Buffer.alloc(64);
   for (let i = 0; i < 32; i++) {
-    signature[i] = hash[i] ^ keyHash[i];
-    signature[i + 32] = keyHash[i] ^ hash[(i + 16) % 32];
+    signature[i] = hash[i]! ^ keyHash[i]!;
+    signature[i + 32] = keyHash[i]! ^ hash[(i + 16) % 32]!;
   }
 
   return signature.toString("hex");

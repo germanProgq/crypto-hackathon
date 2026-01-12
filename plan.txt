@@ -91,16 +91,16 @@ Integration check:
 
 Phase 7 - Telegram bot UX and notifications (timebox: 3 hours)
 Steps:
-1) ❌ NOT STARTED - Implement onboarding, balance, deposit instructions, auctions list, auction detail, bid, and withdraw flows.
-2) ❌ NOT STARTED - Localize all bot messages, buttons, and errors with RU/EN i18n keys.
-3) ⚠️ PARTIAL - Add notification queues for bid updates, round results, and settlement status (structure exists, needs implementation).
-4) ❌ NOT STARTED - Enforce bot-side rate limits and error handling for retries.
+1) ✅ DONE - Implement onboarding, balance, deposit instructions, auctions list, auction detail, bid, and withdraw flows.
+2) ✅ DONE - Localize all bot messages, buttons, and errors with RU/EN i18n keys.
+3) ✅ DONE - Add notification queues for bid updates, round results, and settlement status.
+4) ✅ DONE - Enforce bot-side rate limits and error handling for retries.
 ℹ️ NOTE - Telegram bot is optional for contest, but Web UI is mandatory (Phase 8).
 Tests:
-- ❌ NOT STARTED - Conversation flow tests in both locales.
-- ❌ NOT STARTED - Notification delivery and fallback behavior tests.
+- ✅ DONE - Conversation flow tests in both locales.
+- ✅ DONE - Notification delivery and fallback behavior tests.
 Integration check:
-- ❌ NOT STARTED - Telegram bot drives full auction participation with correct balances.
+- ✅ DONE - Telegram bot drives full auction participation with correct balances.
 
 ---
 
