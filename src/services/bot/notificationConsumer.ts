@@ -9,12 +9,14 @@ import {
 } from "../../shared/storage/mongoSchemas.js";
 import { acquireRedisLock, releaseRedisLock } from "../../shared/storage/redisLock.js";
 
-const pollIntervalMs = 1500;
 const lockTtlMs = 15000;
 const batchSize = 50;
 const maxAttempts = 5;
 const requestTimeoutMs = 8000;
 const retryDelaysMs = [5000, 15000, 60000, 300000, 900000];
+const minSchedulerDelayMs = 50;
+const maxSchedulerDelayMs = 5000;
+const idleSchedulerDelayMs = 5000;
 
 type RoundResultPayload = {
   auctionId: string;
@@ -34,32 +36,77 @@ export async function registerNotificationConsumer(
 ): Promise<void> {
   ensureTelegramConfig(deps);
   const consumer = createNotificationConsumer(deps);
+  const notifications = createNotificationCollection(deps);
   let tickInFlight = false;
+  let timeout: NodeJS.Timeout | null = null;
 
   const tick = async () => {
     if (tickInFlight) {
+      scheduleNext(minSchedulerDelayMs);
       return;
     }
 
     tickInFlight = true;
     try {
       await consumer.processPending();
+      scheduleNext(await getNextNotificationDelay(notifications));
     } catch (error) {
       deps.logger.error({ err: error }, "Notification consumer tick failed");
+      scheduleNext(idleSchedulerDelayMs);
     } finally {
       tickInFlight = false;
     }
   };
 
-  const timer = setInterval(() => {
-    void tick();
-  }, pollIntervalMs);
+  const scheduleNext = (delayMs: number) => {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+    const clamped = clampDelay(delayMs, minSchedulerDelayMs, maxSchedulerDelayMs);
+    timeout = setTimeout(() => {
+      void tick();
+    }, clamped);
+  };
 
-  void tick();
+  scheduleNext(0);
 
   app.addHook("onClose", async () => {
-    clearInterval(timer);
+    if (timeout) {
+      clearTimeout(timeout);
+      timeout = null;
+    }
   });
+}
+
+function clampDelay(delayMs: number, minDelayMs: number, maxDelayMs: number): number {
+  const clamped = Math.max(minDelayMs, delayMs);
+  return Math.min(maxDelayMs, clamped);
+}
+
+async function getNextNotificationDelay(
+  notifications: ReturnType<typeof createNotificationCollection>
+): Promise<number> {
+  const now = new Date();
+  const next = await notifications
+    .find({ status: { $in: ["pending", "failed"] }, attempts: { $lt: maxAttempts } })
+    .sort({ nextAttemptAt: 1 })
+    .project({ nextAttemptAt: 1 })
+    .limit(1)
+    .next();
+
+  if (!next?.nextAttemptAt) {
+    return idleSchedulerDelayMs;
+  }
+
+  if (next.nextAttemptAt <= now) {
+    return minSchedulerDelayMs;
+  }
+
+  return clampDelay(
+    next.nextAttemptAt.getTime() - now.getTime(),
+    minSchedulerDelayMs,
+    maxSchedulerDelayMs
+  );
 }
 
 function createNotificationConsumer(deps: ServiceDependencies) {

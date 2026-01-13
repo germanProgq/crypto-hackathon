@@ -234,6 +234,38 @@ export function createAuctionRepository(mongo: MongoDependencies) {
     return result.modifiedCount > 0;
   }
 
+  async function updateAuctionSnapshot(
+    auctionId: ObjectId,
+    snapshot: Partial<
+      Pick<
+        AuctionDocument,
+        "currentRoundIndex" | "roundStatus" | "roundEffectiveEndAt" | "roundLastBidAt" | "lastBidAmount"
+      >
+    >,
+    now: Date,
+    session?: ClientSession
+  ): Promise<boolean> {
+    const update: Record<string, unknown> = { updatedAt: now };
+    if (snapshot.currentRoundIndex !== undefined) {
+      update.currentRoundIndex = snapshot.currentRoundIndex;
+    }
+    if (snapshot.roundStatus !== undefined) {
+      update.roundStatus = snapshot.roundStatus;
+    }
+    if (snapshot.roundEffectiveEndAt !== undefined) {
+      update.roundEffectiveEndAt = snapshot.roundEffectiveEndAt;
+    }
+    if (snapshot.roundLastBidAt !== undefined) {
+      update.roundLastBidAt = snapshot.roundLastBidAt;
+    }
+    if (snapshot.lastBidAmount !== undefined) {
+      update.lastBidAmount = snapshot.lastBidAmount;
+    }
+
+    const result = await auctions.updateOne({ _id: auctionId }, { $set: update }, { session });
+    return result.modifiedCount > 0;
+  }
+
   async function applyBidAntiSniping(
     auction: WithId<AuctionDocument>,
     roundIndex: number,
@@ -292,6 +324,7 @@ export function createAuctionRepository(mongo: MongoDependencies) {
     refreshNextTransitionAt,
     applyRoundTransition,
     updateAuctionStatus,
+    updateAuctionSnapshot,
     applyBidAntiSniping
   };
 }

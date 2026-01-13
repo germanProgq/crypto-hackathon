@@ -63,6 +63,11 @@ export interface AuctionDocument {
   startsAt: Date;
   endsAt: Date;
   rounds: AuctionRoundConfig[];
+  currentRoundIndex?: number | null;
+  roundStatus?: AuctionRoundStatus | null;
+  roundEffectiveEndAt?: Date | null;
+  roundLastBidAt?: Date | null;
+  lastBidAmount?: number | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -279,6 +284,7 @@ export interface CryptoDepositDocument {
   observedAt: Date;
   createdAt: Date;
   updatedAt: Date;
+  nextPollAt?: Date;
   creditedAt?: Date;
   ledgerEntryId?: ObjectId;
 }
@@ -297,6 +303,7 @@ export interface CryptoWithdrawalDocument {
   confirmedAt?: Date;
   failedAt?: Date;
   txId?: string;
+  nextPollAt?: Date;
   flags?: string[];
   reviewRequired?: boolean;
   failureReason?: string;
@@ -318,6 +325,7 @@ export interface CryptoGatewayStateDocument {
   key: string;
   currency: string;
   cursor?: string;
+  nextPollAt?: Date;
   updatedAt: Date;
 }
 
@@ -404,6 +412,16 @@ const auctionValidator: Document = {
       startsAt: { bsonType: "date" },
       endsAt: { bsonType: "date" },
       rounds: { bsonType: "array", minItems: 1, items: roundSchema },
+      currentRoundIndex: { bsonType: [...bsonNumber, "null"] },
+      roundStatus: {
+        anyOf: [
+          { bsonType: "string", enum: ["scheduled", "live", "closed"] },
+          { bsonType: "null" }
+        ]
+      },
+      roundEffectiveEndAt: { bsonType: ["date", "null"] },
+      roundLastBidAt: { bsonType: ["date", "null"] },
+      lastBidAmount: { bsonType: [...bsonNumber, "null"] },
       createdAt: { bsonType: "date" },
       updatedAt: { bsonType: "date" }
     }
@@ -692,6 +710,7 @@ const cryptoDepositValidator: Document = {
       observedAt: { bsonType: "date" },
       createdAt: { bsonType: "date" },
       updatedAt: { bsonType: "date" },
+      nextPollAt: { bsonType: "date" },
       creditedAt: { bsonType: "date" },
       ledgerEntryId: { bsonType: "objectId" }
     }
@@ -775,6 +794,7 @@ const cryptoWithdrawalValidator: Document = {
       confirmedAt: { bsonType: "date" },
       failedAt: { bsonType: "date" },
       txId: { bsonType: "string" },
+      nextPollAt: { bsonType: "date" },
       flags: { bsonType: "array", items: { bsonType: "string" } },
       reviewRequired: { bsonType: "bool" },
       failureReason: { bsonType: "string" },
@@ -808,6 +828,7 @@ const cryptoGatewayStateValidator: Document = {
       key: { bsonType: "string" },
       currency: { bsonType: "string" },
       cursor: { bsonType: "string" },
+      nextPollAt: { bsonType: "date" },
       updatedAt: { bsonType: "date" }
     }
   }
@@ -989,6 +1010,14 @@ export const mongoIndexSpecs: Array<{ collection: string; indexes: IndexDescript
     indexes: [
       { key: { currency: 1, txId: 1 }, name: "crypto_deposits_tx", unique: true },
       { key: { status: 1, updatedAt: 1 }, name: "crypto_deposits_status_updated" },
+      {
+        key: { status: 1, nextPollAt: 1 },
+        name: "crypto_deposits_status_next_poll",
+        partialFilterExpression: {
+          status: { $in: ["observed", "confirming", "confirmed"] },
+          nextPollAt: { $exists: true }
+        }
+      },
       { key: { userId: 1, observedAt: -1 }, name: "crypto_deposits_user_observed" }
     ]
   },
@@ -997,6 +1026,14 @@ export const mongoIndexSpecs: Array<{ collection: string; indexes: IndexDescript
     indexes: [
       { key: { idempotencyKey: 1 }, name: "crypto_withdrawals_idempotency", unique: true },
       { key: { status: 1, updatedAt: 1 }, name: "crypto_withdrawals_status_updated" },
+      {
+        key: { status: 1, nextPollAt: 1 },
+        name: "crypto_withdrawals_status_next_poll",
+        partialFilterExpression: {
+          status: { $in: ["authorized", "broadcasted"] },
+          nextPollAt: { $exists: true }
+        }
+      },
       { key: { userId: 1, requestedAt: -1 }, name: "crypto_withdrawals_user_requested" },
       {
         key: { txId: 1 },
@@ -1020,7 +1057,8 @@ export const mongoIndexSpecs: Array<{ collection: string; indexes: IndexDescript
   {
     collection: mongoCollections.cryptoGatewayState,
     indexes: [
-      { key: { key: 1, currency: 1 }, name: "crypto_gateway_state_unique", unique: true }
+      { key: { key: 1, currency: 1 }, name: "crypto_gateway_state_unique", unique: true },
+      { key: { key: 1, nextPollAt: 1 }, name: "crypto_gateway_state_next_poll" }
     ]
   },
   {

@@ -17,6 +17,7 @@ import { createWalletStrategy, type DepositDestination } from "./walletStrategy.
 
 const depositBatchSize = 100;
 const withdrawalBatchSize = 50;
+const minDepositScanDelayMs = 250;
 
 export type CryptoGatewayErrorCode =
   | "invalid_request"
@@ -77,6 +78,10 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
   const gatewayState = deps.mongo.db.collection<CryptoGatewayStateDocument>(
     mongoCollections.cryptoGatewayState
   );
+  const depositPollIntervalMs = deps.config.crypto.deposit.pollIntervalMs;
+  const withdrawalPollIntervalMs = deps.config.crypto.withdrawal.pollIntervalMs;
+  const withdrawalBroadcastIntervalMs = deps.config.crypto.withdrawal.broadcastIntervalMs;
+  const idleDepositScanDelayMs = Math.max(depositPollIntervalMs, 15000);
 
   async function getDepositDestination(
     userId: string,
@@ -243,7 +248,8 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
       status: "authorized",
       authorizedAt: now,
       reviewRequired: false,
-      updatedAt: now
+      updatedAt: now,
+      nextPollAt: now
     };
     if (actorId) {
       update.authorizedBy = actorId;
@@ -281,14 +287,31 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
     return withdrawal;
   }
 
-  async function processDeposits(): Promise<void> {
+  async function processDeposits(
+    options: { now?: Date; force?: boolean } = {}
+  ): Promise<void> {
+    const force = options.force ?? true;
+
     for (const currency of deps.config.crypto.supportedCurrencies) {
-      const addresses = await walletStrategy.listWatchedAddresses(currency);
-      if (addresses.length === 0) {
+      const scanNow = options.now ?? new Date();
+      const state = await gatewayState.findOne({ key: "deposit", currency });
+      const nextPollAt = state?.nextPollAt;
+
+      if (!force && nextPollAt && nextPollAt > scanNow) {
+        await refreshPendingDeposits(currency, { force, now: scanNow });
         continue;
       }
 
-      const cursor = await getGatewayCursor("deposit", currency);
+      const addresses = await walletStrategy.listWatchedAddresses(currency);
+      if (addresses.length === 0) {
+        await updateGatewayState("deposit", currency, {
+          nextPollAt: new Date(scanNow.getTime() + idleDepositScanDelayMs)
+        });
+        await refreshPendingDeposits(currency, { force, now: scanNow });
+        continue;
+      }
+
+      const cursor = state?.cursor ?? null;
       const response = await observer.listTransactions({
         currency,
         addresses,
@@ -304,18 +327,32 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
         }
       }
 
-      if (response.nextCursor) {
-        await setGatewayCursor("deposit", currency, response.nextCursor);
-      }
+      const scanDelayMs =
+        response.transactions.length >= depositBatchSize
+          ? minDepositScanDelayMs
+          : depositPollIntervalMs;
 
-      await refreshPendingDeposits(currency);
+      await updateGatewayState("deposit", currency, {
+        cursor: response.nextCursor ?? undefined,
+        nextPollAt: new Date(scanNow.getTime() + scanDelayMs)
+      });
+
+      await refreshPendingDeposits(currency, { force, now: scanNow });
     }
   }
 
-  async function processAuthorizedWithdrawals(): Promise<void> {
+  async function processAuthorizedWithdrawals(
+    options: { now?: Date; force?: boolean } = {}
+  ): Promise<void> {
+    const now = options.now ?? new Date();
+    const force = options.force ?? true;
+    const query: Record<string, unknown> = { status: "authorized" };
+    if (!force) {
+      query.$or = [{ nextPollAt: { $lte: now } }, { nextPollAt: { $exists: false } }];
+    }
     const authorized = await withdrawals
-      .find({ status: "authorized" })
-      .sort({ authorizedAt: 1 })
+      .find(query)
+      .sort(force ? { authorizedAt: 1 } : { nextPollAt: 1, authorizedAt: 1 })
       .limit(withdrawalBatchSize)
       .toArray();
 
@@ -327,14 +364,32 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
           { err: error, withdrawalId: record._id.toHexString() },
           "Withdrawal broadcast failed"
         );
+        const failureAt = new Date();
+        await withdrawals.updateOne(
+          { _id: record._id, status: "authorized" },
+          {
+            $set: {
+              nextPollAt: new Date(failureAt.getTime() + withdrawalBroadcastIntervalMs),
+              updatedAt: failureAt
+            }
+          }
+        );
       }
     }
   }
 
-  async function processBroadcastedWithdrawals(): Promise<void> {
+  async function processBroadcastedWithdrawals(
+    options: { now?: Date; force?: boolean } = {}
+  ): Promise<void> {
+    const now = options.now ?? new Date();
+    const force = options.force ?? true;
+    const query: Record<string, unknown> = { status: "broadcasted" };
+    if (!force) {
+      query.$or = [{ nextPollAt: { $lte: now } }, { nextPollAt: { $exists: false } }];
+    }
     const broadcasted = await withdrawals
-      .find({ status: "broadcasted" })
-      .sort({ broadcastedAt: 1 })
+      .find(query)
+      .sort(force ? { broadcastedAt: 1 } : { nextPollAt: 1, broadcastedAt: 1 })
       .limit(withdrawalBatchSize)
       .toArray();
 
@@ -345,6 +400,16 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
         deps.logger.error(
           { err: error, withdrawalId: record._id.toHexString() },
           "Withdrawal confirm failed"
+        );
+        const failureAt = new Date();
+        await withdrawals.updateOne(
+          { _id: record._id, status: "broadcasted" },
+          {
+            $set: {
+              nextPollAt: new Date(failureAt.getTime() + withdrawalPollIntervalMs),
+              updatedAt: failureAt
+            }
+          }
         );
       }
     }
@@ -384,6 +449,7 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
       transaction.confirmations,
       deps.config.crypto.deposit.confirmations
     );
+    const nextPollAt = new Date(now.getTime() + depositPollIntervalMs);
     const result = await deposits.findOneAndUpdate(
       { currency: transaction.currency, txId: transaction.txId },
       {
@@ -401,7 +467,8 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
           confirmations: transaction.confirmations,
           status,
           updatedAt: now,
-          blockHeight: transaction.blockHeight
+          blockHeight: transaction.blockHeight,
+          nextPollAt
         }
       },
       { upsert: true, returnDocument: "after" }
@@ -416,20 +483,37 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
     }
   }
 
-  async function refreshPendingDeposits(currency: string): Promise<void> {
+  async function refreshPendingDeposits(
+    currency: string,
+    options: { now?: Date; force?: boolean } = {}
+  ): Promise<void> {
+    const now = options.now ?? new Date();
+    const force = options.force ?? true;
+    const query: Record<string, unknown> = {
+      currency,
+      status: { $in: ["observed", "confirming", "confirmed"] }
+    };
+    if (!force) {
+      query.$or = [{ nextPollAt: { $lte: now } }, { nextPollAt: { $exists: false } }];
+    }
+
     const pending = await deposits
-      .find({
-        currency,
-        status: { $in: ["observed", "confirming", "confirmed"] }
-      })
-      .sort({ observedAt: 1 })
+      .find(query)
+      .sort(force ? { observedAt: 1 } : { nextPollAt: 1, observedAt: 1 })
       .limit(depositBatchSize)
       .toArray();
 
     for (const record of pending) {
+      const attemptAt = new Date();
+      const nextPollAt = new Date(attemptAt.getTime() + depositPollIntervalMs);
+
       try {
         const updated = await observer.getTransaction(currency, record.txId);
         if (!updated) {
+          await deposits.updateOne(
+            { _id: record._id },
+            { $set: { nextPollAt, updatedAt: attemptAt } }
+          );
           continue;
         }
 
@@ -439,6 +523,10 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
 
         if (!matchesDeposit(record, updated, { userId: record.userId ?? "" })) {
           deps.logger.warn({ txId: record.txId }, "Deposit refresh mismatch.");
+          await deposits.updateOne(
+            { _id: record._id },
+            { $set: { nextPollAt, updatedAt: attemptAt } }
+          );
           continue;
         }
 
@@ -446,15 +534,15 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
           updated.confirmations,
           deps.config.crypto.deposit.confirmations
         );
-        const now = new Date();
         const next = await deposits.findOneAndUpdate(
           { _id: record._id },
           {
             $set: {
               confirmations: updated.confirmations,
               status,
-              updatedAt: now,
-              blockHeight: updated.blockHeight
+              updatedAt: attemptAt,
+              blockHeight: updated.blockHeight,
+              nextPollAt
             }
           },
           { returnDocument: "after" }
@@ -465,6 +553,16 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
         }
       } catch (error) {
         deps.logger.error({ err: error, txId: record.txId }, "Deposit refresh failed");
+        const failureAt = new Date();
+        await deposits.updateOne(
+          { _id: record._id },
+          {
+            $set: {
+              nextPollAt: new Date(failureAt.getTime() + depositPollIntervalMs),
+              updatedAt: failureAt
+            }
+          }
+        );
       }
     }
   }
@@ -509,7 +607,8 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
             creditedAt: new Date(),
             updatedAt: new Date(),
             ledgerEntryId: entry.entry._id
-          }
+          },
+          $unset: { nextPollAt: "" }
         },
         { session }
       );
@@ -539,6 +638,7 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
       record._id.toHexString()
     );
 
+    const broadcastedAt = new Date();
     await runMongoTransaction(deps.mongo, async (session) => {
       const updated = await withdrawals.findOneAndUpdate(
         { _id: record._id, status: "authorized" },
@@ -546,8 +646,9 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
           $set: {
             status: "broadcasted",
             txId: broadcast.txId,
-            broadcastedAt: new Date(),
-            updatedAt: new Date()
+            broadcastedAt,
+            updatedAt: broadcastedAt,
+            nextPollAt: new Date(broadcastedAt.getTime() + withdrawalPollIntervalMs)
           }
         },
         { returnDocument: "after", session }
@@ -577,12 +678,22 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
       return;
     }
 
+    const now = new Date();
+    const nextPollAt = new Date(now.getTime() + withdrawalPollIntervalMs);
     const transaction = await observer.getTransaction(record.currency, record.txId);
     if (!transaction) {
+      await withdrawals.updateOne(
+        { _id: record._id, status: "broadcasted" },
+        { $set: { nextPollAt, updatedAt: now } }
+      );
       return;
     }
 
     if (transaction.confirmations < deps.config.crypto.withdrawal.confirmations) {
+      await withdrawals.updateOne(
+        { _id: record._id, status: "broadcasted" },
+        { $set: { nextPollAt, updatedAt: now } }
+      );
       return;
     }
 
@@ -592,9 +703,10 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
         {
           $set: {
             status: "confirmed",
-            confirmedAt: new Date(),
-            updatedAt: new Date()
-          }
+            confirmedAt: now,
+            updatedAt: now
+          },
+          $unset: { nextPollAt: "" }
         },
         { returnDocument: "after", session }
       );
@@ -742,7 +854,8 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
             authorizedBy: "system",
             reviewRequired: false,
             flags: decision.flags,
-            updatedAt: now
+            updatedAt: now,
+            nextPollAt: now
           }
         },
         { returnDocument: "after" }
@@ -802,6 +915,32 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
     });
 
     return updated;
+  }
+
+  async function updateGatewayState(
+    key: string,
+    currency: string,
+    updates: { cursor?: string | null; nextPollAt?: Date }
+  ): Promise<void> {
+    const now = new Date();
+    const set: Record<string, unknown> = { updatedAt: now };
+    if (updates.cursor !== undefined) {
+      set.cursor = updates.cursor;
+    }
+    if (updates.nextPollAt !== undefined) {
+      set.nextPollAt = updates.nextPollAt;
+    }
+    await gatewayState.updateOne(
+      { key, currency },
+      {
+        $set: set,
+        $setOnInsert: {
+          key,
+          currency
+        }
+      },
+      { upsert: true }
+    );
   }
 
   async function getGatewayCursor(key: string, currency: string): Promise<string | null> {

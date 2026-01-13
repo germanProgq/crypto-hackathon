@@ -1,7 +1,6 @@
 // Auction engine HTTP routes for auctions and bids.
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { ObjectId, type Collection, type Document, type WithId } from "mongodb";
-import { z } from "zod";
 import type { ServiceDependencies } from "../../shared/service.js";
 import type { RedisClient } from "../../shared/storage/redis.js";
 import { runMongoTransaction } from "../../shared/storage/mongoTransaction.js";
@@ -16,6 +15,7 @@ import {
 import { LedgerError } from "../ledger/ledgerStore.js";
 import { parseAuctionConfig, type AuctionConfig } from "./auctionConfig.js";
 import {
+  invalidateActiveAuctionListCache,
   readAuctionSnapshotFromRedis,
   readRoundStateFromRedis,
   writeAuctionSnapshotToRedis,
@@ -26,46 +26,99 @@ import {
 import { BidError, createBidService } from "./bidService.js";
 import { createAuctionRepository } from "./auctionStore.js";
 
-const auditSchema = z
-  .object({
-    requestId: z.string().min(1).optional(),
-    source: z.string().min(1).optional(),
-    ip: z.string().min(1).optional(),
-    userAgent: z.string().min(1).optional(),
-    actorId: z.string().min(1).optional()
-  })
-  .strict();
+type BidAuditPayload = BidDocument["audit"];
 
-const bidBodySchema = z
-  .object({
-    userId: z.string().min(1),
-    amount: z.number().positive().finite(),
-    idempotencyKey: z.string().min(1),
-    metadata: z.record(z.string(), z.unknown()).optional(),
-    audit: auditSchema.optional()
-  })
-  .strict();
+type BidBody = {
+  userId: string;
+  amount: number;
+  idempotencyKey: string;
+  metadata?: Record<string, unknown>;
+  audit?: BidAuditPayload;
+};
 
-const bidParamsSchema = z.object({
-  auctionId: z.string().min(1)
-});
+type BidParams = {
+  auctionId: string;
+};
 
-const roundParamsSchema = z.object({
-  auctionId: z.string().min(1),
-  roundIndex: z.string().min(1)
-});
+type RoundParams = {
+  auctionId: string;
+  roundIndex: string;
+};
 
-const auctionParamsSchema = z.object({
-  auctionId: z.string().min(1)
-});
+type AuctionParams = {
+  auctionId: string;
+};
 
-const listQuerySchema = z
-  .object({
-    status: z.enum(["active", "upcoming", "closed"]).default("active"),
-    limit: z.string().optional(),
-    cursor: z.string().optional()
-  })
-  .strict();
+type ListQuery = {
+  status?: "active" | "upcoming" | "closed";
+  limit?: string;
+  cursor?: string;
+};
+
+const objectIdParamSchema = { type: "string", pattern: "^[a-fA-F0-9]{24}$" } as const;
+
+const auditSchema = {
+  type: "object",
+  properties: {
+    requestId: { type: "string", minLength: 1 },
+    source: { type: "string", minLength: 1 },
+    ip: { type: "string", minLength: 1 },
+    userAgent: { type: "string", minLength: 1 },
+    actorId: { type: "string", minLength: 1 }
+  },
+  additionalProperties: false
+} as const;
+
+const bidBodySchema = {
+  type: "object",
+  properties: {
+    userId: { type: "string", minLength: 1 },
+    amount: { type: "number", exclusiveMinimum: 0 },
+    idempotencyKey: { type: "string", minLength: 1 },
+    metadata: { type: "object", additionalProperties: true },
+    audit: auditSchema
+  },
+  required: ["userId", "amount", "idempotencyKey"],
+  additionalProperties: false
+} as const;
+
+const bidParamsSchema = {
+  type: "object",
+  properties: {
+    auctionId: objectIdParamSchema
+  },
+  required: ["auctionId"],
+  additionalProperties: false
+} as const;
+
+const roundParamsSchema = {
+  type: "object",
+  properties: {
+    auctionId: objectIdParamSchema,
+    roundIndex: { type: "string", pattern: "^\\d+$" }
+  },
+  required: ["auctionId", "roundIndex"],
+  additionalProperties: false
+} as const;
+
+const auctionParamsSchema = {
+  type: "object",
+  properties: {
+    auctionId: objectIdParamSchema
+  },
+  required: ["auctionId"],
+  additionalProperties: false
+} as const;
+
+const listQuerySchema = {
+  type: "object",
+  properties: {
+    status: { type: "string", enum: ["active", "upcoming", "closed"] },
+    limit: { type: "string", pattern: "^\\d+$" },
+    cursor: { type: "string", minLength: 1 }
+  },
+  additionalProperties: false
+} as const;
 
 const defaultListLimit = 20;
 const maxListLimit = 100;
@@ -133,26 +186,29 @@ export async function registerAuctionRoutes(
         return auction;
       });
 
+      try {
+        await invalidateActiveAuctionListCache(deps.redis);
+      } catch (error) {
+        deps.logger.warn({ err: error }, "Failed to invalidate auction list cache");
+      }
+
       return reply.code(201).send({ auction: serializeAuction(created) });
     } catch (error) {
       return handleAuctionError(reply, error);
     }
   });
 
-  app.get("/auctions", async (request, reply) => {
-    const query = listQuerySchema.safeParse(request.query);
-    if (!query.success) {
-      return reply.code(400).send({ error: "invalid_request", message: "Invalid list query." });
-    }
-
-    const limit = parseLimit(query.data.limit, defaultListLimit, maxListLimit);
+  app.get("/auctions", { schema: { querystring: listQuerySchema } }, async (request, reply) => {
+    const query = request.query as ListQuery;
+    const limit = parseLimit(query.limit, defaultListLimit, maxListLimit);
     if (!limit) {
       return reply.code(400).send({ error: "invalid_request", message: "Invalid limit." });
     }
 
-    const spec = resolveListingSpec(query.data.status);
-    const cursor = query.data.cursor ? parseListingCursor(query.data.cursor) : null;
-    if (query.data.cursor && !cursor) {
+    const status = query.status ?? "active";
+    const spec = resolveListingSpec(status);
+    const cursor = query.cursor ? parseListingCursor(query.cursor) : null;
+    if (query.cursor && !cursor) {
       return reply.code(400).send({ error: "invalid_request", message: "Invalid cursor." });
     }
 
@@ -179,130 +235,110 @@ export async function registerAuctionRoutes(
     }
   });
 
-  app.get("/auctions/:auctionId", async (request, reply) => {
-    const params = auctionParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: "invalid_request", message: "Invalid auction id." });
-    }
+  app.get(
+    "/auctions/:auctionId",
+    { schema: { params: auctionParamsSchema } },
+    async (request, reply) => {
+      const params = request.params as AuctionParams;
+      const auctionId = new ObjectId(params.auctionId);
 
-    const auctionId = parseAuctionId(params.data.auctionId);
-    if (!auctionId) {
-      return reply.code(400).send({ error: "invalid_request", message: "Invalid auction id." });
-    }
-
-    try {
-      const auction = await auctions.findOne({ _id: auctionId });
-      if (!auction) {
-        throw new AuctionApiError("auction_not_found", "Auction not found.", 404);
+      try {
+        const auction = await auctions.findOne({ _id: auctionId });
+        if (!auction) {
+          throw new AuctionApiError("auction_not_found", "Auction not found.", 404);
+        }
+        return reply.send({ auction: serializeAuction(auction) });
+      } catch (error) {
+        return handleAuctionError(reply, error);
       }
-      return reply.send({ auction: serializeAuction(auction) });
-    } catch (error) {
-      return handleAuctionError(reply, error);
     }
-  });
+  );
 
-  app.get("/auctions/:auctionId/snapshot", async (request, reply) => {
-    const params = auctionParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: "invalid_request", message: "Invalid auction id." });
+  app.get(
+    "/auctions/:auctionId/snapshot",
+    { schema: { params: auctionParamsSchema } },
+    async (request, reply) => {
+      const params = request.params as AuctionParams;
+      const auctionId = new ObjectId(params.auctionId);
+
+      try {
+        const snapshot = await resolveAuctionSnapshot(
+          deps.redis,
+          auctions,
+          bids,
+          auctionRepository,
+          auctionId
+        );
+        return reply.send({ snapshot });
+      } catch (error) {
+        return handleAuctionError(reply, error);
+      }
     }
+  );
 
-    const auctionId = parseAuctionId(params.data.auctionId);
-    if (!auctionId) {
-      return reply.code(400).send({ error: "invalid_request", message: "Invalid auction id." });
+  app.get(
+    "/auctions/:auctionId/rounds/:roundIndex/state",
+    { schema: { params: roundParamsSchema } },
+    async (request, reply) => {
+      const params = request.params as RoundParams;
+      const auctionId = new ObjectId(params.auctionId);
+      const roundIndex = Number(params.roundIndex);
+
+      try {
+        const state = await resolveRoundState(
+          deps.redis,
+          auctions,
+          auctionRepository,
+          auctionId,
+          roundIndex
+        );
+        const now = new Date();
+        return reply.send({ state: buildRoundStateResponse(state, now) });
+      } catch (error) {
+        return handleAuctionError(reply, error);
+      }
     }
+  );
 
-    try {
-      const snapshot = await resolveAuctionSnapshot(
-        deps.redis,
-        auctions,
-        bids,
-        auctionRepository,
-        auctionId
-      );
-      return reply.send({ snapshot });
-    } catch (error) {
-      return handleAuctionError(reply, error);
+  app.post(
+    "/auctions/:auctionId/bids",
+    { schema: { params: bidParamsSchema, body: bidBodySchema } },
+    async (request, reply) => {
+      const params = request.params as BidParams;
+      const body = request.body as BidBody;
+
+      const userAgentHeader = request.headers["user-agent"];
+      const userAgent = Array.isArray(userAgentHeader) ? userAgentHeader[0] : userAgentHeader;
+      let audit = buildAudit(body.audit, request.ip, userAgent);
+      const requestIdHeader = request.headers["x-request-id"];
+      const requestId = Array.isArray(requestIdHeader) ? requestIdHeader[0] : requestIdHeader;
+      if (requestId && typeof requestId === "string" && requestId.trim().length > 0) {
+        audit = { ...(audit ?? {}), requestId: audit?.requestId ?? requestId };
+      }
+
+      try {
+        const result = await bidService.placeBid({
+          auctionId: new ObjectId(params.auctionId),
+          userId: body.userId,
+          amount: body.amount,
+          idempotencyKey: body.idempotencyKey,
+          metadata: body.metadata,
+          audit,
+          ip: request.ip
+        });
+
+        return reply.send({
+          bid: serializeBid(result.bid),
+          balance: result.balance,
+          roundState: serializeRoundState(result.roundState),
+          extended: result.extended,
+          idempotent: result.idempotent
+        });
+      } catch (error) {
+        return handleBidError(reply, error);
+      }
     }
-  });
-
-  app.get("/auctions/:auctionId/rounds/:roundIndex/state", async (request, reply) => {
-    const params = roundParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: "invalid_request", message: "Invalid route params." });
-    }
-
-    const auctionId = parseAuctionId(params.data.auctionId);
-    if (!auctionId) {
-      return reply.code(400).send({ error: "invalid_request", message: "Invalid auction id." });
-    }
-
-    const roundIndex = parseRoundIndex(params.data.roundIndex);
-    if (roundIndex === null) {
-      return reply.code(400).send({ error: "invalid_request", message: "Invalid round index." });
-    }
-
-    try {
-      const state = await resolveRoundState(
-        deps.redis,
-        auctions,
-        auctionRepository,
-        auctionId,
-        roundIndex
-      );
-      const now = new Date();
-      return reply.send({ state: buildRoundStateResponse(state, now) });
-    } catch (error) {
-      return handleAuctionError(reply, error);
-    }
-  });
-
-  app.post("/auctions/:auctionId/bids", async (request, reply) => {
-    const params = bidParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: "invalid_request", message: "Invalid route params." });
-    }
-
-    if (!ObjectId.isValid(params.data.auctionId)) {
-      return reply.code(400).send({ error: "invalid_request", message: "Invalid auction id." });
-    }
-
-    const body = bidBodySchema.safeParse(request.body);
-    if (!body.success) {
-      return reply.code(400).send({ error: "invalid_request", message: "Invalid bid payload." });
-    }
-
-    const userAgentHeader = request.headers["user-agent"];
-    const userAgent = Array.isArray(userAgentHeader) ? userAgentHeader[0] : userAgentHeader;
-    let audit = buildAudit(body.data.audit, request.ip, userAgent);
-    const requestIdHeader = request.headers["x-request-id"];
-    const requestId = Array.isArray(requestIdHeader) ? requestIdHeader[0] : requestIdHeader;
-    if (requestId && typeof requestId === "string" && requestId.trim().length > 0) {
-      audit = { ...(audit ?? {}), requestId: audit?.requestId ?? requestId };
-    }
-
-    try {
-      const result = await bidService.placeBid({
-        auctionId: new ObjectId(params.data.auctionId),
-        userId: body.data.userId,
-        amount: body.data.amount,
-        idempotencyKey: body.data.idempotencyKey,
-        metadata: body.data.metadata,
-        audit,
-        ip: request.ip
-      });
-
-      return reply.send({
-        bid: serializeBid(result.bid),
-        balance: result.balance,
-        roundState: serializeRoundState(result.roundState),
-        extended: result.extended,
-        idempotent: result.idempotent
-      });
-    } catch (error) {
-      return handleBidError(reply, error);
-    }
-  });
+  );
 }
 
 function buildAudit(
@@ -349,7 +385,12 @@ function serializeAuctionSummary(auction: WithId<AuctionDocument>) {
     currency: auction.currency,
     startsAt: auction.startsAt,
     endsAt: auction.endsAt,
-    roundCount: auction.rounds.length
+    roundCount: auction.rounds.length,
+    currentRoundIndex: auction.currentRoundIndex ?? null,
+    roundStatus: auction.roundStatus ?? null,
+    roundEffectiveEndAt: auction.roundEffectiveEndAt ?? null,
+    roundLastBidAt: auction.roundLastBidAt ?? null,
+    lastBidAmount: auction.lastBidAmount ?? null
   };
 }
 
@@ -373,6 +414,7 @@ function buildAuctionDocument(
   const currency = normalizeCurrency(config.currency, supportedCurrencies);
   const description = normalizeOptionalText(config.description);
   const rounds = normalizeRounds(config.rounds);
+  const firstRound = rounds[0] ?? null;
   const now = new Date();
 
   const auction: WithId<AuctionDocument> = {
@@ -383,6 +425,11 @@ function buildAuctionDocument(
     startsAt: config.startsAt,
     endsAt: config.endsAt,
     rounds,
+    currentRoundIndex: firstRound?.index ?? null,
+    roundStatus: firstRound ? "scheduled" : null,
+    roundEffectiveEndAt: firstRound?.endAt ?? null,
+    roundLastBidAt: null,
+    lastBidAmount: null,
     createdAt: now,
     updatedAt: now
   };
@@ -487,25 +534,6 @@ function encodeListingCursor(time: Date, id: ObjectId): string {
   return `${time.toISOString()}|${id.toHexString()}`;
 }
 
-function parseAuctionId(value: string): ObjectId | null {
-  if (!ObjectId.isValid(value)) {
-    return null;
-  }
-  return new ObjectId(value);
-}
-
-function parseRoundIndex(value: string): number | null {
-  const trimmed = value.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    return null;
-  }
-  const parsed = Number(trimmed);
-  if (!Number.isInteger(parsed) || parsed < 0) {
-    return null;
-  }
-  return parsed;
-}
-
 function buildRoundStateResponse(state: RoundStatePayload, now: Date): RoundStateResponse {
   return {
     ...state,
@@ -520,6 +548,31 @@ function buildRoundTimers(state: RoundStatePayload, now: Date): RoundTimers {
     untilStartMs: Math.max(0, state.scheduledStartAt.getTime() - nowMs),
     untilScheduledEndMs: Math.max(0, state.scheduledEndAt.getTime() - nowMs),
     untilEffectiveEndMs: Math.max(0, state.effectiveEndAt.getTime() - nowMs)
+  };
+}
+
+function buildSnapshotFromAuctionDoc(
+  auction: WithId<AuctionDocument>
+): AuctionSnapshotResponse | null {
+  if (
+    auction.currentRoundIndex === undefined ||
+    auction.roundStatus === undefined ||
+    auction.roundEffectiveEndAt === undefined
+  ) {
+    return null;
+  }
+
+  return {
+    auctionId: auction._id.toHexString(),
+    status: auction.status,
+    title: auction.title,
+    currency: auction.currency,
+    currentRoundIndex: auction.currentRoundIndex,
+    roundStatus: auction.roundStatus,
+    roundEffectiveEndAt: auction.roundEffectiveEndAt,
+    roundLastBidAt: auction.roundLastBidAt ?? null,
+    updatedAt: auction.updatedAt,
+    lastBidAmount: auction.lastBidAmount ?? null
   };
 }
 
@@ -539,6 +592,12 @@ async function resolveAuctionSnapshot(
   const auction = await auctions.findOne({ _id: auctionId });
   if (!auction) {
     throw new AuctionApiError("auction_not_found", "Auction not found.", 404);
+  }
+
+  const denormSnapshot = buildSnapshotFromAuctionDoc(auction);
+  if (denormSnapshot) {
+    await writeAuctionSnapshotToRedis(redis, denormSnapshot);
+    return denormSnapshot;
   }
 
   let roundStates = await repository.listRoundStates(auctionId);
@@ -581,6 +640,17 @@ async function resolveAuctionSnapshot(
   };
 
   await writeAuctionSnapshotToRedis(redis, snapshot);
+  await repository.updateAuctionSnapshot(
+    auctionId,
+    {
+      currentRoundIndex: snapshot.currentRoundIndex,
+      roundStatus: snapshot.roundStatus,
+      roundEffectiveEndAt: snapshot.roundEffectiveEndAt,
+      roundLastBidAt: snapshot.roundLastBidAt,
+      lastBidAmount: snapshot.lastBidAmount
+    },
+    snapshot.updatedAt
+  );
   return snapshot;
 }
 

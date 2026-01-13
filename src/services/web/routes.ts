@@ -5,7 +5,6 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ObjectId, type WithId } from "mongodb";
-import { z } from "zod";
 import type { ServiceDependencies } from "../../shared/service.js";
 import {
   mongoCollections,
@@ -13,6 +12,11 @@ import {
   type AuctionStatus,
   type BidDocument
 } from "../../shared/storage/mongoSchemas.js";
+import {
+  invalidateActiveAuctionListCache,
+  readActiveAuctionListFromRedis,
+  writeActiveAuctionListToRedis
+} from "../auction-engine/auctionCache.js";
 import { parseRankingMember } from "../auction-engine/bidRanking.js";
 import { BidError, createBidService } from "../auction-engine/bidService.js";
 import { createAuctionRepository } from "../auction-engine/auctionStore.js";
@@ -20,32 +24,62 @@ import { createLedgerRepository, LedgerError } from "../ledger/ledgerStore.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
-const createAuctionSchema = z
-  .object({
-    title: z.string().min(1),
-    description: z.string().optional(),
-    currency: z.string().min(1).optional(),
-    rounds: z.number().int().min(1).max(20).optional(),
-    allocationSize: z.number().int().min(1).max(500).optional(),
-    roundDurationSeconds: z.number().int().min(30).max(7200).optional(),
-    startOffsetSeconds: z.number().int().min(0).max(86400).optional(),
-    antiSniping: z
-      .object({
-        triggerWindowSeconds: z.number().int().min(0).max(600),
-        extensionSeconds: z.number().int().min(0).max(600),
-        maxExtensions: z.number().int().min(0).max(20)
-      })
-      .optional()
-  })
-  .strict();
+type CreateAuctionBody = {
+  title: string;
+  description?: string;
+  currency?: string;
+  rounds?: number;
+  allocationSize?: number;
+  roundDurationSeconds?: number;
+  startOffsetSeconds?: number;
+  antiSniping?: {
+    triggerWindowSeconds: number;
+    extensionSeconds: number;
+    maxExtensions: number;
+  };
+};
 
-const bidPlacementSchema = z
-  .object({
-    userId: z.string().min(1).optional(),
-    amount: z.number().positive().finite(),
-    idempotencyKey: z.string().min(1).optional()
-  })
-  .strict();
+type BidPlacementBody = {
+  userId?: string;
+  amount: number;
+  idempotencyKey?: string;
+};
+
+const createAuctionSchema = {
+  type: "object",
+  properties: {
+    title: { type: "string", minLength: 1 },
+    description: { type: "string" },
+    currency: { type: "string", minLength: 1 },
+    rounds: { type: "integer", minimum: 1, maximum: 20 },
+    allocationSize: { type: "integer", minimum: 1, maximum: 500 },
+    roundDurationSeconds: { type: "integer", minimum: 30, maximum: 7200 },
+    startOffsetSeconds: { type: "integer", minimum: 0, maximum: 86400 },
+    antiSniping: {
+      type: "object",
+      properties: {
+        triggerWindowSeconds: { type: "integer", minimum: 0, maximum: 600 },
+        extensionSeconds: { type: "integer", minimum: 0, maximum: 600 },
+        maxExtensions: { type: "integer", minimum: 0, maximum: 20 }
+      },
+      required: ["triggerWindowSeconds", "extensionSeconds", "maxExtensions"],
+      additionalProperties: false
+    }
+  },
+  required: ["title"],
+  additionalProperties: false
+} as const;
+
+const bidPlacementSchema = {
+  type: "object",
+  properties: {
+    userId: { type: "string", minLength: 1 },
+    amount: { type: "number", exclusiveMinimum: 0 },
+    idempotencyKey: { type: "string", minLength: 1 }
+  },
+  required: ["amount"],
+  additionalProperties: false
+} as const;
 
 export async function registerWebRoutes(
   app: FastifyInstance,
@@ -62,8 +96,17 @@ export async function registerWebRoutes(
   });
 
   app.get("/api/auctions", async () => {
+    try {
+      const cached = await readActiveAuctionListFromRedis(deps.redis);
+      if (cached !== null) {
+        return cached;
+      }
+    } catch (error) {
+      deps.logger.warn({ err: error }, "Failed to read auction list cache");
+    }
+
     const auctions = await auctionRepository.listActiveAuctions();
-    return auctions.map((auction) => ({
+    const payload = auctions.map((auction) => ({
       _id: auction._id.toHexString(),
       title: auction.title,
       description: auction.description,
@@ -71,6 +114,11 @@ export async function registerWebRoutes(
       currency: auction.currency,
       startsAt: auction.startsAt,
       endsAt: auction.endsAt,
+      currentRoundIndex: auction.currentRoundIndex ?? null,
+      roundStatus: auction.roundStatus ?? null,
+      roundEffectiveEndAt: auction.roundEffectiveEndAt ?? null,
+      roundLastBidAt: auction.roundLastBidAt ?? null,
+      lastBidAmount: auction.lastBidAmount ?? null,
       rounds: auction.rounds.map((round) => ({
         index: round.index,
         allocationSize: round.allocationSize,
@@ -78,62 +126,80 @@ export async function registerWebRoutes(
         endAt: round.endAt
       }))
     }));
-  });
 
-  app.post("/api/auctions", async (request, reply) => {
-    const parsed = createAuctionSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply
-        .code(400)
-        .send({ error: "invalid_request", message: "Invalid auction payload." });
+    try {
+      await writeActiveAuctionListToRedis(deps.redis, payload);
+    } catch (error) {
+      deps.logger.warn({ err: error }, "Failed to write auction list cache");
     }
 
-    const now = new Date();
-    const roundsCount = parsed.data.rounds ?? 3;
-    const allocationSize = parsed.data.allocationSize ?? 5;
-    const roundDurationSeconds = parsed.data.roundDurationSeconds ?? 300;
-    const startOffsetSeconds = Math.max(0, parsed.data.startOffsetSeconds ?? 0);
-    const startAt = new Date(now.getTime() + startOffsetSeconds * 1000);
-    const rounds = Array.from({ length: roundsCount }).map((_, index) => {
-      const roundStart = new Date(startAt.getTime() + index * roundDurationSeconds * 1000);
-      const roundEnd = new Date(roundStart.getTime() + roundDurationSeconds * 1000);
-      return {
-        index,
-        allocationSize,
-        startAt: roundStart,
-        endAt: roundEnd,
-        antiSniping: {
-          triggerWindowSeconds: parsed.data.antiSniping?.triggerWindowSeconds ?? 10,
-          extensionSeconds: parsed.data.antiSniping?.extensionSeconds ?? 15,
-          maxExtensions: parsed.data.antiSniping?.maxExtensions ?? 3
-        }
+    return payload;
+  });
+
+  app.post(
+    "/api/auctions",
+    { schema: { body: createAuctionSchema } },
+    async (request, reply) => {
+      const body = request.body as CreateAuctionBody;
+      const now = new Date();
+      const roundsCount = body.rounds ?? 3;
+      const allocationSize = body.allocationSize ?? 5;
+      const roundDurationSeconds = body.roundDurationSeconds ?? 300;
+      const startOffsetSeconds = Math.max(0, body.startOffsetSeconds ?? 0);
+      const startAt = new Date(now.getTime() + startOffsetSeconds * 1000);
+      const rounds = Array.from({ length: roundsCount }).map((_, index) => {
+        const roundStart = new Date(startAt.getTime() + index * roundDurationSeconds * 1000);
+        const roundEnd = new Date(roundStart.getTime() + roundDurationSeconds * 1000);
+        return {
+          index,
+          allocationSize,
+          startAt: roundStart,
+          endAt: roundEnd,
+          antiSniping: {
+            triggerWindowSeconds: body.antiSniping?.triggerWindowSeconds ?? 10,
+            extensionSeconds: body.antiSniping?.extensionSeconds ?? 15,
+            maxExtensions: body.antiSniping?.maxExtensions ?? 3
+          }
+        };
+      });
+      const firstRound = rounds[0] ?? null;
+      const endsAt = rounds[rounds.length - 1]?.endAt ?? startAt;
+      const status: AuctionStatus = startAt.getTime() <= now.getTime() ? "live" : "draft";
+      const auction: AuctionDocument = {
+        title: body.title,
+        status,
+        currency: body.currency ?? "USDT",
+        startsAt: startAt,
+        endsAt,
+        rounds,
+        currentRoundIndex: firstRound?.index ?? null,
+        roundStatus: firstRound ? "scheduled" : null,
+        roundEffectiveEndAt: firstRound?.endAt ?? null,
+        roundLastBidAt: null,
+        lastBidAmount: null,
+        createdAt: now,
+        updatedAt: now
       };
-    });
-    const endsAt = rounds[rounds.length - 1]?.endAt ?? startAt;
-    const status: AuctionStatus = startAt.getTime() <= now.getTime() ? "live" : "draft";
-    const auction: AuctionDocument = {
-      title: parsed.data.title,
-      status,
-      currency: parsed.data.currency ?? "USDT",
-      startsAt: startAt,
-      endsAt,
-      rounds,
-      createdAt: now,
-      updatedAt: now
-    };
-    if (parsed.data.description && parsed.data.description.trim().length > 0) {
-      auction.description = parsed.data.description.trim();
-    }
+      if (body.description && body.description.trim().length > 0) {
+        auction.description = body.description.trim();
+      }
 
-    const auctions = deps.mongo.db.collection<AuctionDocument>(mongoCollections.auctions);
-    const inserted = await auctions.insertOne(auction);
-    const stored = await auctions.findOne({ _id: inserted.insertedId });
-    if (stored) {
-      await auctionRepository.ensureRoundStates(stored);
-    }
+      const auctions = deps.mongo.db.collection<AuctionDocument>(mongoCollections.auctions);
+      const inserted = await auctions.insertOne(auction);
+      const stored = await auctions.findOne({ _id: inserted.insertedId });
+      if (stored) {
+        await auctionRepository.ensureRoundStates(stored);
+      }
 
-    return reply.code(201).send({ _id: inserted.insertedId.toHexString(), status });
-  });
+      try {
+        await invalidateActiveAuctionListCache(deps.redis);
+      } catch (error) {
+        deps.logger.warn({ err: error }, "Failed to invalidate auction list cache");
+      }
+
+      return reply.code(201).send({ _id: inserted.insertedId.toHexString(), status });
+    }
+  );
 
   app.get("/api/auctions/:auctionId", async (request, reply) => {
     const params = request.params as { auctionId: string };
@@ -170,7 +236,41 @@ export async function registerWebRoutes(
       if (!auction) {
         return reply.code(404).send({ error: "not_found", message: "Auction not found." });
       }
+      const now = new Date();
+      if (
+        auction.currentRoundIndex !== undefined &&
+        auction.roundStatus !== undefined &&
+        auction.roundEffectiveEndAt !== undefined
+      ) {
+        return {
+          auctionId,
+          status: auction.status,
+          title: auction.title,
+          currency: auction.currency,
+          currentRoundIndex: auction.currentRoundIndex,
+          roundStatus: auction.roundStatus,
+          roundEffectiveEndAt: auction.roundEffectiveEndAt?.toISOString() ?? null,
+          roundLastBidAt: auction.roundLastBidAt?.toISOString() ?? null,
+          lastBidAmount: auction.lastBidAmount ?? null,
+          updatedAt: auction.updatedAt?.toISOString() ?? null,
+          serverTime: now.toISOString()
+        };
+      }
+
       const roundState = await auctionRepository.getLiveRoundState(new ObjectId(auctionId));
+      if (roundState) {
+        await auctionRepository.updateAuctionSnapshot(
+          auction._id,
+          {
+            currentRoundIndex: roundState.roundIndex,
+            roundStatus: roundState.status,
+            roundEffectiveEndAt: roundState.effectiveEndAt,
+            roundLastBidAt: roundState.lastBidAt ?? null,
+            lastBidAmount: null
+          },
+          now
+        );
+      }
       return {
         auctionId,
         status: auction.status,
@@ -182,7 +282,7 @@ export async function registerWebRoutes(
         roundLastBidAt: roundState?.lastBidAt?.toISOString() ?? null,
         lastBidAmount: null,
         updatedAt: roundState?.updatedAt?.toISOString() ?? null,
-        serverTime: new Date().toISOString()
+        serverTime: now.toISOString()
       };
     }
 
@@ -246,77 +346,79 @@ export async function registerWebRoutes(
       }));
   });
 
-  app.post("/api/auctions/:auctionId/bids", async (request, reply) => {
-    const params = request.params as { auctionId: string };
-    if (!ObjectId.isValid(params.auctionId)) {
-      return reply.code(400).send({ error: "invalid_request", message: "Invalid auction id." });
-    }
-
-    const parsed = bidPlacementSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: "invalid_request", message: "Invalid bid payload." });
-    }
-
-    const userId = resolveUserId(request, parsed.data.userId);
-    if (!userId) {
-      return reply.code(400).send({ error: "invalid_request", message: "User id required." });
-    }
-
-    const userAgentHeader = request.headers["user-agent"];
-    const userAgent = Array.isArray(userAgentHeader) ? userAgentHeader[0] : userAgentHeader;
-    const audit = {
-      source: "web",
-      ip: request.ip,
-      userAgent: typeof userAgent === "string" && userAgent.trim().length > 0 ? userAgent : undefined
-    };
-
-    try {
-      const result = await bidService.placeBid({
-        auctionId: new ObjectId(params.auctionId),
-        userId,
-        amount: parsed.data.amount,
-        idempotencyKey: parsed.data.idempotencyKey ?? randomUUID(),
-        audit,
-        ip: request.ip
-      });
-
-      return reply.send({
-        bid: {
-          _id: result.bid._id.toHexString(),
-          auctionId: result.bid.auctionId.toHexString(),
-          roundIndex: result.bid.roundIndex ?? null,
-          userId: result.bid.userId,
-          amount: result.bid.amount,
-          createdAt: result.bid.createdAt,
-          idempotencyKey: result.bid.idempotencyKey,
-          active: result.bid.active
-        },
-        balance: result.balance,
-        roundState: {
-          status: result.roundState.status,
-          roundIndex: result.roundState.roundIndex,
-          scheduledStartAt: result.roundState.scheduledStartAt,
-          scheduledEndAt: result.roundState.scheduledEndAt,
-          effectiveEndAt: result.roundState.effectiveEndAt,
-          extensionCount: result.roundState.extensionCount,
-          lastBidAt: result.roundState.lastBidAt ?? null
-        },
-        extended: result.extended,
-        idempotent: result.idempotent
-      });
-    } catch (error) {
-      if (error instanceof BidError) {
-        return reply.code(error.status).send({ error: error.code, message: error.message });
+  app.post(
+    "/api/auctions/:auctionId/bids",
+    { schema: { body: bidPlacementSchema } },
+    async (request, reply) => {
+      const params = request.params as { auctionId: string };
+      if (!ObjectId.isValid(params.auctionId)) {
+        return reply.code(400).send({ error: "invalid_request", message: "Invalid auction id." });
       }
-      if (error instanceof LedgerError) {
-        return reply.code(error.status).send({ error: error.code, message: error.message });
+
+      const body = request.body as BidPlacementBody;
+
+      const userId = resolveUserId(request, body.userId);
+      if (!userId) {
+        return reply.code(400).send({ error: "invalid_request", message: "User id required." });
       }
-      if (error instanceof Error) {
-        return reply.code(500).send({ error: "internal_error", message: error.message });
+
+      const userAgentHeader = request.headers["user-agent"];
+      const userAgent = Array.isArray(userAgentHeader) ? userAgentHeader[0] : userAgentHeader;
+      const audit = {
+        source: "web",
+        ip: request.ip,
+        userAgent:
+          typeof userAgent === "string" && userAgent.trim().length > 0 ? userAgent : undefined
+      };
+
+      try {
+        const result = await bidService.placeBid({
+          auctionId: new ObjectId(params.auctionId),
+          userId,
+          amount: body.amount,
+          idempotencyKey: body.idempotencyKey ?? randomUUID(),
+          audit,
+          ip: request.ip
+        });
+
+        return reply.send({
+          bid: {
+            _id: result.bid._id.toHexString(),
+            auctionId: result.bid.auctionId.toHexString(),
+            roundIndex: result.bid.roundIndex ?? null,
+            userId: result.bid.userId,
+            amount: result.bid.amount,
+            createdAt: result.bid.createdAt,
+            idempotencyKey: result.bid.idempotencyKey,
+            active: result.bid.active
+          },
+          balance: result.balance,
+          roundState: {
+            status: result.roundState.status,
+            roundIndex: result.roundState.roundIndex,
+            scheduledStartAt: result.roundState.scheduledStartAt,
+            scheduledEndAt: result.roundState.scheduledEndAt,
+            effectiveEndAt: result.roundState.effectiveEndAt,
+            extensionCount: result.roundState.extensionCount,
+            lastBidAt: result.roundState.lastBidAt ?? null
+          },
+          extended: result.extended,
+          idempotent: result.idempotent
+        });
+      } catch (error) {
+        if (error instanceof BidError) {
+          return reply.code(error.status).send({ error: error.code, message: error.message });
+        }
+        if (error instanceof LedgerError) {
+          return reply.code(error.status).send({ error: error.code, message: error.message });
+        }
+        if (error instanceof Error) {
+          return reply.code(500).send({ error: "internal_error", message: error.message });
+        }
+        return reply.code(500).send({ error: "internal_error", message: "Unknown error." });
       }
-      return reply.code(500).send({ error: "internal_error", message: "Unknown error." });
     }
-  });
+  );
 
   app.get("/api/balance", async (request, reply) => {
     const query = request.query as { userId?: string; currency?: string };

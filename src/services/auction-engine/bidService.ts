@@ -35,7 +35,7 @@ import {
   type RoundStateCache
 } from "./auctionCache.js";
 import { createAuctionRepository } from "./auctionStore.js";
-import { buildRankingMember, parseRankingMember } from "./bidRanking.js";
+import { buildRankingMember } from "./bidRanking.js";
 
 const bidLockTtlMs = 8000;
 const rateLimitWindowSeconds = 1;
@@ -52,6 +52,95 @@ if current == 1 then
   redis.call("EXPIRE", KEYS[1], ARGV[1])
 end
 return current
+`;
+
+const bidCacheUpdateScript = `
+local rankingKey = KEYS[1]
+local roundStateKey = KEYS[2]
+local snapshotKey = KEYS[3]
+local topKey = KEYS[4]
+local idempotencyKey = KEYS[5]
+
+local updateRanking = ARGV[1] == "1"
+local bidAmount = ARGV[2]
+local rankingMember = ARGV[3]
+local previousMember = ARGV[4]
+local roundStateTtl = tonumber(ARGV[5])
+local snapshotTtl = tonumber(ARGV[6])
+local idempotencyTtl = tonumber(ARGV[7])
+local topSetTtl = tonumber(ARGV[8])
+local topCount = tonumber(ARGV[9])
+
+local index = 10
+local roundFieldCount = tonumber(ARGV[index]) or 0
+index = index + 1
+local roundArgs = {}
+for i = 1, roundFieldCount * 2 do
+  roundArgs[i] = ARGV[index]
+  index = index + 1
+end
+
+local snapshotFieldCount = tonumber(ARGV[index]) or 0
+index = index + 1
+local snapshotArgs = {}
+for i = 1, snapshotFieldCount * 2 do
+  snapshotArgs[i] = ARGV[index]
+  index = index + 1
+end
+
+local idempotencyValue = ARGV[index]
+
+if updateRanking then
+  redis.call("ZADD", rankingKey, bidAmount, rankingMember)
+  if previousMember and previousMember ~= "" then
+    redis.call("ZREM", rankingKey, previousMember)
+  end
+end
+
+if roundFieldCount > 0 then
+  redis.call("HSET", roundStateKey, unpack(roundArgs))
+  if roundStateTtl and roundStateTtl > 0 then
+    redis.call("EXPIRE", roundStateKey, roundStateTtl)
+  end
+end
+
+if snapshotFieldCount > 0 then
+  redis.call("HSET", snapshotKey, unpack(snapshotArgs))
+  if snapshotTtl and snapshotTtl > 0 then
+    redis.call("EXPIRE", snapshotKey, snapshotTtl)
+  end
+end
+
+if idempotencyTtl and idempotencyTtl > 0 then
+  redis.call("SET", idempotencyKey, idempotencyValue, "EX", idempotencyTtl)
+else
+  redis.call("SET", idempotencyKey, idempotencyValue)
+end
+
+redis.call("DEL", topKey)
+if topCount and topCount > 0 then
+  local topMembers = redis.call("ZREVRANGE", rankingKey, 0, topCount - 1)
+  local bidIds = {}
+  for i = 1, #topMembers do
+    local member = topMembers[i]
+    local sep = string.find(member, ":")
+    if sep then
+      local bidId = string.sub(member, sep + 1)
+      if bidId and bidId ~= "" then
+        table.insert(bidIds, bidId)
+      end
+    end
+  end
+
+  if #bidIds > 0 then
+    redis.call("SADD", topKey, unpack(bidIds))
+    if topSetTtl and topSetTtl > 0 then
+      redis.call("EXPIRE", topKey, topSetTtl)
+    end
+  end
+end
+
+return 1
 `;
 
 export type BidErrorCode =
@@ -257,6 +346,23 @@ export function createBidService(deps: ServiceDependencies) {
           session
         );
 
+        const lastBidAt = antiSniping.state.lastBidAt ?? now;
+        const bidIsLatest =
+          !antiSniping.state.lastBidAt ||
+          antiSniping.state.lastBidAt.getTime() === now.getTime();
+        await auctionRepository.updateAuctionSnapshot(
+          auction._id,
+          {
+            currentRoundIndex: antiSniping.state.roundIndex,
+            roundStatus: antiSniping.state.status,
+            roundEffectiveEndAt: antiSniping.state.effectiveEndAt,
+            roundLastBidAt: lastBidAt,
+            lastBidAmount: bidIsLatest ? bidDoc.amount : null
+          },
+          now,
+          session
+        );
+
         return {
           bid: bidDoc,
           balance: holdResult.balance,
@@ -396,32 +502,38 @@ async function updateRedisCaches(redis: RedisClient, result: BidTransactionResul
     lastBidAmount: bidIsLatest ? result.bid.amount : null
   };
 
-  const pipeline = redis.multi();
-  if (result.updateRanking) {
-    pipeline.zadd(rankingKey, result.bid.amount, rankingMember);
-    if (previousMember) {
-      pipeline.zrem(rankingKey, previousMember);
-    }
-  }
-  pipeline.hset(roundStateKey, buildRoundStateFields(roundStateCache, updatedAt));
-  pipeline.expire(roundStateKey, roundStateTtlSeconds);
-  pipeline.hset(auctionSnapshotKey, buildAuctionSnapshotFields(snapshot));
-  pipeline.expire(auctionSnapshotKey, snapshotTtlSeconds);
-  pipeline.set(idempotencyKey, result.bid._id.toHexString(), "EX", bidIdempotencyTtlSeconds);
-  await pipeline.exec();
-
+  const roundStateFields = buildRoundStateFields(roundStateCache, updatedAt);
+  const snapshotFields = buildAuctionSnapshotFields(snapshot);
+  const roundStateArgs = flattenRedisHashFields(roundStateFields);
+  const snapshotArgs = flattenRedisHashFields(snapshotFields);
   const topCount = Math.max(1, result.roundConfig.allocationSize);
-  const topMembers = await redis.zrevrange(rankingKey, 0, topCount - 1);
-  const topBidIds = topMembers
-    .map((member) => parseRankingMember(member).bidId)
-    .filter((bidId) => bidId.length > 0);
-  const topPipeline = redis.multi();
-  topPipeline.del(topKey);
-  if (topBidIds.length > 0) {
-    topPipeline.sadd(topKey, ...topBidIds);
-  }
-  topPipeline.expire(topKey, topSetTtlSeconds);
-  await topPipeline.exec();
+  const scriptArgs = [
+    result.updateRanking ? "1" : "0",
+    result.bid.amount.toString(),
+    rankingMember,
+    previousMember ?? "",
+    roundStateTtlSeconds.toString(),
+    snapshotTtlSeconds.toString(),
+    bidIdempotencyTtlSeconds.toString(),
+    topSetTtlSeconds.toString(),
+    topCount.toString(),
+    (roundStateArgs.length / 2).toString(),
+    ...roundStateArgs,
+    (snapshotArgs.length / 2).toString(),
+    ...snapshotArgs,
+    result.bid._id.toHexString()
+  ];
+
+  await redis.eval(
+    bidCacheUpdateScript,
+    5,
+    rankingKey,
+    roundStateKey,
+    auctionSnapshotKey,
+    topKey,
+    idempotencyKey,
+    ...scriptArgs
+  );
 }
 
 async function enforceRateLimits(
@@ -533,6 +645,14 @@ function delay(timeoutMs: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, timeoutMs);
   });
+}
+
+function flattenRedisHashFields(fields: Record<string, string>): string[] {
+  const entries: string[] = [];
+  for (const [key, value] of Object.entries(fields)) {
+    entries.push(key, value);
+  }
+  return entries;
 }
 
 async function acquireBidLock(

@@ -1,6 +1,7 @@
 // Purpose: finalize closed auction rounds with verified winners and ledger settlement.
 import { ObjectId, type AnyBulkWriteOperation, type WithId } from "mongodb";
 import type { ServiceDependencies } from "../../shared/service.js";
+import { runMongoTransaction } from "../../shared/storage/mongoTransaction.js";
 import {
   mongoCollections,
   type AuctionDocument,
@@ -8,18 +9,61 @@ import {
   type AuctionRoundStateDocument,
   type BidDocument,
   type DeliveryRecordDocument,
+  type LedgerAccountDocument,
   type LedgerEntryDocument,
   type NotificationQueueDocument,
   type RoundResultDocument
 } from "../../shared/storage/mongoSchemas.js";
-import { createLedgerRepository, LedgerError } from "../ledger/ledgerStore.js";
 import { buildRankingKey, buildTopKey } from "./auctionKeys.js";
 import { buildRankingMember, parseRankingMember } from "./bidRanking.js";
 
 const holdLookupBatchSize = 500;
-const holdBatchSize = 25;
+const holdSettlementBatchSize = 250;
 const notificationBatchSize = 200;
 const topSetTtlSeconds = 10;
+
+const rankingTopSetScript = `
+local rankingKey = KEYS[1]
+local topKey = KEYS[2]
+
+local topCount = tonumber(ARGV[1])
+local topTtl = tonumber(ARGV[2])
+local removeCount = tonumber(ARGV[3]) or 0
+local index = 4
+
+if removeCount > 0 then
+  local removeMembers = {}
+  for i = 1, removeCount do
+    removeMembers[i] = ARGV[index]
+    index = index + 1
+  end
+  redis.call("ZREM", rankingKey, unpack(removeMembers))
+end
+
+redis.call("DEL", topKey)
+if topCount and topCount > 0 then
+  local topMembers = redis.call("ZREVRANGE", rankingKey, 0, topCount - 1)
+  local bidIds = {}
+  for i = 1, #topMembers do
+    local member = topMembers[i]
+    local sep = string.find(member, ":")
+    if sep then
+      local bidId = string.sub(member, sep + 1)
+      if bidId and bidId ~= "" then
+        table.insert(bidIds, bidId)
+      end
+    end
+  end
+  if #bidIds > 0 then
+    redis.call("SADD", topKey, unpack(bidIds))
+    if topTtl and topTtl > 0 then
+      redis.call("EXPIRE", topKey, topTtl)
+    end
+  end
+end
+
+return 1
+`;
 
 type MongoRankedBid = {
   bidId: ObjectId;
@@ -35,6 +79,34 @@ type RoundFinalizationSummary = {
   settlementCompleted: boolean;
 };
 
+type HoldSettlementAction = "capture" | "release";
+
+type HoldSettlementInput = Pick<
+  WithId<BidDocument>,
+  "_id" | "userId"
+> & {
+  action: HoldSettlementAction;
+};
+
+type HoldSettlement = {
+  holdId: string;
+  bidId: ObjectId;
+  userId: string;
+  amount: number;
+  currency: string;
+  action: HoldSettlementAction;
+};
+
+type HoldResolutionEntry = Pick<
+  LedgerEntryDocument,
+  "entryType" | "userId" | "amount" | "currency" | "idempotencyKey" | "metadata"
+>;
+
+type HoldEntrySnapshot = Pick<
+  LedgerEntryDocument,
+  "userId" | "currency" | "amount" | "metadata"
+>;
+
 export function createRoundFinalizationService(deps: ServiceDependencies) {
   const auctions = deps.mongo.db.collection<AuctionDocument>(mongoCollections.auctions);
   const roundStates = deps.mongo.db.collection<AuctionRoundStateDocument>(
@@ -45,11 +117,13 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
   const deliveryRecords = deps.mongo.db.collection<DeliveryRecordDocument>(
     mongoCollections.deliveryRecords
   );
+  const ledgerAccounts = deps.mongo.db.collection<LedgerAccountDocument>(
+    mongoCollections.ledgerAccounts
+  );
   const ledgerEntries = deps.mongo.db.collection<LedgerEntryDocument>(mongoCollections.ledgerEntries);
   const notificationQueue = deps.mongo.db.collection<NotificationQueueDocument>(
     mongoCollections.notificationQueue
   );
-  const ledger = createLedgerRepository(deps.mongo);
 
   async function finalizeClosedRounds(limit = 25): Promise<number> {
     const closedRounds = await roundStates
@@ -130,8 +204,14 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
         )
       );
 
-      const winnerBids = await loadUnsettledBids(auctionId, winnerUserIds);
-      const loserBids = isFinalRound ? await loadUnsettledBids(auctionId, loserUserIds) : [];
+      const settlementUserIds = isFinalRound
+        ? Array.from(new Set([...winnerUserIds, ...loserUserIds]))
+        : winnerUserIds;
+      const settlementBids = await loadUnsettledBids(auctionId, settlementUserIds);
+      const winnerBids = settlementBids.filter((bid) => winnerUsers.has(bid.userId));
+      const loserBids = isFinalRound
+        ? settlementBids.filter((bid) => !winnerUsers.has(bid.userId))
+        : [];
 
       await settleRoundHolds(auction, roundIndex, winnerBids, loserBids);
       await markBidSettlement(auctionId, roundIndex, winnerUserIds, loserUserIds, isFinalRound);
@@ -233,7 +313,7 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
   async function loadUnsettledBids(
     auctionId: ObjectId,
     userIds: string[]
-  ): Promise<Array<Pick<WithId<BidDocument>, "_id" | "userId" | "amount" | "createdAt">>> {
+  ): Promise<Array<Pick<WithId<BidDocument>, "_id" | "userId">>> {
     if (userIds.length === 0) {
       return [];
     }
@@ -244,11 +324,9 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
         userId: { $in: userIds },
         settledAt: { $exists: false }
       })
-      .project<Pick<WithId<BidDocument>, "_id" | "userId" | "amount" | "createdAt">>({
+      .project<Pick<WithId<BidDocument>, "_id" | "userId">>({
         _id: 1,
-        userId: 1,
-        amount: 1,
-        createdAt: 1
+        userId: 1
       })
       .toArray();
   }
@@ -361,35 +439,43 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
   async function settleRoundHolds(
     auction: WithId<AuctionDocument>,
     roundIndex: number,
-    captureBids: Array<Pick<WithId<BidDocument>, "_id" | "userId" | "amount" | "createdAt">>,
-    releaseBids: Array<Pick<WithId<BidDocument>, "_id" | "userId" | "amount" | "createdAt">>
+    captureBids: Array<Pick<WithId<BidDocument>, "_id" | "userId">>,
+    releaseBids: Array<Pick<WithId<BidDocument>, "_id" | "userId">>
   ): Promise<void> {
     if (captureBids.length === 0 && releaseBids.length === 0) {
       return;
     }
 
-    const captureOps = await buildHoldSettlements(auction, captureBids, "capture");
-    const releaseOps = await buildHoldSettlements(auction, releaseBids, "release");
-
-    await settleHoldOperations(auction, roundIndex, captureOps);
-    await settleHoldOperations(auction, roundIndex, releaseOps);
+    const settlements: HoldSettlementInput[] = [
+      ...captureBids.map((bid) => ({ ...bid, action: "capture" as const })),
+      ...releaseBids.map((bid) => ({ ...bid, action: "release" as const }))
+    ];
+    const operations = await buildHoldSettlements(auction, settlements);
+    await settleHoldOperations(auction, roundIndex, operations);
   }
 
   async function buildHoldSettlements(
     auction: WithId<AuctionDocument>,
-    bidsForSettlement: Array<Pick<WithId<BidDocument>, "_id" | "userId" | "amount" | "createdAt">>,
-    action: HoldSettlement["action"]
+    bidsForSettlement: HoldSettlementInput[]
   ): Promise<HoldSettlement[]> {
     if (bidsForSettlement.length === 0) {
       return [];
     }
 
-    const holdIds = bidsForSettlement.map((bid) => buildHoldId(bid._id.toHexString()));
+    const holdIds: string[] = [];
+    const bidsByHoldId = new Map<string, HoldSettlementInput>();
+    for (const bid of bidsForSettlement) {
+      const holdId = buildHoldId(bid._id.toHexString());
+      if (bidsByHoldId.has(holdId)) {
+        throw new Error(`Duplicate hold settlement requested for ${holdId}.`);
+      }
+      bidsByHoldId.set(holdId, bid);
+      holdIds.push(holdId);
+    }
     const holdEntries = await loadHoldEntries(holdIds);
     const settlements: HoldSettlement[] = [];
 
-    for (const bid of bidsForSettlement) {
-      const holdId = buildHoldId(bid._id.toHexString());
+    for (const [holdId, bid] of bidsByHoldId) {
       const holdEntry = holdEntries.get(holdId);
       if (!holdEntry) {
         throw new Error(`Hold entry missing for bid ${bid._id.toHexString()}.`);
@@ -409,19 +495,25 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
         userId: bid.userId,
         amount: holdEntry.amount,
         currency: holdEntry.currency,
-        action
+        action: bid.action
       });
     }
 
     return settlements;
   }
 
-  async function loadHoldEntries(holdIds: string[]): Promise<Map<string, LedgerEntryDocument>> {
-    const entries = new Map<string, LedgerEntryDocument>();
+  async function loadHoldEntries(holdIds: string[]): Promise<Map<string, HoldEntrySnapshot>> {
+    const entries = new Map<string, HoldEntrySnapshot>();
     for (let index = 0; index < holdIds.length; index += holdLookupBatchSize) {
       const batch = holdIds.slice(index, index + holdLookupBatchSize);
       const results = await ledgerEntries
         .find({ entryType: "hold_created", "metadata.holdId": { $in: batch } })
+        .project<HoldEntrySnapshot>({
+          userId: 1,
+          currency: 1,
+          amount: 1,
+          metadata: 1
+        })
         .toArray();
       for (const entry of results) {
         const holdId = extractHoldId(entry.metadata);
@@ -438,60 +530,146 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
     roundIndex: number,
     operations: HoldSettlement[]
   ): Promise<void> {
-    for (let index = 0; index < operations.length; index += holdBatchSize) {
-      const batch = operations.slice(index, index + holdBatchSize);
-      await Promise.all(
-        batch.map((entry) => resolveHoldOperation(auction, roundIndex, entry))
-      );
+    if (operations.length === 0) {
+      return;
+    }
+    for (let index = 0; index < operations.length; index += holdSettlementBatchSize) {
+      const batch = operations.slice(index, index + holdSettlementBatchSize);
+      await settleHoldOperationsBatch(auction, roundIndex, batch);
     }
   }
 
-  async function resolveHoldOperation(
+  async function settleHoldOperationsBatch(
     auction: WithId<AuctionDocument>,
     roundIndex: number,
-    settlement: HoldSettlement
+    operations: HoldSettlement[]
   ): Promise<void> {
-    const idempotencyKey = buildSettlementIdempotencyKey(
-      auction._id.toHexString(),
-      roundIndex,
-      settlement.action,
-      settlement.holdId
-    );
-    const metadata = {
-      auctionId: auction._id.toHexString(),
-      roundIndex,
-      bidId: settlement.bidId.toHexString(),
-      action: settlement.action
-    };
-
-    try {
-      if (settlement.action === "capture") {
-        await ledger.captureHold({
-          userId: settlement.userId,
-          amount: settlement.amount,
-          currency: settlement.currency,
-          holdId: settlement.holdId,
-          idempotencyKey,
-          metadata
-        });
-      } else {
-        await ledger.releaseHold({
-          userId: settlement.userId,
-          amount: settlement.amount,
-          currency: settlement.currency,
-          holdId: settlement.holdId,
-          idempotencyKey,
-          metadata
-        });
-      }
-    } catch (error) {
-      if (error instanceof LedgerError) {
-        throw new Error(
-          `Hold ${settlement.action} failed for ${settlement.holdId}: ${error.code}.`
-        );
-      }
-      throw error;
+    // Bulk resolve holds per batch, preserving idempotency checks while reducing round trips.
+    if (operations.length === 0) {
+      return;
     }
+
+    const auctionId = auction._id.toHexString();
+    await runMongoTransaction(deps.mongo, async (session) => {
+      const holdIds = operations.map((entry) => entry.holdId);
+      const existingResolutions = await ledgerEntries
+        .find(
+          {
+            entryType: { $in: ["hold_released", "hold_captured"] },
+            "metadata.holdId": { $in: holdIds }
+          },
+          { session }
+        )
+        .project<HoldResolutionEntry>({
+          entryType: 1,
+          userId: 1,
+          amount: 1,
+          currency: 1,
+          idempotencyKey: 1,
+          metadata: 1
+        })
+        .toArray();
+      const existingByHoldId = new Map<string, HoldResolutionEntry>();
+      for (const entry of existingResolutions) {
+        const holdId = extractHoldId(entry.metadata);
+        if (!holdId) {
+          continue;
+        }
+        if (existingByHoldId.has(holdId)) {
+          throw new Error(`Hold resolved multiple times for ${holdId}.`);
+        }
+        existingByHoldId.set(holdId, entry);
+      }
+
+      const now = new Date();
+      const entryOps: Array<AnyBulkWriteOperation<LedgerEntryDocument>> = [];
+      const accountIncrements = new Map<
+        string,
+        { userId: string; currency: string; count: number }
+      >();
+
+      for (const settlement of operations) {
+        const entryType = toHoldResolutionEntryType(settlement.action);
+        const idempotencyKey = buildSettlementIdempotencyKey(
+          auctionId,
+          roundIndex,
+          settlement.action,
+          settlement.holdId
+        );
+        const existing = existingByHoldId.get(settlement.holdId);
+        if (existing) {
+          assertHoldResolutionMatches(existing, settlement, entryType, idempotencyKey);
+          continue;
+        }
+
+        const metadata = {
+          auctionId,
+          roundIndex,
+          bidId: settlement.bidId.toHexString(),
+          action: settlement.action,
+          holdId: settlement.holdId
+        };
+
+        entryOps.push({
+          updateOne: {
+            filter: { idempotencyKey },
+            update: {
+              $setOnInsert: {
+                userId: settlement.userId,
+                entryType,
+                amount: settlement.amount,
+                currency: settlement.currency,
+                createdAt: now,
+                idempotencyKey,
+                metadata
+              }
+            },
+            upsert: true
+          }
+        });
+
+        const accountKey = `${settlement.userId}:${settlement.currency}`;
+        const existingAccount = accountIncrements.get(accountKey);
+        if (existingAccount) {
+          existingAccount.count += 1;
+        } else {
+          accountIncrements.set(accountKey, {
+            userId: settlement.userId,
+            currency: settlement.currency,
+            count: 1
+          });
+        }
+      }
+
+      if (entryOps.length === 0) {
+        return 0;
+      }
+
+      if (accountIncrements.size > 0) {
+        const accountOps: Array<AnyBulkWriteOperation<LedgerAccountDocument>> = [];
+        for (const account of accountIncrements.values()) {
+          accountOps.push({
+            updateOne: {
+              filter: { userId: account.userId, currency: account.currency },
+              update: {
+                $setOnInsert: {
+                  userId: account.userId,
+                  currency: account.currency,
+                  createdAt: now
+                },
+                $set: { updatedAt: now },
+                $inc: { sequence: account.count }
+              },
+              upsert: true
+            }
+          });
+        }
+        await ledgerAccounts.bulkWrite(accountOps, { ordered: false, session });
+      }
+
+      await ledgerEntries.bulkWrite(entryOps, { ordered: false, session });
+      return entryOps.length;
+    });
   }
 
   async function queueRoundNotifications(
@@ -568,6 +746,30 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
     isFinalRound: boolean
   ): Promise<void> {
     const now = new Date();
+    if (isFinalRound) {
+      const allUserIds = Array.from(new Set([...winnerUserIds, ...loserUserIds]));
+      if (allUserIds.length === 0) {
+        return;
+      }
+      await bids.updateMany(
+        { auctionId, userId: { $in: allUserIds }, settledAt: { $exists: false } },
+        [
+          {
+            $set: {
+              active: false,
+              inactiveAt: now,
+              settledAt: now,
+              settlementRoundIndex: roundIndex,
+              settlementAction: {
+                $cond: [{ $in: ["$userId", winnerUserIds] }, "captured", "released"]
+              }
+            }
+          }
+        ]
+      );
+      return;
+    }
+
     if (winnerUserIds.length > 0) {
       await bids.updateMany(
         { auctionId, userId: { $in: winnerUserIds }, settledAt: { $exists: false } },
@@ -577,21 +779,6 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
             inactiveAt: now,
             settledAt: now,
             settlementAction: "captured",
-            settlementRoundIndex: roundIndex
-          }
-        }
-      );
-    }
-
-    if (isFinalRound && loserUserIds.length > 0) {
-      await bids.updateMany(
-        { auctionId, userId: { $in: loserUserIds }, settledAt: { $exists: false } },
-        {
-          $set: {
-            active: false,
-            inactiveAt: now,
-            settledAt: now,
-            settlementAction: "released",
             settlementRoundIndex: roundIndex
           }
         }
@@ -616,24 +803,17 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
       .filter((bid) => isFinalRound || winnerUsers.has(bid.userId))
       .map((bid) => buildRankingMember(bid._id, bid.createdAt));
 
-    if (removeMembers.length > 0) {
-      await deps.redis.zrem(rankingKey, ...removeMembers);
-    }
-
     const roundConfig = findRoundConfig(auction.rounds, roundIndex);
     const topCount = Math.max(1, Math.floor(roundConfig.allocationSize));
-    const topMembers = await deps.redis.zrevrange(rankingKey, 0, topCount - 1);
-    const topBidIds = topMembers
-      .map((member) => parseRankingMember(member).bidId)
-      .filter((bidId) => bidId.length > 0);
     const topKey = buildTopKey(auctionId);
-    const pipeline = deps.redis.multi();
-    pipeline.del(topKey);
-    if (topBidIds.length > 0) {
-      pipeline.sadd(topKey, ...topBidIds);
-    }
-    pipeline.expire(topKey, topSetTtlSeconds);
-    await pipeline.exec();
+    const args = [
+      topCount.toString(),
+      topSetTtlSeconds.toString(),
+      removeMembers.length.toString(),
+      ...removeMembers
+    ];
+
+    await deps.redis.eval(rankingTopSetScript, 2, rankingKey, topKey, ...args);
   }
 
   return {
@@ -673,10 +853,46 @@ function extractHoldId(metadata: Record<string, unknown> | undefined): string | 
 function buildSettlementIdempotencyKey(
   auctionId: string,
   roundIndex: number,
-  action: "capture" | "release",
+  action: HoldSettlementAction,
   holdId: string
 ): string {
   return `settlement:${auctionId}:${roundIndex}:${action}:${holdId}`;
+}
+
+function toHoldResolutionEntryType(
+  action: HoldSettlementAction
+): "hold_captured" | "hold_released" {
+  return action === "capture" ? "hold_captured" : "hold_released";
+}
+
+function assertHoldResolutionMatches(
+  entry: HoldResolutionEntry,
+  settlement: HoldSettlement,
+  expectedEntryType: "hold_captured" | "hold_released",
+  expectedIdempotencyKey: string
+): void {
+  const holdId = extractHoldId(entry.metadata);
+  if (!holdId) {
+    throw new Error(`Hold id missing for ${settlement.holdId}.`);
+  }
+  if (holdId !== settlement.holdId) {
+    throw new Error(`Hold id mismatch for ${settlement.holdId}.`);
+  }
+  if (entry.entryType !== expectedEntryType) {
+    throw new Error(`Hold settlement action mismatch for ${settlement.holdId}.`);
+  }
+  if (entry.idempotencyKey !== expectedIdempotencyKey) {
+    throw new Error(`Hold settlement idempotency mismatch for ${settlement.holdId}.`);
+  }
+  if (entry.userId !== settlement.userId) {
+    throw new Error(`Hold settlement user mismatch for ${settlement.holdId}.`);
+  }
+  if (entry.currency !== settlement.currency) {
+    throw new Error(`Hold settlement currency mismatch for ${settlement.holdId}.`);
+  }
+  if (entry.amount !== settlement.amount) {
+    throw new Error(`Hold settlement amount mismatch for ${settlement.holdId}.`);
+  }
 }
 
 function buildNotificationIdempotencyKey(
@@ -757,12 +973,3 @@ function compareBidPriority(
   }
   return leftId < rightId ? -1 : 1;
 }
-
-type HoldSettlement = {
-  holdId: string;
-  bidId: ObjectId;
-  userId: string;
-  amount: number;
-  currency: string;
-  action: "capture" | "release";
-};

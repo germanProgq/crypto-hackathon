@@ -38,3 +38,7 @@ export function buildAuctionUserRateLimitKey(auctionId: string, userId: string):
 export function buildIpRateLimitKey(ip: string): string {
   return `rate:ip:${ip}`;
 }
+
+export function buildActiveAuctionListKey(): string {
+  return "auction:list:active";
+}

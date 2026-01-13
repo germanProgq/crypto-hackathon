@@ -1,10 +1,15 @@
 // Redis cache helpers for auction snapshots and round state.
 import type { RedisClient } from "../../shared/storage/redis.js";
 import type { AuctionRoundStatus, AuctionStatus } from "../../shared/storage/mongoSchemas.js";
-import { buildAuctionSnapshotKey, buildRoundStateKey } from "./auctionKeys.js";
+import {
+  buildActiveAuctionListKey,
+  buildAuctionSnapshotKey,
+  buildRoundStateKey
+} from "./auctionKeys.js";
 
 export const snapshotTtlSeconds = 5;
 export const roundStateTtlSeconds = 5;
+const activeAuctionListKey = buildActiveAuctionListKey();
 
 export type AuctionSnapshotCache = {
   auctionId: string;
@@ -31,6 +36,37 @@ export type RoundStateCache = {
   closedAt: Date | null;
   allocationSize: number;
 };
+
+export async function readActiveAuctionListFromRedis(
+  redis: RedisClient
+): Promise<unknown[] | null> {
+  const data = await redis.get(activeAuctionListKey);
+  if (!data) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(data);
+    if (Array.isArray(parsed)) {
+      return parsed;
+    }
+  } catch {
+  }
+
+  await redis.del(activeAuctionListKey);
+  return null;
+}
+
+export async function writeActiveAuctionListToRedis(
+  redis: RedisClient,
+  auctions: unknown[]
+): Promise<void> {
+  await redis.set(activeAuctionListKey, JSON.stringify(auctions));
+}
+
+export async function invalidateActiveAuctionListCache(redis: RedisClient): Promise<void> {
+  await redis.del(activeAuctionListKey);
+}
 
 export async function readAuctionSnapshotFromRedis(
   redis: RedisClient,

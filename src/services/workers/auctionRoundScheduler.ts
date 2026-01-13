@@ -12,6 +12,7 @@ import {
 import {
   buildAuctionSnapshotFields,
   buildRoundStateFields,
+  invalidateActiveAuctionListCache,
   roundStateTtlSeconds,
   snapshotTtlSeconds,
   type AuctionSnapshotCache,
@@ -130,13 +131,29 @@ async function runSchedulerTick(
       roundStates = await repository.ensureRoundStates(auction);
     }
     const nextStatus = deriveAuctionStatus(roundStates);
-    if (nextStatus !== auction.status) {
-      await repository.updateAuctionStatus(auction._id, auction.status, nextStatus, now);
+    const statusChanged = nextStatus !== auction.status;
+    let statusUpdated = false;
+    if (statusChanged) {
+      statusUpdated = await repository.updateAuctionStatus(
+        auction._id,
+        auction.status,
+        nextStatus,
+        now
+      );
+    }
+    if (statusChanged) {
+      try {
+        await invalidateActiveAuctionListCache(deps.redis);
+      } catch (error) {
+        deps.logger.warn({ err: error }, "Failed to invalidate auction list cache");
+      }
     }
 
+    const cacheAuction = statusUpdated ? { ...auction, status: nextStatus } : auction;
     await updateAuctionCaches(
       deps.redis,
-      auction,
+      repository,
+      cacheAuction,
       roundStates,
       entry.updatedStates,
       now
@@ -152,6 +169,7 @@ async function runSchedulerTick(
 
 async function updateAuctionCaches(
   redis: RedisClient,
+  repository: ReturnType<typeof createAuctionRepository>,
   auction: WithId<AuctionDocument>,
   roundStates: AuctionRoundStateDocument[],
   updatedStates: AuctionRoundStateDocument[],
@@ -197,6 +215,11 @@ async function updateAuctionCaches(
     ordered[ordered.length - 1] ??
     null;
 
+  const snapshotRoundIndex = current?.roundIndex ?? null;
+  const snapshotRoundStatus = current?.status ?? null;
+  const snapshotRoundEffectiveEndAt = current?.effectiveEndAt ?? null;
+  const snapshotRoundLastBidAt = current?.lastBidAt ?? null;
+
   if (current) {
     const snapshot: AuctionSnapshotCache = {
       auctionId: auction._id.toHexString(),
@@ -215,6 +238,18 @@ async function updateAuctionCaches(
     pipeline.expire(snapshotKey, snapshotTtlSeconds);
     hasOps = true;
   }
+
+  await repository.updateAuctionSnapshot(
+    auction._id,
+    {
+      currentRoundIndex: snapshotRoundIndex,
+      roundStatus: snapshotRoundStatus,
+      roundEffectiveEndAt: snapshotRoundEffectiveEndAt,
+      roundLastBidAt: snapshotRoundLastBidAt,
+      lastBidAmount: null
+    },
+    now
+  );
 
   if (hasOps) {
     await pipeline.exec();
