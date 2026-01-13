@@ -14,6 +14,7 @@ import {
   type NotificationQueueDocument,
   type RoundResultDocument
 } from "../../shared/storage/mongoSchemas.js";
+import { publishRealtimeEvent } from "../../shared/realtime/events.js";
 import { buildRankingKey, buildTopKey } from "./auctionKeys.js";
 import { buildRankingMember, parseRankingMember } from "./bidRanking.js";
 
@@ -222,6 +223,20 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
         winnerUsers,
         isFinalRound
       );
+      try {
+        if (settlementUserIds.length > 0) {
+          await publishRealtimeEvent(deps.redis, {
+            type: "bids.active.updated",
+            userIds: settlementUserIds
+          });
+        }
+        await publishRealtimeEvent(deps.redis, {
+          type: "auction.bids.updated",
+          auctionId: auction._id.toHexString()
+        });
+      } catch (error) {
+        deps.logger.warn({ err: error }, "Failed to publish realtime settlement updates");
+      }
       await queueRoundNotifications(auction, roundIndex, activeBids, winners, deliveryRefs);
       const settledAt = new Date();
       await roundResults.updateOne(

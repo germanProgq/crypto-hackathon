@@ -31,4 +31,9 @@ export interface SignedPayload {
   publicKey: string;
   algorithm: "ed25519";
   signedAt: string;
+  cosignatures?: Array<{
+    signature: string;
+    publicKey: string;
+    algorithm: "ed25519";
+  }>;
 }

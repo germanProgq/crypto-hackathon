@@ -1,4 +1,5 @@
 // Deposit wallet strategy and address attribution helpers.
+import { createHash } from "node:crypto";
 import { MongoServerError, type ClientSession } from "mongodb";
 import type { AppConfig } from "../../shared/config.js";
 import type { MongoDependencies } from "../../shared/storage/mongo.js";
@@ -91,7 +92,9 @@ export function createWalletStrategy(
     currency: string
   ): Promise<DepositDestination> {
     const normalized = normalizeCurrency(currency);
-    await ensureAddressPool();
+    if (config.walletStrategy === "address_pool") {
+      await ensureAddressPool();
+    }
     try {
       return await runMongoTransaction(mongo, async (session) => {
         const existing = await walletAddresses.findOne(
@@ -133,6 +136,11 @@ export function createWalletStrategy(
           };
 
           await walletAddresses.insertOne(record, { session });
+          return toDestination(record);
+        }
+
+        if (config.walletStrategy === "address_per_user") {
+          const record = await reserveHdAddress(userId, normalized, session);
           return toDestination(record);
         }
 
@@ -218,6 +226,62 @@ export function createWalletStrategy(
     return sequence.toString();
   }
 
+  async function reserveHdAddress(
+    userId: string,
+    currency: string,
+    session: ClientSession
+  ): Promise<CryptoWalletAddressDocument> {
+    const masterKey = config.deposit.hdMasterPublicKeys[currency];
+    if (!masterKey) {
+      throw new Error("HD master public key missing for currency.");
+    }
+    const prefix = config.deposit.hdDerivationPathPrefix;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const index = await reserveDerivationIndex(currency, session);
+      const derivationPath = buildDerivationPath(prefix, index);
+      const address = deriveHdAddress(masterKey, currency, derivationPath);
+      const existing = await walletAddresses.findOne({ currency, address }, { session });
+      if (existing) {
+        continue;
+      }
+      const now = new Date();
+      const record: CryptoWalletAddressDocument = {
+        userId,
+        currency,
+        address,
+        derivationPath,
+        strategy: "address_per_user",
+        createdAt: now,
+        updatedAt: now
+      };
+      await walletAddresses.insertOne(record, { session });
+      return record;
+    }
+    throw new Error("Unable to derive a unique deposit address.");
+  }
+
+  async function reserveDerivationIndex(
+    currency: string,
+    session: ClientSession
+  ): Promise<number> {
+    const now = new Date();
+    const key = `hd:${currency}`;
+    const result = await counters.findOneAndUpdate(
+      { key },
+      {
+        $setOnInsert: { key },
+        $inc: { sequence: 1 },
+        $set: { updatedAt: now }
+      },
+      { upsert: true, returnDocument: "after", session }
+    );
+    const sequence = Number(result?.sequence ?? 0);
+    if (!Number.isFinite(sequence)) {
+      throw new Error("HD derivation sequence unavailable.");
+    }
+    return sequence;
+  }
+
   return {
     ensureAddressPool,
     getDepositDestination,
@@ -228,6 +292,21 @@ export function createWalletStrategy(
 
 function normalizeCurrency(currency: string): string {
   return currency.trim().toUpperCase();
+}
+
+function buildDerivationPath(prefix: string, index: number): string {
+  const trimmed = prefix.trim().replace(/\/+$/, "");
+  if (!trimmed) {
+    return index.toString();
+  }
+  return `${trimmed}/${index}`;
+}
+
+function deriveHdAddress(masterKey: string, currency: string, derivationPath: string): string {
+  const hash = createHash("sha256")
+    .update(`${masterKey}:${currency}:${derivationPath}`)
+    .digest("hex");
+  return `HD_${currency}_${hash.slice(0, 40)}`;
 }
 
 function toDestination(record: CryptoWalletAddressDocument): DepositDestination {

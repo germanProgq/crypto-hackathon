@@ -20,7 +20,16 @@ const signedPayloadSchema = z.object({
   signature: z.string().min(1),
   publicKey: z.string().min(1),
   algorithm: z.literal("ed25519"),
-  signedAt: z.string().min(1)
+  signedAt: z.string().min(1),
+  cosignatures: z
+    .array(
+      z.object({
+        signature: z.string().min(1),
+        publicKey: z.string().min(1),
+        algorithm: z.literal("ed25519")
+      })
+    )
+    .optional()
 });
 
 const signerResponseSchema = z.object({

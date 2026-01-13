@@ -1,5 +1,12 @@
 // Crypto gateway deposit and withdrawal integration tests.
-import { createPublicKey, generateKeyPairSync, sign, timingSafeEqual, verify } from "node:crypto";
+import {
+  createPublicKey,
+  generateKeyPairSync,
+  sign,
+  timingSafeEqual,
+  verify,
+  type KeyObject
+} from "node:crypto";
 import fastify from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -40,7 +47,7 @@ const payloadSchema = z.object({
 
 class TestSignerServer {
   readonly token: string;
-  readonly privateKey: ReturnType<typeof generateKeyPairSync>["privateKey"];
+  readonly privateKey: KeyObject;
   readonly publicKeyBase64: string;
   private readonly app = fastify();
   url = "";

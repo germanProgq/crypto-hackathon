@@ -3,7 +3,7 @@ import { z } from "zod";
 
 const localeValues = ["en", "ru"] as const;
 const logLevels = ["fatal", "error", "warn", "info", "debug", "trace"] as const;
-const walletStrategyValues = ["address_pool", "memo_tag"] as const;
+const walletStrategyValues = ["address_pool", "memo_tag", "address_per_user"] as const;
 
 export type Locale = (typeof localeValues)[number];
 export type LogLevel = (typeof logLevels)[number];
@@ -38,6 +38,11 @@ export interface AppConfig {
   telegram: {
     botToken: string;
     apiBaseUrl: string;
+    webAppMaxAgeSeconds: number;
+  };
+  web: {
+    allowedOrigins: string[];
+    allowDemoUser: boolean;
   };
   crypto: {
     supportedCurrencies: string[];
@@ -51,6 +56,8 @@ export interface AppConfig {
       pollIntervalMs: number;
       addressPool: Record<string, string[]>;
       memoDepositAddresses: Record<string, string>;
+      hdMasterPublicKeys: Record<string, string>;
+      hdDerivationPathPrefix: string;
     };
     withdrawal: {
       confirmations: number;
@@ -72,6 +79,11 @@ export interface AppConfig {
     apiToken: string;
     allowedIps: string[];
     privateKey: string;
+    privateKeys: string[];
+    multisigThreshold: number;
+    kmsUrl?: string;
+    kmsKeyId?: string;
+    kmsToken?: string;
   };
 }
 
@@ -87,6 +99,15 @@ function isMongoUri(value: string): boolean {
 
 function isRedisUrl(value: string): boolean {
   return value.startsWith("redis://") || value.startsWith("rediss://");
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function parseLocales(value: string): Locale[] {
@@ -117,6 +138,25 @@ function parseCsv(value: string): string[] {
     .split(",")
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
+}
+
+function parseOptionalBoolean(value: string | undefined): boolean | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  return undefined;
+}
+
+function parseOrigins(value: string): string[] {
+  const entries = parseCsv(value).map((entry) => entry.replace(/\/+$/, ""));
+  return Array.from(new Set(entries));
 }
 
 function parseCurrencies(value: string): string[] {
@@ -200,6 +240,9 @@ function createEnvSchema(defaultPort: number) {
     I18N_SUPPORTED_LOCALES: z.string().default("en,ru"),
     TELEGRAM_BOT_TOKEN: z.string().default(""),
     TELEGRAM_API_BASE: z.string().url().default("https://api.telegram.org"),
+    TELEGRAM_WEBAPP_MAX_AGE_SECONDS: z.coerce.number().int().min(0).default(86400),
+    WEB_ALLOWED_ORIGINS: z.string().default(""),
+    WEB_ALLOW_DEMO_USER: z.string().optional(),
     CRYPTO_SUPPORTED_CURRENCIES: z.string().default("USDT"),
     CRYPTO_WALLET_STRATEGY: z.enum(walletStrategyValues).default("address_pool"),
     CRYPTO_OBSERVER_URL: z.string().url().default("http://127.0.0.1:9000"),
@@ -213,6 +256,8 @@ function createEnvSchema(defaultPort: number) {
     CRYPTO_WITHDRAWAL_BROADCAST_INTERVAL_MS: z.coerce.number().int().min(1000).default(5000),
     CRYPTO_DEPOSIT_ADDRESS_POOL: z.string().default(""),
     CRYPTO_MEMO_DEPOSIT_ADDRESS: z.string().default(""),
+    CRYPTO_HD_MASTER_PUBLIC_KEY: z.string().default(""),
+    CRYPTO_HD_DERIVATION_PATH_PREFIX: z.string().default("m/0"),
     CRYPTO_HOT_WALLET_ADDRESS: z.string().default(""),
     CRYPTO_WITHDRAWAL_MIN_AMOUNT: z.coerce.number().positive().default(1),
     CRYPTO_WITHDRAWAL_MAX_AMOUNT: z.coerce.number().positive().default(1000000),
@@ -225,7 +270,12 @@ function createEnvSchema(defaultPort: number) {
     CRYPTO_WITHDRAWAL_MAX_REQUESTS_PER_DAY: z.coerce.number().int().min(1).default(20),
     SIGNER_API_TOKEN: z.string().default(""),
     SIGNER_ALLOWED_IPS: z.string().default(""),
-    SIGNER_PRIVATE_KEY: z.string().default("")
+    SIGNER_PRIVATE_KEY: z.string().default(""),
+    SIGNER_PRIVATE_KEYS: z.string().default(""),
+    SIGNER_MULTISIG_THRESHOLD: z.coerce.number().int().min(1).default(1),
+    SIGNER_KMS_URL: z.string().default(""),
+    SIGNER_KMS_KEY_ID: z.string().default(""),
+    SIGNER_KMS_TOKEN: z.string().default("")
   });
 }
 
@@ -252,11 +302,24 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
     parsed.CRYPTO_MEMO_DEPOSIT_ADDRESS,
     defaultCurrency
   );
+  const hdMasterPublicKeys = parseCurrencyValueMap(
+    parsed.CRYPTO_HD_MASTER_PUBLIC_KEY,
+    defaultCurrency
+  );
+  const hdDerivationPathPrefix =
+    parsed.CRYPTO_HD_DERIVATION_PATH_PREFIX.trim() || "m/0";
   const hotWalletAddresses = parseCurrencyValueMap(
     parsed.CRYPTO_HOT_WALLET_ADDRESS,
     defaultCurrency
   );
   const signerAllowedIps = parseCsv(parsed.SIGNER_ALLOWED_IPS);
+  const signerPrivateKeys = parseCsv(parsed.SIGNER_PRIVATE_KEYS);
+  const signerKmsUrl = parsed.SIGNER_KMS_URL.trim();
+  const signerKmsKeyId = parsed.SIGNER_KMS_KEY_ID.trim();
+  const signerKmsToken = parsed.SIGNER_KMS_TOKEN.trim();
+  const webAllowedOrigins = parseOrigins(parsed.WEB_ALLOWED_ORIGINS);
+  const allowDemoUser =
+    parseOptionalBoolean(parsed.WEB_ALLOW_DEMO_USER) ?? (parsed.NODE_ENV !== "production");
 
   if (!supportedLocales.includes(parsed.I18N_DEFAULT_LOCALE)) {
     throw new Error("I18N_DEFAULT_LOCALE must be included in I18N_SUPPORTED_LOCALES.");
@@ -280,6 +343,14 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
 
   if (
     serviceName === "crypto-gateway" &&
+    parsed.CRYPTO_WALLET_STRATEGY === "address_per_user" &&
+    supportedCurrencies.some((currency) => !hdMasterPublicKeys[currency])
+  ) {
+    throw new Error("CRYPTO_HD_MASTER_PUBLIC_KEY must be set for address_per_user.");
+  }
+
+  if (
+    serviceName === "crypto-gateway" &&
     supportedCurrencies.some((currency) => !hotWalletAddresses[currency])
   ) {
     throw new Error("CRYPTO_HOT_WALLET_ADDRESS must be set for all currencies.");
@@ -297,8 +368,21 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
     throw new Error("SIGNER_API_TOKEN must be set for signer.");
   }
 
-  if (serviceName === "signer" && parsed.SIGNER_PRIVATE_KEY.length === 0) {
-    throw new Error("SIGNER_PRIVATE_KEY must be set for signer.");
+  if (signerKmsUrl.length > 0 && !isHttpUrl(signerKmsUrl)) {
+    throw new Error("SIGNER_KMS_URL must be a valid http(s) URL.");
+  }
+
+  if (serviceName === "signer") {
+    const keyMaterial = [parsed.SIGNER_PRIVATE_KEY, ...signerPrivateKeys].filter(
+      (entry) => entry.length > 0
+    );
+    const signerKeyCount = keyMaterial.length + (signerKmsUrl.length > 0 ? 1 : 0);
+    if (signerKeyCount === 0) {
+      throw new Error("Signer requires SIGNER_PRIVATE_KEY, SIGNER_PRIVATE_KEYS, or SIGNER_KMS_URL.");
+    }
+    if (parsed.SIGNER_MULTISIG_THRESHOLD > signerKeyCount) {
+      throw new Error("SIGNER_MULTISIG_THRESHOLD exceeds configured signer key count.");
+    }
   }
 
   return {
@@ -328,7 +412,12 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
     },
     telegram: {
       botToken: parsed.TELEGRAM_BOT_TOKEN,
-      apiBaseUrl: parsed.TELEGRAM_API_BASE
+      apiBaseUrl: parsed.TELEGRAM_API_BASE,
+      webAppMaxAgeSeconds: parsed.TELEGRAM_WEBAPP_MAX_AGE_SECONDS
+    },
+    web: {
+      allowedOrigins: webAllowedOrigins,
+      allowDemoUser
     },
     crypto: {
       supportedCurrencies,
@@ -341,7 +430,9 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
         confirmations: parsed.CRYPTO_DEPOSIT_CONFIRMATIONS,
         pollIntervalMs: parsed.CRYPTO_DEPOSIT_POLL_INTERVAL_MS,
         addressPool,
-        memoDepositAddresses
+        memoDepositAddresses,
+        hdMasterPublicKeys,
+        hdDerivationPathPrefix
       },
       withdrawal: {
         confirmations: parsed.CRYPTO_WITHDRAWAL_CONFIRMATIONS,
@@ -362,7 +453,12 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
     signer: {
       apiToken: parsed.SIGNER_API_TOKEN,
       allowedIps: signerAllowedIps,
-      privateKey: parsed.SIGNER_PRIVATE_KEY
+      privateKey: parsed.SIGNER_PRIVATE_KEY,
+      privateKeys: signerPrivateKeys,
+      multisigThreshold: parsed.SIGNER_MULTISIG_THRESHOLD,
+      kmsUrl: signerKmsUrl.length > 0 ? signerKmsUrl : undefined,
+      kmsKeyId: signerKmsKeyId.length > 0 ? signerKmsKeyId : undefined,
+      kmsToken: signerKmsToken.length > 0 ? signerKmsToken : undefined
     }
   };
 }

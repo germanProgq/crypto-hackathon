@@ -38,20 +38,20 @@ export const redisKeySpecs: RedisKeySpec[] = [
   },
   {
     key: "rate:user:{userId}",
-    type: "string",
-    ttlSeconds: 1,
+    type: "hash",
+    ttlSeconds: 2,
     invalidationEvents: ["rate.limit.reset"]
   },
   {
     key: "rate:auction:{auctionId}:user:{userId}",
-    type: "string",
-    ttlSeconds: 1,
+    type: "hash",
+    ttlSeconds: 2,
     invalidationEvents: ["rate.limit.reset"]
   },
   {
     key: "rate:ip:{ip}",
-    type: "string",
-    ttlSeconds: 1,
+    type: "hash",
+    ttlSeconds: 2,
     invalidationEvents: ["rate.limit.reset"]
   },
   {

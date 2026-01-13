@@ -38,9 +38,9 @@ import {
 } from "./auctionCache.js";
 import { createAuctionRepository } from "./auctionStore.js";
 import { buildRankingMember } from "./bidRanking.js";
+import { publishRealtimeEvent, toRealtimeSnapshot } from "../../shared/realtime/events.js";
 
 const bidLockTtlMs = 8000;
-const rateLimitWindowSeconds = 1;
 const topSetTtlSeconds = 10;
 const bidIdempotencyTtlSeconds = 600;
 const idempotencyWaitMs = 750;
@@ -49,11 +49,52 @@ const bidLockWaitMs = 1500;
 const bidLockPollMs = 25;
 
 const rateLimitScript = `
-local current = redis.call("INCR", KEYS[1])
-if current == 1 then
-  redis.call("EXPIRE", KEYS[1], ARGV[1])
+local capacity = tonumber(ARGV[1])
+local refillRate = tonumber(ARGV[2])
+if not capacity or not refillRate or capacity <= 0 or refillRate <= 0 then
+  return 0
 end
-return current
+
+local time = redis.call("TIME")
+local nowMs = (tonumber(time[1]) * 1000) + math.floor(tonumber(time[2]) / 1000)
+local bucket = redis.call("HMGET", KEYS[1], "tokens", "ts")
+local tokens = tonumber(bucket[1])
+local lastMs = tonumber(bucket[2])
+
+if not tokens then
+  tokens = capacity
+end
+
+if not lastMs then
+  lastMs = nowMs
+end
+
+if tokens > capacity then
+  tokens = capacity
+end
+
+if tokens < capacity then
+  local deltaMs = nowMs - lastMs
+  if deltaMs > 0 then
+    local refill = (deltaMs / 1000) * refillRate
+    tokens = math.min(capacity, tokens + refill)
+  end
+end
+
+local allowed = tokens >= 1
+if allowed then
+  tokens = tokens - 1
+end
+
+redis.call("HSET", KEYS[1], "tokens", tokens, "ts", nowMs)
+
+local ttlSeconds = math.ceil((capacity / refillRate) * 2)
+if ttlSeconds < 1 then
+  ttlSeconds = 1
+end
+redis.call("EXPIRE", KEYS[1], ttlSeconds)
+
+return allowed and 1 or 0
 `;
 
 const bidCacheUpdateScript = `
@@ -378,7 +419,24 @@ export function createBidService(deps: ServiceDependencies) {
         };
       });
 
-      await updateRedisCaches(deps.redis, result);
+      const { snapshot } = await updateRedisCaches(deps.redis, result);
+      try {
+        await publishRealtimeEvent(deps.redis, {
+          type: "auction.snapshot.updated",
+          auctionId: snapshot.auctionId,
+          snapshot: toRealtimeSnapshot({ ...snapshot, serverTime: new Date() })
+        });
+        await publishRealtimeEvent(deps.redis, {
+          type: "auction.bids.updated",
+          auctionId: snapshot.auctionId
+        });
+        await publishRealtimeEvent(deps.redis, {
+          type: "bids.active.updated",
+          userIds: [result.bid.userId]
+        });
+      } catch (error) {
+        deps.logger.warn({ err: error }, "Failed to publish realtime bid updates");
+      }
       return toPlacementResult(result);
     } finally {
       await releaseRedisLock(deps.redis, lock);
@@ -457,7 +515,10 @@ function toPlacementResult(result: BidTransactionResult): BidPlacementResult {
   };
 }
 
-async function updateRedisCaches(redis: RedisClient, result: BidTransactionResult): Promise<void> {
+async function updateRedisCaches(
+  redis: RedisClient,
+  result: BidTransactionResult
+): Promise<{ snapshot: AuctionSnapshotCache }> {
   const auctionIdText = result.auction._id.toHexString();
   const rankingKey = buildRankingKey(auctionIdText);
   const roundStateKey = buildRoundStateKey(auctionIdText, result.roundState.roundIndex);
@@ -536,6 +597,7 @@ async function updateRedisCaches(redis: RedisClient, result: BidTransactionResul
   );
   primeRoundStateCache(auctionIdText, roundStateCache);
   primeAuctionSnapshotCache(snapshot);
+  return { snapshot };
 }
 
 async function enforceRateLimits(
@@ -557,12 +619,12 @@ async function consumeRateLimit(
   key: string,
   limit: number
 ): Promise<void> {
-  const value = await redis.eval(rateLimitScript, 1, key, rateLimitWindowSeconds.toString());
-  const current = Number(value);
-  if (!Number.isFinite(current)) {
+  const value = await redis.eval(rateLimitScript, 1, key, limit.toString(), limit.toString());
+  const allowed = Number(value);
+  if (!Number.isFinite(allowed)) {
     throw new BidError("rate_limited", "Rate limit unavailable.", 429);
   }
-  if (current > limit) {
+  if (allowed !== 1) {
     throw new BidError("rate_limited", "Rate limit exceeded.", 429);
   }
 }

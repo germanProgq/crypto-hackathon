@@ -1,10 +1,11 @@
 // Web UI routes and static file serving.
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import websocket from "@fastify/websocket";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ObjectId, type WithId } from "mongodb";
+import { ObjectId, type Collection, type WithId } from "mongodb";
 import type { Locale } from "../../shared/config.js";
 import { resolveLocale, type Catalog } from "../../shared/i18n/index.js";
 import enCatalog from "../../shared/i18n/en.js";
@@ -13,6 +14,7 @@ import type { ServiceDependencies } from "../../shared/service.js";
 import {
   mongoCollections,
   type AuctionDocument,
+  type AuctionRoundStatus,
   type AuctionStatus,
   type BidDocument
 } from "../../shared/storage/mongoSchemas.js";
@@ -25,7 +27,20 @@ import {
 import { parseRankingMember } from "../auction-engine/bidRanking.js";
 import { BidError, createBidService } from "../auction-engine/bidService.js";
 import { createAuctionRepository } from "../auction-engine/auctionStore.js";
+import { CryptoGatewayError, createCryptoGatewayService } from "../crypto-gateway/cryptoGatewayService.js";
 import { createLedgerRepository, LedgerError } from "../ledger/ledgerStore.js";
+import {
+  publishRealtimeEvent,
+  realtimeEventChannel,
+  toRealtimeSnapshot,
+  type RealtimeAuctionSnapshot,
+  type RealtimeEvent
+} from "../../shared/realtime/events.js";
+import {
+  extractTelegramInitData,
+  type TelegramWebUser,
+  verifyTelegramInitData
+} from "./telegramAuth.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const webCatalogs: Record<Locale, Catalog> = {
@@ -49,8 +64,15 @@ type CreateAuctionBody = {
 };
 
 type BidPlacementBody = {
-  userId?: string;
   amount: number;
+  idempotencyKey?: string;
+};
+
+type WithdrawalRequestBody = {
+  amount: number;
+  currency?: string;
+  destinationAddress: string;
+  memo?: string;
   idempotencyKey?: string;
 };
 
@@ -82,7 +104,6 @@ const createAuctionSchema = {
 const bidPlacementSchema = {
   type: "object",
   properties: {
-    userId: { type: "string", minLength: 1 },
     amount: { type: "number", exclusiveMinimum: 0 },
     idempotencyKey: { type: "string", minLength: 1 }
   },
@@ -90,65 +111,657 @@ const bidPlacementSchema = {
   additionalProperties: false
 } as const;
 
+const withdrawalRequestSchema = {
+  type: "object",
+  properties: {
+    amount: { type: "number", exclusiveMinimum: 0 },
+    currency: { type: "string", minLength: 1 },
+    destinationAddress: { type: "string", minLength: 1 },
+    memo: { type: "string" },
+    idempotencyKey: { type: "string", minLength: 1 }
+  },
+  required: ["amount", "destinationAddress"],
+  additionalProperties: false
+} as const;
+
+type AuthenticatedUser = TelegramWebUser & {
+  source: "telegram" | "demo";
+};
+
+type AuthResolution =
+  | { ok: true; user: AuthenticatedUser }
+  | { ok: false; status: number; code: string; message: string };
+
+type ActiveAuctionPayload = {
+  _id: string;
+  title: string;
+  description?: string;
+  status: AuctionStatus;
+  currency: string;
+  startsAt: Date;
+  endsAt: Date;
+  currentRoundIndex: number | null;
+  roundStatus: AuctionRoundStatus | null;
+  roundEffectiveEndAt: Date | null;
+  roundLastBidAt: Date | null;
+  lastBidAmount: number | null;
+  rounds: Array<{
+    index: number;
+    allocationSize: number;
+    startAt: Date;
+    endAt: Date;
+  }>;
+};
+
+type ActiveBidPayload = {
+  id: string;
+  auctionId: string;
+  amount: number;
+  createdAt: Date;
+  roundIndex: number | null;
+  roundsCount: number | null;
+  auctionTitle: string;
+  auctionStatus: AuctionStatus;
+  currency: string;
+};
+
+type SocketMessage = string | Buffer | ArrayBuffer | Buffer[];
+
+type RealtimeSocket = {
+  on(event: "message", listener: (data: SocketMessage) => void): void;
+  on(event: "close" | "error", listener: () => void): void;
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+};
+
+type RealtimeClient = {
+  id: string;
+  socket: RealtimeSocket;
+  userId: string | null;
+  auctionIds: Set<string>;
+};
+
 export async function registerWebRoutes(
   app: FastifyInstance,
   deps: ServiceDependencies
 ): Promise<void> {
   const auctionRepository = createAuctionRepository(deps.mongo);
   const ledgerRepository = createLedgerRepository(deps.mongo);
+  const cryptoGatewayService = createCryptoGatewayService(deps);
   const bidService = createBidService(deps);
   const bids = deps.mongo.db.collection<BidDocument>(mongoCollections.bids);
+
+  const unsafeMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+  await app.register(websocket);
+
+  const realtimeClients = new Map<string, RealtimeClient>();
+  const userSubscriptions = new Map<string, Set<string>>();
+  const auctionSubscriptions = new Map<string, Set<string>>();
+  const pendingAuctionBids = new Map<string, NodeJS.Timeout>();
+  const pendingActiveBids = new Map<string, NodeJS.Timeout>();
+  let pendingAuctionsTimer: NodeJS.Timeout | null = null;
+
+  const realtimeSubscriber = deps.redis.duplicate();
+  realtimeSubscriber.on("error", (error) => {
+    deps.logger.warn({ err: error }, "Realtime Redis error");
+  });
+  await realtimeSubscriber.connect();
+  await realtimeSubscriber.subscribe(realtimeEventChannel);
+  realtimeSubscriber.on("message", (channel, payload) => {
+    if (channel !== realtimeEventChannel) {
+      return;
+    }
+    const event = parseRealtimeEvent(payload);
+    if (!event) {
+      return;
+    }
+    handleRealtimeEvent(event);
+  });
+
+  app.addHook("onClose", async () => {
+    if (pendingAuctionsTimer) {
+      clearTimeout(pendingAuctionsTimer);
+      pendingAuctionsTimer = null;
+    }
+    for (const timer of pendingAuctionBids.values()) {
+      clearTimeout(timer);
+    }
+    pendingAuctionBids.clear();
+    for (const timer of pendingActiveBids.values()) {
+      clearTimeout(timer);
+    }
+    pendingActiveBids.clear();
+    for (const client of realtimeClients.values()) {
+      try {
+        client.socket.close();
+      } catch {
+        // ignore close errors
+      }
+    }
+    realtimeClients.clear();
+    userSubscriptions.clear();
+    auctionSubscriptions.clear();
+    await realtimeSubscriber.quit();
+  });
+
+  app.get("/ws", { websocket: true }, (connection, request) => {
+    const socket = resolveRealtimeSocket(connection);
+    if (!socket) {
+      return;
+    }
+    const origin = getRequestOrigin(request);
+    if (origin) {
+      const allowed = resolveAllowedOrigins(request, deps);
+      if (!isOriginAllowed(origin, allowed)) {
+        socket.close(1008, "Origin not allowed");
+        return;
+      }
+    }
+
+    const client: RealtimeClient = {
+      id: randomUUID(),
+      socket,
+      userId: null,
+      auctionIds: new Set()
+    };
+
+    realtimeClients.set(client.id, client);
+    void sendActiveAuctionsToClient(client);
+
+    socket.on("message", (data: SocketMessage) => {
+      handleRealtimeMessage(client, data);
+    });
+    socket.on("close", () => {
+      cleanupRealtimeClient(client);
+    });
+    socket.on("error", () => {
+      cleanupRealtimeClient(client);
+    });
+  });
+
+  function resolveRealtimeSocket(connection: unknown): RealtimeSocket | null {
+    if (isRealtimeSocket(connection)) {
+      return connection;
+    }
+    if (connection && typeof connection === "object" && "socket" in connection) {
+      const maybeSocket = (connection as { socket?: unknown }).socket;
+      if (isRealtimeSocket(maybeSocket)) {
+        return maybeSocket;
+      }
+    }
+    return null;
+  }
+
+  function isRealtimeSocket(value: unknown): value is RealtimeSocket {
+    if (!value || typeof value !== "object") {
+      return false;
+    }
+    const socket = value as RealtimeSocket;
+    return typeof socket.on === "function"
+      && typeof socket.send === "function"
+      && typeof socket.close === "function";
+  }
+
+  function handleRealtimeMessage(client: RealtimeClient, data: SocketMessage): void {
+    const message = parseRealtimeMessage(data);
+    if (!message || typeof message.type !== "string") {
+      return;
+    }
+    if (message.type === "ping") {
+      sendRealtimePayload(client, { type: "pong" });
+      return;
+    }
+    if (message.type === "auth") {
+      const resolved = resolveAuthFromRealtimePayload(message, deps);
+      if (!resolved.ok) {
+        sendRealtimePayload(client, {
+          type: "auth",
+          ok: false,
+          code: resolved.code,
+          message: resolved.message
+        });
+        return;
+      }
+      attachRealtimeUser(client, resolved.user.id);
+      sendRealtimePayload(client, {
+        type: "auth",
+        ok: true,
+        user: {
+          id: resolved.user.id,
+          displayName: resolved.user.displayName,
+          username: resolved.user.username,
+          firstName: resolved.user.firstName,
+          lastName: resolved.user.lastName,
+          languageCode: resolved.user.languageCode,
+          source: resolved.user.source
+        }
+      });
+      void sendActiveBidsToUser(resolved.user.id);
+      return;
+    }
+    if (message.type === "subscribe") {
+      const auctionIds = normalizeAuctionIds(message.auctionIds ?? message.auctionId);
+      if (auctionIds.length === 0) {
+        return;
+      }
+      for (const auctionId of auctionIds) {
+        attachAuctionSubscription(client, auctionId);
+      }
+      return;
+    }
+    if (message.type === "unsubscribe") {
+      const auctionIds = normalizeAuctionIds(message.auctionIds ?? message.auctionId);
+      if (auctionIds.length === 0) {
+        return;
+      }
+      for (const auctionId of auctionIds) {
+        detachAuctionSubscription(client, auctionId);
+      }
+      return;
+    }
+  }
+
+  function parseRealtimeMessage(data: SocketMessage): Record<string, unknown> | null {
+    if (typeof data === "string") {
+      try {
+        return JSON.parse(data);
+      } catch {
+        return null;
+      }
+    }
+    if (data instanceof Buffer) {
+      try {
+        return JSON.parse(data.toString("utf-8"));
+      } catch {
+        return null;
+      }
+    }
+    if (data instanceof ArrayBuffer) {
+      try {
+        return JSON.parse(Buffer.from(data).toString("utf-8"));
+      } catch {
+        return null;
+      }
+    }
+    if (Array.isArray(data) && data.every(Buffer.isBuffer)) {
+      try {
+        return JSON.parse(Buffer.concat(data).toString("utf-8"));
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  function parseRealtimeEvent(payload: string): RealtimeEvent | null {
+    try {
+      const parsed = JSON.parse(payload);
+      if (!parsed || typeof parsed.type !== "string") {
+        return null;
+      }
+      return parsed as RealtimeEvent;
+    } catch {
+      return null;
+    }
+  }
+
+  function handleRealtimeEvent(event: RealtimeEvent): void {
+    if (event.type === "auction.list.updated") {
+      scheduleAuctionsBroadcast();
+      return;
+    }
+    if (event.type === "auction.snapshot.updated") {
+      broadcastAuctionSnapshot(event.auctionId, event.snapshot);
+      return;
+    }
+    if (event.type === "auction.bids.updated") {
+      scheduleAuctionBidsBroadcast(event.auctionId);
+      return;
+    }
+    if (event.type === "bids.active.updated") {
+      for (const userId of event.userIds) {
+        scheduleActiveBidsBroadcast(userId);
+      }
+    }
+  }
+
+  function scheduleAuctionsBroadcast(): void {
+    if (pendingAuctionsTimer) {
+      return;
+    }
+    pendingAuctionsTimer = setTimeout(() => {
+      pendingAuctionsTimer = null;
+      void broadcastActiveAuctions();
+    }, 150);
+  }
+
+  function scheduleAuctionBidsBroadcast(auctionId: string): void {
+    if (pendingAuctionBids.has(auctionId)) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      pendingAuctionBids.delete(auctionId);
+      void broadcastAuctionBids(auctionId);
+    }, 150);
+    pendingAuctionBids.set(auctionId, timer);
+  }
+
+  function scheduleActiveBidsBroadcast(userId: string): void {
+    if (pendingActiveBids.has(userId)) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      pendingActiveBids.delete(userId);
+      void sendActiveBidsToUser(userId);
+    }, 150);
+    pendingActiveBids.set(userId, timer);
+  }
+
+  async function sendActiveAuctionsToClient(client: RealtimeClient): Promise<void> {
+    try {
+      const auctions = await loadActiveAuctions(deps, auctionRepository);
+      sendRealtimePayload(client, { type: "auctions", data: auctions });
+    } catch (error) {
+      deps.logger.warn({ err: error }, "Failed to push auctions to client");
+    }
+  }
+
+  async function broadcastActiveAuctions(): Promise<void> {
+    if (realtimeClients.size === 0) {
+      return;
+    }
+    try {
+      const auctions = await loadActiveAuctions(deps, auctionRepository);
+      broadcastRealtimePayload({ type: "auctions", data: auctions });
+    } catch (error) {
+      deps.logger.warn({ err: error }, "Failed to broadcast auctions");
+    }
+  }
+
+  async function sendActiveBidsToUser(userId: string): Promise<void> {
+    const clientIds = userSubscriptions.get(userId);
+    if (!clientIds || clientIds.size === 0) {
+      return;
+    }
+    try {
+      const bidsPayload = await loadActiveBidsForUser(deps, bids, userId, 20);
+      sendRealtimePayloadToClients(clientIds, { type: "active_bids", data: bidsPayload });
+    } catch (error) {
+      deps.logger.warn({ err: error }, "Failed to broadcast active bids");
+    }
+  }
+
+  function broadcastAuctionSnapshot(
+    auctionId: string,
+    snapshot: RealtimeAuctionSnapshot
+  ): void {
+    const clientIds = auctionSubscriptions.get(auctionId);
+    if (!clientIds || clientIds.size === 0) {
+      return;
+    }
+    sendRealtimePayloadToClients(clientIds, { type: "auction_snapshot", data: snapshot });
+  }
+
+  async function broadcastAuctionBids(auctionId: string): Promise<void> {
+    const clientIds = auctionSubscriptions.get(auctionId);
+    if (!clientIds || clientIds.size === 0) {
+      return;
+    }
+    try {
+      const bidsPayload = await loadAuctionBidsPayload(deps, bids, auctionId, 15);
+      sendRealtimePayloadToClients(clientIds, {
+        type: "auction_bids",
+        auctionId,
+        data: bidsPayload
+      });
+    } catch (error) {
+      deps.logger.warn({ err: error }, "Failed to broadcast auction bids");
+    }
+  }
+
+  async function sendAuctionSnapshotToClient(
+    client: RealtimeClient,
+    auctionId: string
+  ): Promise<void> {
+    try {
+      const snapshot = await loadAuctionSnapshotPayload(deps, auctionRepository, auctionId);
+      if (!snapshot) {
+        return;
+      }
+      sendRealtimePayload(client, { type: "auction_snapshot", data: snapshot });
+    } catch (error) {
+      deps.logger.warn({ err: error }, "Failed to push auction snapshot");
+    }
+  }
+
+  async function sendAuctionBidsToClient(
+    client: RealtimeClient,
+    auctionId: string
+  ): Promise<void> {
+    try {
+      const bidsPayload = await loadAuctionBidsPayload(deps, bids, auctionId, 15);
+      sendRealtimePayload(client, { type: "auction_bids", auctionId, data: bidsPayload });
+    } catch (error) {
+      deps.logger.warn({ err: error }, "Failed to push auction bids");
+    }
+  }
+
+  function sendRealtimePayload(client: RealtimeClient, payload: unknown): void {
+    try {
+      client.socket.send(JSON.stringify(payload));
+    } catch {
+      cleanupRealtimeClient(client);
+    }
+  }
+
+  function sendRealtimePayloadToClients(
+    clientIds: Iterable<string>,
+    payload: unknown
+  ): void {
+    for (const clientId of clientIds) {
+      const client = realtimeClients.get(clientId);
+      if (!client) {
+        continue;
+      }
+      sendRealtimePayload(client, payload);
+    }
+  }
+
+  function broadcastRealtimePayload(payload: unknown): void {
+    for (const client of realtimeClients.values()) {
+      sendRealtimePayload(client, payload);
+    }
+  }
+
+  function attachRealtimeUser(client: RealtimeClient, userId: string): void {
+    if (client.userId === userId) {
+      return;
+    }
+    if (client.userId) {
+      detachRealtimeUser(client);
+    }
+    client.userId = userId;
+    const set = userSubscriptions.get(userId) ?? new Set<string>();
+    set.add(client.id);
+    userSubscriptions.set(userId, set);
+  }
+
+  function detachRealtimeUser(client: RealtimeClient): void {
+    if (!client.userId) {
+      return;
+    }
+    const set = userSubscriptions.get(client.userId);
+    if (set) {
+      set.delete(client.id);
+      if (set.size === 0) {
+        userSubscriptions.delete(client.userId);
+      }
+    }
+    client.userId = null;
+  }
+
+  function attachAuctionSubscription(client: RealtimeClient, auctionId: string): void {
+    if (!ObjectId.isValid(auctionId)) {
+      return;
+    }
+    if (client.auctionIds.has(auctionId)) {
+      return;
+    }
+    client.auctionIds.add(auctionId);
+    const set = auctionSubscriptions.get(auctionId) ?? new Set<string>();
+    set.add(client.id);
+    auctionSubscriptions.set(auctionId, set);
+    void sendAuctionSnapshotToClient(client, auctionId);
+    void sendAuctionBidsToClient(client, auctionId);
+  }
+
+  function detachAuctionSubscription(client: RealtimeClient, auctionId: string): void {
+    if (!client.auctionIds.has(auctionId)) {
+      return;
+    }
+    client.auctionIds.delete(auctionId);
+    const set = auctionSubscriptions.get(auctionId);
+    if (set) {
+      set.delete(client.id);
+      if (set.size === 0) {
+        auctionSubscriptions.delete(auctionId);
+      }
+    }
+  }
+
+  function cleanupRealtimeClient(client: RealtimeClient): void {
+    if (!realtimeClients.has(client.id)) {
+      return;
+    }
+    realtimeClients.delete(client.id);
+    detachRealtimeUser(client);
+    for (const auctionId of client.auctionIds) {
+      const set = auctionSubscriptions.get(auctionId);
+      if (set) {
+        set.delete(client.id);
+        if (set.size === 0) {
+          auctionSubscriptions.delete(auctionId);
+        }
+      }
+    }
+    client.auctionIds.clear();
+    try {
+      client.socket.close();
+    } catch {
+      // ignore close errors
+    }
+  }
+
+  function normalizeAuctionIds(value: unknown): string[] {
+    if (!value) {
+      return [];
+    }
+    if (typeof value === "string") {
+      return value.trim().length > 0 ? [value.trim()] : [];
+    }
+    if (Array.isArray(value)) {
+      return value
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+    }
+    return [];
+  }
+
+  app.addHook("onRequest", async (request, reply) => {
+    const origin = getHeaderValue(request.headers, "origin");
+    if (!origin) {
+      return;
+    }
+
+    const allowedOrigins = resolveAllowedOrigins(request, deps);
+    if (!isOriginAllowed(origin, allowedOrigins)) {
+      reply.code(403).send({ error: "cors_rejected", message: "Origin not allowed." });
+      return;
+    }
+
+    const allowOrigin = allowedOrigins.includes("*") ? "*" : origin;
+    reply.header("Access-Control-Allow-Origin", allowOrigin);
+    reply.header("Vary", "Origin");
+    reply.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+    reply.header(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, X-Requested-With, X-Telegram-Init-Data, X-Telegram-Web-App-Data, X-Demo-User-Id"
+    );
+    reply.header("Access-Control-Max-Age", "600");
+
+    if (request.method === "OPTIONS") {
+      reply.code(204).send();
+      return;
+    }
+  });
+
+  app.addHook("preHandler", async (request, reply) => {
+    if (request.method === "OPTIONS") {
+      return;
+    }
+    if (!unsafeMethods.has(request.method)) {
+      return;
+    }
+    const origin = getRequestOrigin(request);
+    if (!origin) {
+      reply.code(403).send({ error: "csrf_failed", message: "Origin required." });
+      return;
+    }
+    const allowedOrigins = resolveAllowedOrigins(request, deps);
+    if (!isOriginAllowed(origin, allowedOrigins)) {
+      reply.code(403).send({ error: "csrf_failed", message: "Origin not allowed." });
+      return;
+    }
+  });
 
   app.get("/", async (request, reply) => {
     const html = await loadHtml("index.html", request, deps);
     return reply.type("text/html").send(html);
   });
 
-  app.get("/api/auctions", async () => {
-    try {
-      const cached = await readActiveAuctionListFromRedis(deps.redis);
-      if (cached !== null) {
-        return cached;
+  app.get("/api/session", async (request) => {
+    const resolved = resolveAuth(request, deps);
+    if (!resolved.ok) {
+      return { user: null };
+    }
+    const auth = resolved.user;
+    return {
+      user: {
+        id: auth.id,
+        displayName: auth.displayName,
+        username: auth.username,
+        firstName: auth.firstName,
+        lastName: auth.lastName,
+        languageCode: auth.languageCode,
+        source: auth.source
       }
-    } catch (error) {
-      deps.logger.warn({ err: error }, "Failed to read auction list cache");
+    };
+  });
+
+  app.get("/api/auctions", async () => {
+    return loadActiveAuctions(deps, auctionRepository);
+  });
+
+  app.get("/api/bids/active", async (request, reply) => {
+    const auth = requireAuth(request, reply, deps);
+    if (!auth) {
+      return;
     }
-
-    const auctions = await auctionRepository.listActiveAuctions();
-    const payload = auctions.map((auction) => ({
-      _id: auction._id.toHexString(),
-      title: auction.title,
-      description: auction.description,
-      status: auction.status,
-      currency: auction.currency,
-      startsAt: auction.startsAt,
-      endsAt: auction.endsAt,
-      currentRoundIndex: auction.currentRoundIndex ?? null,
-      roundStatus: auction.roundStatus ?? null,
-      roundEffectiveEndAt: auction.roundEffectiveEndAt ?? null,
-      roundLastBidAt: auction.roundLastBidAt ?? null,
-      lastBidAmount: auction.lastBidAmount ?? null,
-      rounds: auction.rounds.map((round) => ({
-        index: round.index,
-        allocationSize: round.allocationSize,
-        startAt: round.startAt,
-        endAt: round.endAt
-      }))
-    }));
-
-    try {
-      await writeActiveAuctionListToRedis(deps.redis, payload);
-    } catch (error) {
-      deps.logger.warn({ err: error }, "Failed to write auction list cache");
-    }
-
-    return payload;
+    const query = request.query as { limit?: string };
+    const limit = normalizeLimit(query.limit);
+    return loadActiveBidsForUser(deps, bids, auth.id, limit);
   });
 
   app.post(
     "/api/auctions",
     { schema: { body: createAuctionSchema } },
     async (request, reply) => {
+      const auth = requireAuth(request, reply, deps);
+      if (!auth) {
+        return;
+      }
       const body = request.body as CreateAuctionBody;
       const now = new Date();
       const roundsCount = body.rounds ?? 3;
@@ -205,6 +818,15 @@ export async function registerWebRoutes(
       } catch (error) {
         deps.logger.warn({ err: error }, "Failed to invalidate auction list cache");
       }
+      try {
+        await publishRealtimeEvent(deps.redis, {
+          type: "auction.list.updated",
+          auctionId: inserted.insertedId.toHexString(),
+          reason: "created"
+        });
+      } catch (error) {
+        deps.logger.warn({ err: error }, "Failed to publish auction list update");
+      }
 
       return reply.code(201).send({ _id: inserted.insertedId.toHexString(), status });
     }
@@ -237,75 +859,11 @@ export async function registerWebRoutes(
       return reply.code(400).send({ error: "invalid_request", message: "Invalid auction id." });
     }
     const auctionId = params.auctionId;
-    const snapshot = await readAuctionSnapshotFromRedis(deps.redis, auctionId);
-    if (snapshot) {
-      return {
-        auctionId: snapshot.auctionId,
-        status: snapshot.status,
-        title: snapshot.title,
-        currency: snapshot.currency,
-        currentRoundIndex: snapshot.currentRoundIndex,
-        roundStatus: snapshot.roundStatus,
-        roundEffectiveEndAt: snapshot.roundEffectiveEndAt?.toISOString() ?? null,
-        roundLastBidAt: snapshot.roundLastBidAt?.toISOString() ?? null,
-        lastBidAmount: snapshot.lastBidAmount,
-        updatedAt: snapshot.updatedAt.toISOString(),
-        serverTime: new Date().toISOString()
-      };
-    }
-
-    const auction = await auctionRepository.getAuctionById(new ObjectId(auctionId));
-    if (!auction) {
+    const snapshot = await loadAuctionSnapshotPayload(deps, auctionRepository, auctionId);
+    if (!snapshot) {
       return reply.code(404).send({ error: "not_found", message: "Auction not found." });
     }
-    const now = new Date();
-    if (
-      auction.currentRoundIndex !== undefined &&
-      auction.roundStatus !== undefined &&
-      auction.roundEffectiveEndAt !== undefined
-    ) {
-      return {
-        auctionId,
-        status: auction.status,
-        title: auction.title,
-        currency: auction.currency,
-        currentRoundIndex: auction.currentRoundIndex,
-        roundStatus: auction.roundStatus,
-        roundEffectiveEndAt: auction.roundEffectiveEndAt?.toISOString() ?? null,
-        roundLastBidAt: auction.roundLastBidAt?.toISOString() ?? null,
-        lastBidAmount: auction.lastBidAmount ?? null,
-        updatedAt: auction.updatedAt?.toISOString() ?? null,
-        serverTime: now.toISOString()
-      };
-    }
-
-    const roundState = await auctionRepository.getLiveRoundState(new ObjectId(auctionId));
-    if (roundState) {
-      await auctionRepository.updateAuctionSnapshot(
-        auction._id,
-        {
-          currentRoundIndex: roundState.roundIndex,
-          roundStatus: roundState.status,
-          roundEffectiveEndAt: roundState.effectiveEndAt,
-          roundLastBidAt: roundState.lastBidAt ?? null,
-          lastBidAmount: null
-        },
-        now
-      );
-    }
-    return {
-      auctionId,
-      status: auction.status,
-      title: auction.title,
-      currency: auction.currency,
-      currentRoundIndex: roundState?.roundIndex ?? null,
-      roundStatus: roundState?.status ?? null,
-      roundEffectiveEndAt: roundState?.effectiveEndAt?.toISOString() ?? null,
-      roundLastBidAt: roundState?.lastBidAt?.toISOString() ?? null,
-      lastBidAmount: null,
-      updatedAt: roundState?.updatedAt?.toISOString() ?? null,
-      serverTime: now.toISOString()
-    };
+    return snapshot;
   });
 
   app.get("/api/auctions/:auctionId/bids", async (request, reply) => {
@@ -315,42 +873,7 @@ export async function registerWebRoutes(
       return reply.code(400).send({ error: "invalid_request", message: "Invalid auction id." });
     }
     const limit = normalizeLimit(query.limit);
-    const auctionId = params.auctionId;
-    const rankingKey = `auction:${auctionId}:ranking`;
-    const members = await deps.redis.zrevrange(rankingKey, 0, limit - 1);
-    let orderedBidIds = members
-      .map((member) => parseRankingMember(member).bidId)
-      .filter((bidId) => bidId.length > 0);
-
-    let bidDocs: Array<WithId<BidDocument>> = [];
-    if (orderedBidIds.length > 0) {
-      const objectIds = orderedBidIds
-        .filter((id) => ObjectId.isValid(id))
-        .map((id) => new ObjectId(id));
-      if (objectIds.length > 0) {
-        bidDocs = await bids.find({ _id: { $in: objectIds } }).toArray();
-      }
-    }
-
-    if (bidDocs.length === 0) {
-      bidDocs = await bids
-        .find({ auctionId: new ObjectId(auctionId), active: true })
-        .sort({ amount: -1, createdAt: 1, _id: 1 })
-        .limit(limit)
-        .toArray();
-      orderedBidIds = bidDocs.map((bid) => bid._id.toHexString());
-    }
-
-    const byId = new Map(bidDocs.map((bid) => [bid._id.toHexString(), bid]));
-    return orderedBidIds
-      .map((id) => byId.get(id))
-      .filter((bid): bid is WithId<BidDocument> => Boolean(bid))
-      .map((bid) => ({
-        _id: bid._id.toHexString(),
-        userId: bid.userId,
-        amount: bid.amount,
-        createdAt: bid.createdAt
-      }));
+    return loadAuctionBidsPayload(deps, bids, params.auctionId, limit);
   });
 
   app.post(
@@ -363,11 +886,11 @@ export async function registerWebRoutes(
       }
 
       const body = request.body as BidPlacementBody;
-
-      const userId = resolveUserId(request, body.userId);
-      if (!userId) {
-        return reply.code(400).send({ error: "invalid_request", message: "User id required." });
+      const auth = requireAuth(request, reply, deps);
+      if (!auth) {
+        return;
       }
+      const userId = auth.id;
 
       const userAgentHeader = request.headers["user-agent"];
       const userAgent = Array.isArray(userAgentHeader) ? userAgentHeader[0] : userAgentHeader;
@@ -427,36 +950,326 @@ export async function registerWebRoutes(
     }
   );
 
-  app.get("/api/balance", async (request, reply) => {
-    const query = request.query as { userId?: string; currency?: string };
-    const userId = resolveUserId(request, query.userId ?? null);
-    if (!userId) {
-      return reply.code(400).send({ error: "invalid_request", message: "User id required." });
+  app.get("/api/crypto/deposit-address", async (request, reply) => {
+    const query = request.query as { currency?: string };
+    const auth = requireAuth(request, reply, deps);
+    if (!auth) {
+      return;
     }
+    const currency = query.currency?.trim() || "USDT";
+    try {
+      const destination = await cryptoGatewayService.getDepositDestination(auth.id, currency);
+      return {
+        currency: destination.currency,
+        address: destination.address,
+        memo: destination.memo ?? null,
+        strategy: destination.strategy
+      };
+    } catch (error) {
+      return handleCryptoError(reply, error);
+    }
+  });
+
+  app.post(
+    "/api/crypto/withdrawals",
+    { schema: { body: withdrawalRequestSchema } },
+    async (request, reply) => {
+      const auth = requireAuth(request, reply, deps);
+      if (!auth) {
+        return;
+      }
+      const body = request.body as WithdrawalRequestBody;
+      const destinationAddress = body.destinationAddress?.trim() ?? "";
+      if (destinationAddress.length === 0) {
+        return reply
+          .code(400)
+          .send({ error: "invalid_request", message: "Destination address is required." });
+      }
+      const amount = body.amount;
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return reply
+          .code(400)
+          .send({ error: "invalid_request", message: "Withdrawal amount must be positive." });
+      }
+      const currency = body.currency?.trim() || "USDT";
+      const memo = body.memo?.trim();
+
+      try {
+        const result = await cryptoGatewayService.requestWithdrawal({
+          userId: auth.id,
+          currency,
+          amount,
+          destinationAddress,
+          memo: memo && memo.length > 0 ? memo : undefined,
+          idempotencyKey: body.idempotencyKey?.trim() || randomUUID()
+        });
+        return reply.send({
+          withdrawal: serializeCryptoWithdrawal(result.withdrawal),
+          balance: result.balance,
+          decision: result.decision,
+          flags: result.flags,
+          violations: result.violations
+        });
+      } catch (error) {
+        return handleCryptoError(reply, error);
+      }
+    }
+  );
+
+  app.get("/api/balance", async (request, reply) => {
+    const query = request.query as { currency?: string };
+    const auth = requireAuth(request, reply, deps);
+    if (!auth) {
+      return;
+    }
+    const userId = auth.id;
     const currency = query.currency || "USDT";
     const balance = await ledgerRepository.getBalance(userId, currency);
     return balance;
   });
 
-  app.get("/api/balance/:userId", async (request) => {
+  app.get("/api/balance/:userId", async (request, reply) => {
     const params = request.params as { userId: string };
     const query = request.query as { currency?: string };
+    const auth = requireAuth(request, reply, deps);
+    if (!auth) {
+      return;
+    }
+    if (params.userId !== auth.id) {
+      return reply.code(403).send({ error: "forbidden", message: "Access denied." });
+    }
     const currency = query.currency || "USDT";
     const balance = await ledgerRepository.getBalance(params.userId, currency);
     return balance;
   });
 }
 
-function resolveUserId(request: FastifyRequest, fallback?: string | null): string | null {
-  const headerValue = request.headers["x-telegram-user-id"] ?? request.headers["x-user-id"];
-  const header = Array.isArray(headerValue) ? headerValue[0] : headerValue;
-  if (typeof header === "string" && header.trim().length > 0) {
-    return header.trim();
+function serializeCryptoWithdrawal(
+  withdrawal: { _id: { toHexString: () => string } } & Record<string, unknown>
+) {
+  return {
+    ...withdrawal,
+    _id: withdrawal._id.toHexString()
+  };
+}
+
+function handleCryptoError(reply: FastifyReply, error: unknown) {
+  if (error instanceof CryptoGatewayError) {
+    return reply.code(error.status).send({ error: error.code, message: error.message });
   }
-  if (fallback && fallback.trim().length > 0) {
-    return fallback.trim();
+
+  if (error instanceof LedgerError) {
+    return reply.code(error.status).send({ error: error.code, message: error.message });
+  }
+
+  if (error instanceof Error) {
+    return reply.code(500).send({ error: "internal_error", message: error.message });
+  }
+
+  return reply.code(500).send({ error: "internal_error", message: "Unknown error." });
+}
+
+function requireAuth(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  deps: ServiceDependencies
+): AuthenticatedUser | null {
+  const resolved = resolveAuth(request, deps);
+  if (resolved.ok) {
+    return resolved.user;
+  }
+  reply.code(resolved.status).send({ error: resolved.code, message: resolved.message });
+  return null;
+}
+
+function resolveAuth(request: FastifyRequest, deps: ServiceDependencies): AuthResolution {
+  const initData = extractTelegramInitData(request.headers);
+  if (initData) {
+    if (!deps.config.telegram.botToken) {
+      return {
+        ok: false,
+        status: 500,
+        code: "telegram_not_configured",
+        message: "Telegram bot token is not configured."
+      };
+    }
+    const verified = verifyTelegramInitData(
+      initData,
+      deps.config.telegram.botToken,
+      deps.config.telegram.webAppMaxAgeSeconds
+    );
+    if (!verified) {
+      return {
+        ok: false,
+        status: 401,
+        code: "telegram_invalid",
+        message: "Invalid Telegram init data."
+      };
+    }
+    return {
+      ok: true,
+      user: {
+        ...verified.user,
+        source: "telegram"
+      }
+    };
+  }
+
+  if (deps.config.web.allowDemoUser) {
+    const demoUserId = normalizeDemoUserId(getHeaderValue(request.headers, "x-demo-user-id"));
+    if (demoUserId) {
+      return {
+        ok: true,
+        user: {
+          id: demoUserId,
+          displayName: "Demo user",
+          source: "demo"
+        }
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    status: 401,
+    code: "auth_required",
+    message: "Telegram init data required."
+  };
+}
+
+function resolveAuthFromRealtimePayload(
+  payload: { initData?: unknown; demoUserId?: unknown },
+  deps: ServiceDependencies
+): AuthResolution {
+  const initData = typeof payload.initData === "string" ? payload.initData.trim() : "";
+  if (initData) {
+    if (!deps.config.telegram.botToken) {
+      return {
+        ok: false,
+        status: 500,
+        code: "telegram_not_configured",
+        message: "Telegram bot token is not configured."
+      };
+    }
+    const verified = verifyTelegramInitData(
+      initData,
+      deps.config.telegram.botToken,
+      deps.config.telegram.webAppMaxAgeSeconds
+    );
+    if (!verified) {
+      return {
+        ok: false,
+        status: 401,
+        code: "telegram_invalid",
+        message: "Invalid Telegram init data."
+      };
+    }
+    return {
+      ok: true,
+      user: {
+        ...verified.user,
+        source: "telegram"
+      }
+    };
+  }
+
+  if (deps.config.web.allowDemoUser) {
+    const demoUserId = normalizeDemoUserId(
+      typeof payload.demoUserId === "string" ? payload.demoUserId : null
+    );
+    if (demoUserId) {
+      return {
+        ok: true,
+        user: {
+          id: demoUserId,
+          displayName: "Demo user",
+          source: "demo"
+        }
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    status: 401,
+    code: "auth_required",
+    message: "Telegram init data required."
+  };
+}
+
+function normalizeDemoUserId(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > 64) {
+    return null;
+  }
+  return trimmed;
+}
+
+function getHeaderValue(
+  headers: Record<string, string | string[] | undefined>,
+  key: string
+): string | null {
+  const value = headers[key];
+  if (Array.isArray(value)) {
+    return value[0] ?? null;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
   }
   return null;
+}
+
+function getRequestOrigin(request: FastifyRequest): string | null {
+  const origin = getHeaderValue(request.headers, "origin");
+  if (origin) {
+    return origin.replace(/\/+$/, "");
+  }
+  const referer = getHeaderValue(request.headers, "referer");
+  if (!referer) {
+    return null;
+  }
+  try {
+    return new URL(referer).origin.replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
+}
+
+function resolveAllowedOrigins(request: FastifyRequest, deps: ServiceDependencies): string[] {
+  if (deps.config.web.allowedOrigins.length > 0) {
+    return deps.config.web.allowedOrigins;
+  }
+  const host =
+    getHeaderValue(request.headers, "x-forwarded-host") ??
+    getHeaderValue(request.headers, "host");
+  if (!host) {
+    return [];
+  }
+  const forwardedProto = getHeaderValue(request.headers, "x-forwarded-proto");
+  const protocol = normalizeOriginProtocol(forwardedProto ?? request.protocol ?? "http");
+  return [`${protocol}://${host}`];
+}
+
+function normalizeOriginProtocol(value: string): string {
+  if (value === "ws") {
+    return "http";
+  }
+  if (value === "wss") {
+    return "https";
+  }
+  return value;
+}
+
+function isOriginAllowed(origin: string, allowedOrigins: string[]): boolean {
+  if (allowedOrigins.includes("*")) {
+    return true;
+  }
+  const cleaned = origin.replace(/\/+$/, "");
+  return allowedOrigins.some((allowed) => allowed === cleaned);
 }
 
 function normalizeLimit(value: string | undefined): number {
@@ -470,11 +1283,210 @@ function normalizeLimit(value: string | undefined): number {
   return Math.min(50, Math.max(1, Math.floor(parsed)));
 }
 
+async function loadActiveAuctions(
+  deps: ServiceDependencies,
+  auctionRepository: ReturnType<typeof createAuctionRepository>
+): Promise<ActiveAuctionPayload[]> {
+  try {
+    const cached = await readActiveAuctionListFromRedis(deps.redis);
+    if (cached !== null) {
+      return cached as ActiveAuctionPayload[];
+    }
+  } catch (error) {
+    deps.logger.warn({ err: error }, "Failed to read auction list cache");
+  }
+
+  const auctions = await auctionRepository.listActiveAuctions();
+  const payload: ActiveAuctionPayload[] = auctions.map((auction) => ({
+    _id: auction._id.toHexString(),
+    title: auction.title,
+    description: auction.description,
+    status: auction.status,
+    currency: auction.currency,
+    startsAt: auction.startsAt,
+    endsAt: auction.endsAt,
+    currentRoundIndex: auction.currentRoundIndex ?? null,
+    roundStatus: auction.roundStatus ?? null,
+    roundEffectiveEndAt: auction.roundEffectiveEndAt ?? null,
+    roundLastBidAt: auction.roundLastBidAt ?? null,
+    lastBidAmount: auction.lastBidAmount ?? null,
+    rounds: auction.rounds.map((round) => ({
+      index: round.index,
+      allocationSize: round.allocationSize,
+      startAt: round.startAt,
+      endAt: round.endAt
+    }))
+  }));
+
+  try {
+    await writeActiveAuctionListToRedis(deps.redis, payload);
+  } catch (error) {
+    deps.logger.warn({ err: error }, "Failed to write auction list cache");
+  }
+
+  return payload;
+}
+
+async function loadActiveBidsForUser(
+  deps: ServiceDependencies,
+  bids: Collection<BidDocument>,
+  userId: string,
+  limit: number
+): Promise<ActiveBidPayload[]> {
+  const bidDocs = await bids
+    .find({ userId, active: true })
+    .sort({ createdAt: -1 })
+    .limit(limit)
+    .toArray();
+
+  if (bidDocs.length === 0) {
+    return [];
+  }
+
+  const auctionIds = bidDocs.map((bid) => bid.auctionId);
+  const auctionDocs = await deps.mongo.db
+    .collection<AuctionDocument>(mongoCollections.auctions)
+    .find({ _id: { $in: auctionIds } })
+    .project({ title: 1, status: 1, currency: 1, rounds: 1, currentRoundIndex: 1 })
+    .toArray();
+  const auctionMap = new Map(
+    auctionDocs.map((auction) => [auction._id.toHexString(), auction])
+  );
+
+  return bidDocs.map((bid) => {
+    const auction = auctionMap.get(bid.auctionId.toHexString());
+    return {
+      id: bid._id.toHexString(),
+      auctionId: bid.auctionId.toHexString(),
+      amount: bid.amount,
+      createdAt: bid.createdAt,
+      roundIndex: bid.roundIndex ?? auction?.currentRoundIndex ?? null,
+      roundsCount: auction?.rounds?.length ?? null,
+      auctionTitle: auction?.title ?? "Auction",
+      auctionStatus: auction?.status ?? "draft",
+      currency: auction?.currency ?? "USDT"
+    };
+  });
+}
+
+async function loadAuctionSnapshotPayload(
+  deps: ServiceDependencies,
+  auctionRepository: ReturnType<typeof createAuctionRepository>,
+  auctionId: string
+): Promise<RealtimeAuctionSnapshot | null> {
+  const now = new Date();
+  const cached = await readAuctionSnapshotFromRedis(deps.redis, auctionId);
+  if (cached) {
+    return toRealtimeSnapshot({ ...cached, serverTime: now });
+  }
+
+  const auction = await auctionRepository.getAuctionById(new ObjectId(auctionId));
+  if (!auction) {
+    return null;
+  }
+
+  if (
+    auction.currentRoundIndex !== undefined &&
+    auction.roundStatus !== undefined &&
+    auction.roundEffectiveEndAt !== undefined
+  ) {
+    return toRealtimeSnapshot({
+      auctionId,
+      status: auction.status,
+      title: auction.title,
+      currency: auction.currency,
+      currentRoundIndex: auction.currentRoundIndex ?? null,
+      roundStatus: auction.roundStatus ?? null,
+      roundEffectiveEndAt: auction.roundEffectiveEndAt ?? null,
+      roundLastBidAt: auction.roundLastBidAt ?? null,
+      lastBidAmount: auction.lastBidAmount ?? null,
+      updatedAt: auction.updatedAt ?? now,
+      serverTime: now
+    });
+  }
+
+  const roundState = await auctionRepository.getLiveRoundState(new ObjectId(auctionId));
+  if (roundState) {
+    await auctionRepository.updateAuctionSnapshot(
+      auction._id,
+      {
+        currentRoundIndex: roundState.roundIndex,
+        roundStatus: roundState.status,
+        roundEffectiveEndAt: roundState.effectiveEndAt,
+        roundLastBidAt: roundState.lastBidAt ?? null,
+        lastBidAmount: null
+      },
+      now
+    );
+  }
+
+  return toRealtimeSnapshot({
+    auctionId,
+    status: auction.status,
+    title: auction.title,
+    currency: auction.currency,
+    currentRoundIndex: roundState?.roundIndex ?? null,
+    roundStatus: roundState?.status ?? null,
+    roundEffectiveEndAt: roundState?.effectiveEndAt ?? null,
+    roundLastBidAt: roundState?.lastBidAt ?? null,
+    lastBidAmount: null,
+    updatedAt: roundState?.updatedAt ?? auction.updatedAt ?? now,
+    serverTime: now
+  });
+}
+
+async function loadAuctionBidsPayload(
+  deps: ServiceDependencies,
+  bids: Collection<BidDocument>,
+  auctionId: string,
+  limit: number
+): Promise<Array<{ _id: string; userId: string; amount: number; createdAt: Date }>> {
+  const rankingKey = `auction:${auctionId}:ranking`;
+  const members = await deps.redis.zrevrange(rankingKey, 0, limit - 1);
+  let orderedBidIds = members
+    .map((member) => parseRankingMember(member).bidId)
+    .filter((bidId) => bidId.length > 0);
+
+  let bidDocs: Array<WithId<BidDocument>> = [];
+  if (orderedBidIds.length > 0) {
+    const objectIds = orderedBidIds
+      .filter((id) => ObjectId.isValid(id))
+      .map((id) => new ObjectId(id));
+    if (objectIds.length > 0) {
+      bidDocs = await bids.find({ _id: { $in: objectIds } }).toArray();
+    }
+  }
+
+  if (bidDocs.length === 0) {
+    bidDocs = await bids
+      .find({ auctionId: new ObjectId(auctionId), active: true })
+      .sort({ amount: -1, createdAt: 1, _id: 1 })
+      .limit(limit)
+      .toArray();
+    orderedBidIds = bidDocs.map((bid) => bid._id.toHexString());
+  }
+
+  const byId = new Map(bidDocs.map((bid) => [bid._id.toHexString(), bid]));
+  return orderedBidIds
+    .map((id) => byId.get(id))
+    .filter((bid): bid is WithId<BidDocument> => Boolean(bid))
+    .map((bid) => ({
+      _id: bid._id.toHexString(),
+      userId: bid.userId,
+      amount: bid.amount,
+      createdAt: bid.createdAt
+    }));
+}
+
 type WebI18nPayload = {
   locale: Locale;
   defaultLocale: Locale;
   supportedLocales: Locale[];
   catalogs: Record<Locale, Catalog>;
+};
+
+type WebConfigPayload = {
+  allowDemoUser: boolean;
 };
 
 async function loadHtml(
@@ -491,11 +1503,14 @@ async function loadHtml(
   }
 
   const locale = resolveWebLocale(request, deps);
-  return injectI18n(html, {
+  const withI18n = injectI18n(html, {
     locale,
     defaultLocale: deps.config.i18n.defaultLocale,
     supportedLocales: deps.config.i18n.supportedLocales,
     catalogs: webCatalogs
+  });
+  return injectWebConfig(withI18n, {
+    allowDemoUser: deps.config.web.allowDemoUser
   });
 }
 
@@ -516,6 +1531,18 @@ function injectI18n(html: string, payload: WebI18nPayload): string {
     return html.replace("__I18N_PAYLOAD__", serialized);
   }
   const scriptTag = `<script id="i18n-data" type="application/json">${serialized}</script>`;
+  if (html.includes("</head>")) {
+    return html.replace("</head>", `${scriptTag}\n</head>`);
+  }
+  return `${scriptTag}\n${html}`;
+}
+
+function injectWebConfig(html: string, payload: WebConfigPayload): string {
+  const serialized = JSON.stringify(payload).replace(/</g, "\\u003c");
+  if (html.includes("__WEB_CONFIG__")) {
+    return html.replace("__WEB_CONFIG__", serialized);
+  }
+  const scriptTag = `<script id="web-config" type="application/json">${serialized}</script>`;
   if (html.includes("</head>")) {
     return html.replace("</head>", `${scriptTag}\n</head>`);
   }
@@ -1145,14 +2172,33 @@ function getDefaultHtml(): string {
       auctions: [],
       currentAuction: null,
       currentUser: null,
+      authSource: 'none',
       timers: {
         snapshot: null,
         bids: null,
         list: null
       }
     };
+    const realtimeState = {
+      socket: null,
+      reconnectDelay: 1000,
+      reconnectTimer: null,
+      queue: [],
+      watchingAuctionId: null
+    };
 
     const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+    const webConfig = (() => {
+      const element = document.getElementById('web-config');
+      if (!element) return {};
+      try {
+        return JSON.parse(element.textContent || '{}');
+      } catch (error) {
+        console.warn('Failed to parse web config', error);
+        return {};
+      }
+    })();
+    const allowDemoUser = Boolean(webConfig.allowDemoUser);
 
     const elements = {
       screenList: document.getElementById('screen-list'),
@@ -1197,6 +2243,235 @@ function getDefaultHtml(): string {
       createStatus: document.getElementById('createStatus')
     };
 
+    function getTelegramInitData() {
+      if (!tg || typeof tg.initData !== 'string') return '';
+      return tg.initData;
+    }
+
+    function getDemoUserId() {
+      if (!allowDemoUser) return null;
+      const stored = localStorage.getItem('demoUserId');
+      if (stored && stored.trim().length > 0) {
+        return stored.trim();
+      }
+      return 'demo';
+    }
+
+    function apiFetch(url, options = {}) {
+      const headers = Object.assign(
+        { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+        options.headers || {}
+      );
+      const initData = getTelegramInitData();
+      if (initData) {
+        headers['x-telegram-init-data'] = initData;
+      } else if (allowDemoUser) {
+        const demoUserId = getDemoUserId();
+        if (demoUserId) {
+          headers['x-demo-user-id'] = demoUserId;
+        }
+      }
+      return fetch(url, Object.assign({}, options, { headers }));
+    }
+
+    function getWebsocketUrl() {
+      const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      return protocol + '://' + window.location.host + '/ws';
+    }
+
+    function connectRealtime() {
+      if (realtimeState.reconnectTimer) {
+        clearTimeout(realtimeState.reconnectTimer);
+        realtimeState.reconnectTimer = null;
+      }
+      const url = getWebsocketUrl();
+      let socket;
+      try {
+        socket = new WebSocket(url);
+      } catch (error) {
+        scheduleRealtimeReconnect();
+        return;
+      }
+      realtimeState.socket = socket;
+      socket.addEventListener('open', () => {
+        realtimeState.reconnectDelay = 1000;
+        flushRealtimeQueue();
+        sendRealtimeAuth();
+        if (state.timers.list) {
+          clearInterval(state.timers.list);
+          state.timers.list = null;
+        }
+        if (state.timers.snapshot) {
+          clearInterval(state.timers.snapshot);
+          state.timers.snapshot = null;
+        }
+        if (state.timers.bids) {
+          clearInterval(state.timers.bids);
+          state.timers.bids = null;
+        }
+        if (state.currentAuction && state.currentAuction._id) {
+          watchAuction(state.currentAuction._id);
+        }
+      });
+      socket.addEventListener('message', (event) => {
+        handleRealtimeMessage(event.data);
+      });
+      socket.addEventListener('close', () => {
+        realtimeState.socket = null;
+        scheduleRealtimeReconnect();
+      });
+      socket.addEventListener('error', () => {
+        if (socket.readyState !== WebSocket.CLOSED) {
+          socket.close();
+        }
+      });
+    }
+
+    function scheduleRealtimeReconnect() {
+      if (realtimeState.reconnectTimer) return;
+      const delay = realtimeState.reconnectDelay;
+      realtimeState.reconnectTimer = setTimeout(() => {
+        realtimeState.reconnectTimer = null;
+        connectRealtime();
+      }, delay);
+      realtimeState.reconnectDelay = Math.min(realtimeState.reconnectDelay * 1.6, 30000);
+    }
+
+    function sendRealtime(payload) {
+      const message = JSON.stringify(payload);
+      const socket = realtimeState.socket;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(message);
+        return;
+      }
+      realtimeState.queue.push(message);
+    }
+
+    function flushRealtimeQueue() {
+      const socket = realtimeState.socket;
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      while (realtimeState.queue.length > 0) {
+        const message = realtimeState.queue.shift();
+        if (message) {
+          socket.send(message);
+        }
+      }
+    }
+
+    function sendRealtimeAuth() {
+      sendRealtime({
+        type: 'auth',
+        initData: getTelegramInitData(),
+        demoUserId: allowDemoUser ? getDemoUserId() : null
+      });
+    }
+
+    function watchAuction(auctionId) {
+      if (!auctionId) return;
+      realtimeState.watchingAuctionId = auctionId;
+      sendRealtime({ type: 'subscribe', auctionId: auctionId });
+    }
+
+    function unwatchAuction() {
+      if (!realtimeState.watchingAuctionId) return;
+      sendRealtime({ type: 'unsubscribe', auctionId: realtimeState.watchingAuctionId });
+      realtimeState.watchingAuctionId = null;
+    }
+
+    function isRealtimeConnected() {
+      return Boolean(
+        realtimeState.socket && realtimeState.socket.readyState === WebSocket.OPEN
+      );
+    }
+
+    function handleRealtimeMessage(raw) {
+      let message;
+      try {
+        message = JSON.parse(raw);
+      } catch (error) {
+        return;
+      }
+      if (!message || typeof message.type !== 'string') {
+        return;
+      }
+      if (message.type === 'auctions') {
+        if (Array.isArray(message.data)) {
+          state.auctions = message.data;
+          renderAuctions(state.auctions);
+        }
+        return;
+      }
+      if (message.type === 'auction_snapshot') {
+        if (
+          state.currentAuction &&
+          message.data &&
+          message.data.auctionId === state.currentAuction._id
+        ) {
+          applySnapshot(message.data);
+        }
+        return;
+      }
+      if (message.type === 'auction_bids') {
+        if (state.currentAuction && message.auctionId === state.currentAuction._id) {
+          renderBids(Array.isArray(message.data) ? message.data : []);
+        }
+        return;
+      }
+      if (message.type === 'error') {
+        console.warn('Realtime error:', message.message || message.code || message);
+      }
+    }
+
+    async function fetchSession() {
+      try {
+        const response = await apiFetch('/api/session');
+        if (!response.ok) return null;
+        const data = await response.json();
+        return data && data.user ? data.user : null;
+      } catch (error) {
+        console.warn('Failed to load session', error);
+        return null;
+      }
+    }
+
+    async function loadUser() {
+      const session = await fetchSession();
+      if (session && session.id) {
+        setUser(
+          {
+            id: String(session.id),
+            name: session.displayName || session.username || 'Telegram user'
+          },
+          session.source === 'demo' ? 'demo' : 'telegram'
+        );
+        return;
+      }
+      if (allowDemoUser) {
+        const demoUserId = getDemoUserId();
+        if (demoUserId) {
+          setUser({ id: demoUserId, name: 'Demo user' }, 'demo');
+          return;
+        }
+      }
+      clearUser();
+    }
+
+    function clearUser() {
+      state.currentUser = null;
+      state.authSource = 'none';
+      elements.userAvatar.textContent = 'TG';
+      elements.userName.textContent = 'Guest';
+      elements.userId.textContent = allowDemoUser
+        ? 'Connect via Telegram or set demo user'
+        : 'Connect via Telegram';
+      elements.userStatus.textContent = 'Guest';
+      elements.bidUserBadge.textContent = 'Guest';
+      elements.manualUserPanel.style.display = allowDemoUser ? 'grid' : 'none';
+      sendRealtimeAuth();
+    }
+
     function applyThemeParams(params) {
       if (!params || typeof params !== 'object') return;
       Object.entries(params).forEach(([key, value]) => {
@@ -1218,45 +2493,32 @@ function getDefaultHtml(): string {
             applyThemeParams(tg.themeParams || (tg.initDataUnsafe && tg.initDataUnsafe.theme_params) || {});
           });
         }
-        const user = tg.initDataUnsafe && tg.initDataUnsafe.user;
-        if (user) {
-          setUser({
-            id: String(user.id),
-            name: [user.first_name, user.last_name].filter(Boolean).join(' ')
-          });
-        }
       } catch (error) {
         console.warn('Telegram init failed', error);
       }
     }
 
-    function setUser(user) {
+    function setUser(user, source) {
       state.currentUser = user;
+      state.authSource = source;
       const initials = user.name ? user.name.slice(0, 2).toUpperCase() : 'TG';
       elements.userAvatar.textContent = initials;
       elements.userName.textContent = user.name || 'Telegram user';
       elements.userId.textContent = 'ID ' + user.id;
-      elements.userStatus.textContent = tg ? 'Telegram' : 'Demo';
+      elements.userStatus.textContent =
+        source === 'telegram' ? 'Telegram' : source === 'demo' ? 'Demo' : 'Guest';
       elements.bidUserBadge.textContent = user.name || 'User ' + user.id;
-      elements.manualUserPanel.style.display = tg ? 'none' : 'grid';
-      localStorage.setItem('demoUserId', user.id);
+      elements.manualUserPanel.style.display =
+        allowDemoUser && source !== 'telegram' ? 'grid' : 'none';
+      if (source === 'demo') {
+        localStorage.setItem('demoUserId', user.id);
+      }
+      sendRealtimeAuth();
       loadBalance();
     }
 
-    function resolveUserId() {
-      return state.currentUser ? state.currentUser.id : null;
-    }
-
-    function apiFetch(url, options = {}) {
-      const headers = Object.assign({ 'Content-Type': 'application/json' }, options.headers || {});
-      const userId = resolveUserId();
-      if (userId) {
-        headers['x-telegram-user-id'] = userId;
-      }
-      return fetch(url, Object.assign({}, options, { headers }));
-    }
-
     function startListTimer() {
+      if (isRealtimeConnected()) return;
       if (state.timers.list) return;
       state.timers.list = setInterval(loadAuctions, 12000);
     }
@@ -1339,8 +2601,11 @@ function getDefaultHtml(): string {
       }
       await refreshSnapshot();
       await loadBids();
-      state.timers.snapshot = setInterval(refreshSnapshot, 4000);
-      state.timers.bids = setInterval(loadBids, 4500);
+      watchAuction(auctionId);
+      if (!isRealtimeConnected()) {
+        state.timers.snapshot = setInterval(refreshSnapshot, 4000);
+        state.timers.bids = setInterval(loadBids, 4500);
+      }
     }
 
     function updateStatusChip(element, status) {
@@ -1348,18 +2613,23 @@ function getDefaultHtml(): string {
       if (status === 'live') element.classList.add('subtle');
     }
 
+    function applySnapshot(snapshot) {
+      if (!snapshot) return;
+      const roundIndex = snapshot.currentRoundIndex !== null ? snapshot.currentRoundIndex + 1 : '--';
+      elements.detailRound.textContent = roundIndex;
+      elements.detailLastBid.textContent = snapshot.lastBidAmount
+        ? snapshot.lastBidAmount + ' ' + (snapshot.currency || '')
+        : '--';
+      const endsIn = formatCountdown(snapshot.roundEffectiveEndAt, snapshot.serverTime);
+      elements.detailEnds.textContent = endsIn;
+    }
+
     async function refreshSnapshot() {
       if (!state.currentAuction) return;
       try {
         const response = await apiFetch('/api/auctions/' + state.currentAuction._id + '/snapshot');
         const snapshot = await response.json();
-        const roundIndex = snapshot.currentRoundIndex !== null ? snapshot.currentRoundIndex + 1 : '--';
-        elements.detailRound.textContent = roundIndex;
-        elements.detailLastBid.textContent = snapshot.lastBidAmount
-          ? snapshot.lastBidAmount + ' ' + (snapshot.currency || '')
-          : '--';
-        const endsIn = formatCountdown(snapshot.roundEffectiveEndAt, snapshot.serverTime);
-        elements.detailEnds.textContent = endsIn;
+        applySnapshot(snapshot);
       } catch (error) {
         elements.detailEnds.textContent = '--';
       }
@@ -1425,13 +2695,20 @@ function getDefaultHtml(): string {
     }
 
     async function loadBalance() {
-      const userId = resolveUserId();
-      if (!userId) {
-        elements.balanceNote.textContent = 'Set a user id to view balance.';
+      if (!state.currentUser) {
+        elements.balanceNote.textContent = allowDemoUser
+          ? 'Connect via Telegram or set a demo user.'
+          : 'Connect via Telegram to view balance.';
         return;
       }
       try {
         const response = await apiFetch('/api/balance?currency=' + (state.currentAuction?.currency || 'USDT'));
+        if (!response.ok) {
+          elements.balanceNote.textContent = response.status === 401
+            ? 'Authentication required.'
+            : 'Balance unavailable';
+          return;
+        }
         const balance = await response.json();
         elements.balanceAvailable.textContent = formatNumber(balance.available);
         elements.balanceHeld.textContent = formatNumber(balance.held);
@@ -1493,6 +2770,7 @@ function getDefaultHtml(): string {
       state.timers.snapshot = null;
       state.timers.bids = null;
       state.timers.list = null;
+      unwatchAuction();
     }
 
     elements.refreshAuctions.addEventListener('click', loadAuctions);
@@ -1505,7 +2783,8 @@ function getDefaultHtml(): string {
     elements.manualUserBtn.addEventListener('click', () => {
       const value = elements.manualUserInput.value.trim();
       if (!value) return;
-      setUser({ id: value, name: 'Demo user' });
+      if (!allowDemoUser) return;
+      setUser({ id: value, name: 'Demo user' }, 'demo');
       elements.manualUserInput.value = '';
     });
     elements.refreshBalance.addEventListener('click', loadBalance);
@@ -1534,14 +2813,13 @@ function getDefaultHtml(): string {
       });
     });
 
-    const storedUserId = localStorage.getItem('demoUserId');
-    if (storedUserId && !tg) {
-      setUser({ id: storedUserId, name: 'Demo user' });
-    }
-
     initTelegram();
-    loadAuctions();
-    startListTimer();
+    connectRealtime();
+    clearUser();
+    loadUser().then(() => {
+      loadAuctions();
+      startListTimer();
+    });
   </script>
 </body>
 </html>`;

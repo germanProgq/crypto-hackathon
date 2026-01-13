@@ -22,6 +22,7 @@ import {
 } from "../auction-engine/auctionCache.js";
 import { createAuctionRepository } from "../auction-engine/auctionStore.js";
 import { deriveAuctionStatus, evaluateRoundTransition } from "../auction-engine/roundStateMachine.js";
+import { publishRealtimeEvent, toRealtimeSnapshot } from "../../shared/realtime/events.js";
 import type {
   AuctionDocument,
   AuctionRoundConfig,
@@ -152,7 +153,7 @@ async function runSchedulerTick(
     }
 
     const cacheAuction = statusUpdated ? { ...auction, status: nextStatus } : auction;
-    await updateAuctionCaches(
+    const snapshot = await updateAuctionCaches(
       deps.redis,
       repository,
       cacheAuction,
@@ -160,6 +161,28 @@ async function runSchedulerTick(
       entry.updatedStates,
       now
     );
+    if (statusChanged) {
+      try {
+        await publishRealtimeEvent(deps.redis, {
+          type: "auction.list.updated",
+          auctionId: auction._id.toHexString(),
+          reason: "status_changed"
+        });
+      } catch (error) {
+        deps.logger.warn({ err: error }, "Failed to publish auction list update");
+      }
+    }
+    if (snapshot) {
+      try {
+        await publishRealtimeEvent(deps.redis, {
+          type: "auction.snapshot.updated",
+          auctionId: snapshot.auctionId,
+          snapshot: toRealtimeSnapshot({ ...snapshot, serverTime: now })
+        });
+      } catch (error) {
+        deps.logger.warn({ err: error }, "Failed to publish auction snapshot update");
+      }
+    }
   }
 
   const nextTransitionAt = await repository.getNextTransitionAt();
@@ -176,9 +199,9 @@ async function updateAuctionCaches(
   roundStates: AuctionRoundStateDocument[],
   updatedStates: AuctionRoundStateDocument[],
   now: Date
-): Promise<void> {
+): Promise<AuctionSnapshotCache | null> {
   if (updatedStates.length === 0) {
-    return;
+    return null;
   }
 
   const roundConfigMap = new Map<number, AuctionRoundConfig>(
@@ -267,4 +290,5 @@ async function updateAuctionCaches(
       primeAuctionSnapshotCache(snapshotToPrime);
     }
   }
+  return snapshotToPrime;
 }

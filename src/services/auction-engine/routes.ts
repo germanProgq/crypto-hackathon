@@ -25,6 +25,7 @@ import {
 } from "./auctionCache.js";
 import { BidError, createBidService } from "./bidService.js";
 import { createAuctionRepository } from "./auctionStore.js";
+import { publishRealtimeEvent } from "../../shared/realtime/events.js";
 
 type BidAuditPayload = BidDocument["audit"];
 
@@ -190,6 +191,15 @@ export async function registerAuctionRoutes(
         await invalidateActiveAuctionListCache(deps.redis);
       } catch (error) {
         deps.logger.warn({ err: error }, "Failed to invalidate auction list cache");
+      }
+      try {
+        await publishRealtimeEvent(deps.redis, {
+          type: "auction.list.updated",
+          auctionId: created._id.toHexString(),
+          reason: "created"
+        });
+      } catch (error) {
+        deps.logger.warn({ err: error }, "Failed to publish auction list update");
       }
 
       return reply.code(201).send({ auction: serializeAuction(created) });

@@ -2,7 +2,7 @@
 import { createPrivateKey, createPublicKey, sign, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { loadConfig } from "../../shared/config.js";
+import { loadConfig, type AppConfig } from "../../shared/config.js";
 import { registerHealthRoutes } from "../../shared/http/health.js";
 import { createServer } from "../../shared/http/server.js";
 import { createLogger } from "../../shared/logger.js";
@@ -18,7 +18,14 @@ const payloadSchema = z.object({
   memo: z.string().min(1).optional()
 });
 
+const kmsResponseSchema = z.object({
+  signature: z.string().min(1),
+  publicKey: z.string().min(1),
+  algorithm: z.literal("ed25519")
+});
+
 const localOnlyIps = new Set(["127.0.0.1", "::1", "0:0:0:0:0:0:0:1"]);
+const kmsTimeoutMs = 8000;
 
 const config = loadConfig({
   serviceName: "signer",
@@ -29,9 +36,7 @@ const config = loadConfig({
   }
 });
 const logger = createLogger(config);
-const privateKey = loadPrivateKey(config.signer.privateKey);
-const publicKey = createPublicKey(privateKey).export({ type: "spki", format: "der" });
-const publicKeyBase64 = Buffer.from(publicKey).toString("base64");
+const keyring = buildSigningKeyring(config.signer);
 
 const app = createServer({ logger, config });
 
@@ -73,7 +78,7 @@ app.post("/signer/sign", async (request, reply) => {
   }
 
   try {
-    const signedPayload = signPayload(payload);
+    const signedPayload = await signPayload(payload, keyring);
     return reply.send({ signedPayload });
   } catch (error) {
     return handleSignerError(reply, error);
@@ -109,15 +114,26 @@ async function start(): Promise<void> {
   }
 }
 
-function signPayload(payload: WithdrawalSigningPayload) {
+async function signPayload(payload: WithdrawalSigningPayload, ring: SigningKeyring) {
   const canonical = canonicalize(payload);
-  const signature = sign(null, Buffer.from(canonical, "utf8"), privateKey);
+  const signatures = await Promise.all(
+    ring.signers.map((signer) => signer.sign(canonical))
+  );
+  if (signatures.length < ring.threshold) {
+    throw new Error("Signer quorum not met.");
+  }
+  const primary = signatures[0];
+  if (!primary) {
+    throw new Error("Signer quorum not met.");
+  }
+  const cosignatures = signatures.slice(1);
   return {
     payload,
-    signature: signature.toString("base64"),
-    publicKey: publicKeyBase64,
-    algorithm: "ed25519" as const,
-    signedAt: new Date().toISOString()
+    signature: primary.signature,
+    publicKey: primary.publicKey,
+    algorithm: primary.algorithm,
+    signedAt: new Date().toISOString(),
+    cosignatures: cosignatures.length > 0 ? cosignatures : undefined
   };
 }
 
@@ -141,6 +157,113 @@ function loadPrivateKey(value: string) {
     return createPrivateKey(value);
   }
   return createPrivateKey({ key: Buffer.from(value, "base64"), format: "der", type: "pkcs8" });
+}
+
+type SignerConfig = AppConfig["signer"];
+
+type SignatureRecord = {
+  signature: string;
+  publicKey: string;
+  algorithm: "ed25519";
+};
+
+type SigningKeyring = {
+  signers: KeySigner[];
+  threshold: number;
+};
+
+type KeySigner = {
+  id: string;
+  sign: (canonical: string) => Promise<SignatureRecord>;
+};
+
+function buildSigningKeyring(cfg: SignerConfig): SigningKeyring {
+  const signers: KeySigner[] = [];
+  const primaryKey = cfg.privateKey.trim();
+  if (primaryKey) {
+    signers.push(createLocalSigner(primaryKey, "local-0"));
+  }
+
+  const extraKeys = cfg.privateKeys.map((entry) => entry.trim()).filter(Boolean);
+  for (const [index, key] of extraKeys.entries()) {
+    signers.push(createLocalSigner(key, `local-${index + 1}`));
+  }
+
+  if (cfg.kmsUrl) {
+    signers.push(
+      createKmsSigner({
+        url: cfg.kmsUrl,
+        keyId: cfg.kmsKeyId,
+        token: cfg.kmsToken
+      })
+    );
+  }
+
+  return {
+    signers,
+    threshold: Math.max(1, cfg.multisigThreshold)
+  };
+}
+
+function createLocalSigner(keyMaterial: string, id: string): KeySigner {
+  const privateKey = loadPrivateKey(keyMaterial);
+  const publicKey = createPublicKey(privateKey).export({ type: "spki", format: "der" });
+  const publicKeyBase64 = Buffer.from(publicKey).toString("base64");
+  return {
+    id,
+    async sign(canonical: string): Promise<SignatureRecord> {
+      const signature = sign(null, Buffer.from(canonical, "utf8"), privateKey);
+      return {
+        signature: signature.toString("base64"),
+        publicKey: publicKeyBase64,
+        algorithm: "ed25519"
+      };
+    }
+  };
+}
+
+function createKmsSigner(options: {
+  url: string;
+  keyId?: string;
+  token?: string;
+}): KeySigner {
+  const baseUrl = normalizeBaseUrl(options.url);
+  const id = options.keyId ? `kms:${options.keyId}` : "kms";
+  return {
+    id,
+    async sign(canonical: string): Promise<SignatureRecord> {
+      const headers: Record<string, string> = {
+        "content-type": "application/json"
+      };
+      if (options.token) {
+        headers["x-kms-token"] = options.token;
+      }
+      const response = await fetchJson(`${baseUrl}/sign`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ payload: canonical, keyId: options.keyId })
+      });
+      return kmsResponseSchema.parse(response);
+    }
+  };
+}
+
+function normalizeBaseUrl(value: string): string {
+  return value.endsWith("/") ? value.slice(0, -1) : value;
+}
+
+async function fetchJson(url: string, options: RequestInit): Promise<unknown> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), kmsTimeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`KMS signer request failed with ${response.status}.`);
+    }
+    return await response.json();
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function authorizeSigner(request: FastifyRequest, cfg: typeof config): boolean {

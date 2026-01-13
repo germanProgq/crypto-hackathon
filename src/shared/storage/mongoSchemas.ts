@@ -243,7 +243,7 @@ export interface WithdrawalRequestDocument {
   updatedAt: Date;
 }
 
-export type CryptoWalletStrategy = "address_pool" | "memo_tag";
+export type CryptoWalletStrategy = "address_pool" | "memo_tag" | "address_per_user";
 export type CryptoDepositStatus = "observed" | "confirming" | "confirmed" | "credited";
 export type CryptoWithdrawalStatus =
   | "requested"
@@ -257,6 +257,7 @@ export interface CryptoWalletAddressDocument {
   currency: string;
   address: string;
   memo?: string;
+  derivationPath?: string;
   strategy: CryptoWalletStrategy;
   createdAt: Date;
   updatedAt: Date;
@@ -619,7 +620,8 @@ const cryptoWalletAddressValidator: Document = {
       currency: { bsonType: "string" },
       address: { bsonType: "string" },
       memo: { bsonType: "string" },
-      strategy: { bsonType: "string", enum: ["address_pool", "memo_tag"] },
+      derivationPath: { bsonType: "string" },
+      strategy: { bsonType: "string", enum: ["address_pool", "memo_tag", "address_per_user"] },
       createdAt: { bsonType: "date" },
       updatedAt: { bsonType: "date" }
     }

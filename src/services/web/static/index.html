@@ -5,28 +5,38 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Gift Auctions</title>
   <style>
+    @import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&display=swap");
     /* === BASE STYLES === */
     :root {
-      color-scheme: light dark;
-      --tg-bg: var(--tg-theme-bg-color, #0a0a0a);
-      --tg-text: var(--tg-theme-text-color, #ffffff);
-      --tg-hint: var(--tg-theme-hint-color, #8e8e93);
-      --tg-accent: var(--tg-theme-button-color, #2aabee);
-      --tg-accent-text: var(--tg-theme-button-text-color, #ffffff);
-      --tg-card: var(--tg-theme-secondary-bg-color, #1c1c1e);
-      --tg-section: var(--tg-theme-section-bg-color, #141414);
-      --tg-divider: var(--tg-theme-section-separator-color, #2c2c2e);
-      --tg-header: var(--tg-theme-header-bg-color, #1c1c1e);
-      --radius-sm: 12px;
-      --radius-md: 16px;
-      --radius-lg: 20px;
-      --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.1);
-      --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.15);
-      --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.2);
-      --gradient-primary: linear-gradient(135deg, #2aabee 0%, #1a8ad1 100%);
-      --gradient-success: linear-gradient(135deg, #34c759 0%, #2aa746 100%);
-      --gradient-danger: linear-gradient(135deg, #ff3b30 0%, #d93025 100%);
-      --gradient-card: linear-gradient(145deg, rgba(28, 28, 30, 0.95), rgba(28, 28, 30, 0.8));
+      color-scheme: dark;
+      --app-bg: #0f1317;
+      --app-surface: #1a2027;
+      --app-surface-2: #232a33;
+      --app-surface-3: #2b333d;
+      --app-text: #f1f5f9;
+      --app-hint: #a5b1c2;
+      --app-divider: #2f3944;
+      --app-accent: #a6b8cc;
+      --app-accent-strong: #e7eef8;
+      --tg-bg: var(--app-bg);
+      --tg-text: var(--app-text);
+      --tg-hint: var(--app-hint);
+      --tg-accent: var(--app-accent);
+      --tg-accent-text: #0f1317;
+      --tg-card: var(--app-surface);
+      --tg-section: var(--app-surface);
+      --tg-divider: var(--app-divider);
+      --tg-header: transparent;
+      --radius-sm: 14px;
+      --radius-md: 18px;
+      --radius-lg: 24px;
+      --shadow-sm: 0 8px 24px rgba(0, 0, 0, 0.25);
+      --shadow-md: 0 18px 40px rgba(0, 0, 0, 0.32);
+      --shadow-lg: 0 30px 60px rgba(0, 0, 0, 0.38);
+      --gradient-primary: linear-gradient(135deg, #a6b8cc 0%, #7f93aa 100%);
+      --gradient-success: linear-gradient(135deg, #3dd78a 0%, #2db576 100%);
+      --gradient-danger: linear-gradient(135deg, #ff7b7b 0%, #d85b5b 100%);
+      --gradient-card: linear-gradient(145deg, rgba(35, 42, 51, 0.96), rgba(26, 32, 39, 0.96));
     }
 
     * {
@@ -36,31 +46,25 @@
     }
 
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+      font-family: "Manrope", "SF Pro Text", -apple-system, "Segoe UI", sans-serif;
       background: var(--tg-bg);
       color: var(--tg-text);
       min-height: 100vh;
-      line-height: 1.5;
+      line-height: 1.4;
       -webkit-font-smoothing: antialiased;
       overflow-x: hidden;
     }
 
-    /* === ENHANCED GRADIENT BACKGROUND === */
+    /* === ATMOSPHERIC BACKGROUND === */
     body::before {
       content: "";
       position: fixed;
       inset: 0;
       background:
-        radial-gradient(800px 600px at 10% 0%, rgba(42, 171, 238, 0.15), transparent 60%),
-        radial-gradient(600px 500px at 90% 100%, rgba(52, 199, 89, 0.12), transparent 60%),
-        radial-gradient(1000px 800px at 50% 50%, rgba(255, 59, 48, 0.08), transparent 70%);
+        radial-gradient(700px 500px at 20% -10%, rgba(255, 255, 255, 0.06), transparent 60%),
+        radial-gradient(600px 420px at 85% 15%, rgba(147, 168, 192, 0.14), transparent 60%),
+        linear-gradient(180deg, rgba(12, 15, 19, 0.9), rgba(15, 19, 23, 1));
       z-index: -1;
-      animation: gradient-shift 20s ease infinite;
-    }
-
-    @keyframes gradient-shift {
-      0%, 100% { opacity: 0.4; }
-      50% { opacity: 0.6; }
     }
 
     /* === APP CONTAINER === */
@@ -76,38 +80,105 @@
       position: sticky;
       top: 0;
       z-index: 100;
-      padding: 16px;
-      background: rgba(28, 28, 30, 0.95);
-      backdrop-filter: blur(20px) saturate(180%);
-      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 18px 18px 12px;
+      background: rgba(15, 19, 23, 0.86);
+      backdrop-filter: blur(16px) saturate(160%);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
       display: flex;
       align-items: center;
       justify-content: space-between;
-    }
-
-    .header-brand {
-      display: flex;
-      align-items: center;
       gap: 12px;
     }
 
-    .header-logo {
-      width: 40px;
-      height: 40px;
-      border-radius: 50%;
-      background: var(--gradient-primary);
-      display: grid;
-      place-items: center;
-      font-size: 20px;
-      font-weight: 700;
-      color: white;
-      box-shadow: 0 4px 12px rgba(42, 171, 238, 0.4);
+    .header-left,
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      position: relative;
+      z-index: 1;
+    }
+
+    .header-left {
+      justify-content: flex-start;
+    }
+
+    .header-right {
+      justify-content: flex-end;
+    }
+
+    .header-center {
+      display: flex;
+      justify-content: center;
+      min-width: 0;
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      max-width: calc(100% - 180px);
+      z-index: 0;
+      pointer-events: none;
     }
 
     .header-title {
-      font-size: 17px;
-      font-weight: 600;
+      font-size: 16px;
+      font-weight: 700;
       letter-spacing: -0.3px;
+      color: var(--tg-text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      text-align: center;
+    }
+
+    .header-avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: var(--app-surface-2);
+      border: 1px solid var(--app-divider);
+      display: grid;
+      place-items: center;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      color: var(--tg-text);
+    }
+
+    .header-balance {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      appearance: none;
+      font: inherit;
+      background: var(--app-surface-2);
+      border: 1px solid var(--app-divider);
+      color: var(--tg-text);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .header-balance:active {
+      transform: scale(0.98);
+      background: var(--app-surface-3);
+    }
+
+    .header-balance-icon {
+      font-size: 14px;
+    }
+
+    .header-balance-amount {
+      font-variant-numeric: tabular-nums;
+    }
+
+    .header-balance-currency {
+      font-size: 11px;
+      color: var(--tg-hint);
+      font-weight: 600;
     }
 
     .header-badge {
@@ -120,6 +191,25 @@
       color: #34c759;
       font-size: 13px;
       font-weight: 600;
+    }
+
+    .header-action {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: 1px solid var(--app-divider);
+      background: transparent;
+      color: var(--tg-text);
+      font-size: 20px;
+      font-weight: 600;
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .header-action:active {
+      transform: scale(0.98);
     }
 
     .status-dot {
@@ -135,134 +225,208 @@
       50% { opacity: 0.6; transform: scale(1.1); }
     }
 
-    /* === BALANCE CARD === */
-    .balance-card {
-      margin: 16px 16px 24px;
-      padding: 24px 20px;
-      border-radius: var(--radius-lg);
-      background: var(--gradient-card);
-      backdrop-filter: blur(20px);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      box-shadow: var(--shadow-lg);
-      position: relative;
-      overflow: hidden;
+    /* === HOME === */
+    .wallet-hero {
+      padding: 24px 12px 10px;
+      text-align: center;
     }
 
-    .balance-card::before {
-      content: "";
-      position: absolute;
-      top: 0;
-      right: 0;
-      width: 200px;
-      height: 200px;
-      background: radial-gradient(circle, rgba(42, 171, 238, 0.2), transparent 70%);
-      border-radius: 50%;
-      transform: translate(50%, -50%);
-    }
-
-    .balance-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 16px;
-    }
-
-    .balance-label {
-      font-size: 15px;
+    .wallet-address {
+      font-size: 16px;
       color: var(--tg-hint);
       font-weight: 500;
     }
 
-    .balance-icon {
-      width: 32px;
-      height: 32px;
-      border-radius: 50%;
-      background: rgba(42, 171, 238, 0.2);
-      display: grid;
-      place-items: center;
-      font-size: 18px;
-    }
-
-    .balance-amount {
-      font-size: 40px;
-      font-weight: 700;
-      letter-spacing: -1px;
-      margin-bottom: 4px;
+    .wallet-balance {
+      margin-top: 14px;
       display: flex;
       align-items: baseline;
+      justify-content: center;
       gap: 8px;
+      font-size: 58px;
+      font-weight: 700;
+      letter-spacing: -1px;
     }
 
-    .balance-currency {
-      font-size: 24px;
+    .wallet-currency {
+      font-size: 34px;
+      color: var(--app-accent-strong);
+      opacity: 0.75;
+    }
+
+    .wallet-subline {
+      font-size: 14px;
       color: var(--tg-hint);
-      font-weight: 600;
+      margin-top: 6px;
     }
 
-    .balance-usd {
-      font-size: 15px;
-      color: var(--tg-hint);
-      margin-bottom: 20px;
-    }
-
-    .balance-actions {
+    .wallet-actions {
       display: grid;
       grid-template-columns: repeat(2, 1fr);
-      gap: 12px;
+      gap: 14px;
+      margin: 24px 0 10px;
     }
 
-    .balance-btn {
+    .action-tile {
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 8px;
-      padding: 12px 8px;
-      border-radius: var(--radius-sm);
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      gap: 10px;
+      padding: 18px 10px;
+      border-radius: 24px;
+      background: #2b3138;
+      border: 1px solid #333b45;
       color: var(--tg-text);
-      font-size: 13px;
-      font-weight: 500;
+      font-size: 15px;
+      font-weight: 600;
       cursor: pointer;
       transition: all 0.2s ease;
+      box-shadow: var(--shadow-sm);
     }
 
-    .balance-btn:active {
-      transform: scale(0.95);
-      background: rgba(255, 255, 255, 0.1);
+    .action-tile:active {
+      transform: translateY(1px);
+      background: #323a44;
     }
 
-    .balance-btn-icon {
-      width: 36px;
-      height: 36px;
+    .action-icon {
+      width: 34px;
+      height: 34px;
       border-radius: 50%;
-      background: var(--gradient-primary);
+      border: none;
+      background: #f1f5f9;
+      color: #11161b;
       display: grid;
       place-items: center;
       font-size: 18px;
+      font-weight: 700;
+    }
+
+    .home-bids {
+      margin-top: 24px;
+    }
+
+    .home-auctions {
+      margin-top: 24px;
+    }
+
+    #home-empty-state {
+      margin-top: 24px;
+    }
+
+    .bids-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .bid-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: var(--app-surface-2);
+      border: 1px solid var(--app-divider);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .bid-main {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .bid-title {
+      font-size: 15px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .bid-meta {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--tg-hint);
+    }
+
+    .bid-status {
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .bid-status.live {
+      background: rgba(61, 215, 138, 0.18);
+      color: #3dd78a;
+    }
+
+    .bid-status.draft {
+      background: rgba(255, 210, 86, 0.18);
+      color: #ffd256;
+    }
+
+    .bid-status.closed {
+      background: rgba(138, 147, 158, 0.2);
+      color: #8a939e;
+    }
+
+    .bid-amount {
+      font-size: 16px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .bid-amount span {
+      color: var(--tg-hint);
+      font-weight: 600;
+      margin-left: 4px;
+      font-size: 12px;
     }
 
     /* === SECTION === */
     .section {
-      padding: 0 16px 16px;
+      padding: 0 18px 16px;
+    }
+
+    #home-section,
+    #auctions-section {
+      padding-top: 10px;
+    }
+
+    #create-section {
+      padding-top: 0;
+      padding-bottom: 0;
+      min-height: calc(100vh - 140px);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
     }
 
     .section-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 12px;
+      margin-bottom: 14px;
     }
 
     .section-title {
-      font-size: 20px;
+      font-size: 18px;
       font-weight: 700;
-      letter-spacing: -0.5px;
+      letter-spacing: -0.4px;
     }
 
     .section-link {
-      font-size: 15px;
-      color: var(--tg-accent);
+      font-size: 13px;
+      color: var(--app-accent);
       font-weight: 600;
       text-decoration: none;
       cursor: pointer;
@@ -274,13 +438,21 @@
       gap: 12px;
     }
 
+    #auctions-list.is-empty,
+    #auctions-list.is-loading,
+    #auctions-list.is-error {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: calc(100vh - 160px);
+    }
+
     .auction-card {
       padding: 16px;
       border-radius: var(--radius-md);
-      background: var(--gradient-card);
-      backdrop-filter: blur(20px);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      box-shadow: var(--shadow-md);
+      background: var(--app-surface-2);
+      border: 1px solid var(--app-divider);
+      box-shadow: var(--shadow-sm);
       cursor: pointer;
       transition: all 0.2s ease;
       position: relative;
@@ -291,7 +463,7 @@
       content: "";
       position: absolute;
       inset: 0;
-      background: linear-gradient(135deg, rgba(42, 171, 238, 0.1), transparent);
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.06), transparent);
       opacity: 0;
       transition: opacity 0.2s ease;
     }
@@ -315,11 +487,11 @@
       width: 48px;
       height: 48px;
       border-radius: var(--radius-sm);
-      background: var(--gradient-primary);
+      background: var(--app-surface-3);
+      border: 1px solid var(--app-divider);
       display: grid;
       place-items: center;
       font-size: 24px;
-      box-shadow: 0 4px 12px rgba(42, 171, 238, 0.3);
     }
 
     .auction-status {
@@ -332,18 +504,18 @@
     }
 
     .auction-status.live {
-      background: rgba(52, 199, 89, 0.2);
-      color: #34c759;
+      background: rgba(61, 215, 138, 0.18);
+      color: #3dd78a;
     }
 
     .auction-status.draft {
-      background: rgba(255, 159, 10, 0.2);
-      color: #ff9f0a;
+      background: rgba(255, 210, 86, 0.18);
+      color: #ffd256;
     }
 
     .auction-status.closed {
-      background: rgba(142, 142, 147, 0.2);
-      color: #8e8e93;
+      background: rgba(138, 147, 158, 0.2);
+      color: #8a939e;
     }
 
     .auction-title {
@@ -418,13 +590,13 @@
       bottom: 0;
       left: 0;
       right: 0;
-      padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
-      background: rgba(28, 28, 30, 0.95);
-      backdrop-filter: blur(20px) saturate(180%);
-      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+      background: rgba(15, 19, 23, 0.92);
+      backdrop-filter: blur(18px) saturate(160%);
+      border-top: 1px solid var(--app-divider);
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 4px;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
       z-index: 100;
     }
 
@@ -433,7 +605,7 @@
       flex-direction: column;
       align-items: center;
       gap: 4px;
-      padding: 8px;
+      padding: 8px 6px;
       border-radius: var(--radius-sm);
       background: transparent;
       border: none;
@@ -445,12 +617,12 @@
     }
 
     .nav-btn.active {
-      color: var(--tg-accent);
-      background: rgba(42, 171, 238, 0.1);
+      color: var(--tg-text);
+      background: var(--app-surface-2);
     }
 
     .nav-btn-icon {
-      font-size: 24px;
+      font-size: 22px;
     }
 
     /* === BUTTONS === */
@@ -459,7 +631,9 @@
       border-radius: var(--radius-md);
       font-size: 16px;
       font-weight: 600;
-      border: none;
+      border: 1px solid var(--app-divider);
+      background: var(--app-surface-2);
+      color: var(--tg-text);
       cursor: pointer;
       transition: all 0.2s ease;
       display: inline-flex;
@@ -468,14 +642,20 @@
       gap: 8px;
     }
 
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
     .btn-primary {
-      background: var(--gradient-primary);
-      color: var(--tg-accent-text);
-      box-shadow: 0 4px 12px rgba(42, 171, 238, 0.3);
+      background: var(--app-accent-strong);
+      color: #0f1317;
+      border-color: transparent;
+      box-shadow: var(--shadow-sm);
     }
 
     .btn-primary:active {
-      transform: scale(0.98);
+      transform: scale(0.99);
     }
 
     /* === UTILITY === */
@@ -503,8 +683,8 @@
     .spinner {
       width: 40px;
       height: 40px;
-      border: 3px solid rgba(255, 255, 255, 0.1);
-      border-top-color: var(--tg-accent);
+      border: 3px solid rgba(255, 255, 255, 0.08);
+      border-top-color: var(--app-accent);
       border-radius: 50%;
       animation: spin 0.8s linear infinite;
     }
@@ -535,6 +715,337 @@
       font-size: 15px;
       color: var(--tg-hint);
     }
+
+    /* === CREATE FORM === */
+    .create-form {
+      display: grid;
+      gap: 16px;
+    }
+
+    .wizard-header {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+    }
+
+    .wizard-step {
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: var(--app-surface-2);
+      border: 1px solid var(--app-divider);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--tg-hint);
+      margin-left: auto;
+      white-space: nowrap;
+    }
+
+    .onboard-card {
+      padding: 16px;
+      border-radius: 22px;
+      background: var(--app-surface-2);
+      border: 1px solid var(--app-divider);
+      box-shadow: var(--shadow-sm);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .onboard-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .onboard-step {
+      width: 34px;
+      height: 34px;
+      border-radius: 12px;
+      border: 1px solid var(--app-divider);
+      background: var(--app-surface-3);
+      display: grid;
+      place-items: center;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      color: var(--tg-hint);
+    }
+
+    .onboard-title {
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .onboard-subtitle {
+      font-size: 12px;
+      color: var(--tg-hint);
+      margin-top: 2px;
+    }
+
+    .onboard-body {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .wizard-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 4px;
+    }
+
+    .wizard-buttons {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .wizard-buttons .btn {
+      flex: 1;
+      min-width: 140px;
+    }
+
+    .form-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .form-grid.two-col {
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    }
+
+    .input-textarea {
+      min-height: 90px;
+      resize: vertical;
+    }
+
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .toggle-input {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--app-accent);
+    }
+
+    .toggle-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--tg-text);
+    }
+
+    .create-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .create-actions .btn {
+      flex: 1;
+      min-width: 140px;
+    }
+
+    .form-note {
+      font-size: 13px;
+      color: var(--tg-hint);
+    }
+
+    .form-note.success {
+      color: #34c759;
+    }
+
+    .form-note.error {
+      color: #ff6b61;
+    }
+
+    /* === MODALS === */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(8, 10, 12, 0.75);
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      z-index: 200;
+    }
+
+    .modal-card {
+      width: min(440px, 100%);
+      max-height: 85vh;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      padding: 20px;
+      border-radius: var(--radius-lg);
+      background: var(--app-surface-2);
+      border: 1px solid var(--app-divider);
+      box-shadow: var(--shadow-lg);
+    }
+
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .modal-title {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+    }
+
+    .modal-subtitle {
+      font-size: 13px;
+      color: var(--tg-hint);
+      margin-top: 2px;
+    }
+
+    .modal-body {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+
+    .modal-actions {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+
+    .icon-btn {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      border: 1px solid var(--app-divider);
+      background: var(--app-surface-3);
+      color: var(--tg-text);
+      font-size: 16px;
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+    }
+
+    .field-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .field-label {
+      font-size: 13px;
+      color: var(--tg-hint);
+      font-weight: 600;
+    }
+
+    .field-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .field-value {
+      flex: 1;
+      padding: 10px 12px;
+      border-radius: var(--radius-sm);
+      background: var(--app-surface-3);
+      border: 1px solid var(--app-divider);
+      font-size: 13px;
+      word-break: break-all;
+      font-family: "SF Mono", "Menlo", "Consolas", "Liberation Mono", monospace;
+    }
+
+    .field-hint {
+      font-size: 12px;
+      color: var(--tg-hint);
+      line-height: 1.4;
+    }
+
+    .input {
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--app-divider);
+      background: var(--app-surface-3);
+      color: var(--tg-text);
+      font-size: 15px;
+    }
+
+    .input:focus {
+      outline: none;
+      border-color: var(--app-accent);
+      box-shadow: 0 0 0 2px rgba(166, 184, 204, 0.25);
+    }
+
+    .btn-secondary {
+      background: var(--app-surface-2);
+      color: var(--tg-text);
+      border: 1px solid var(--app-divider);
+    }
+
+    .btn-secondary:active {
+      transform: scale(0.99);
+      background: var(--app-surface-3);
+    }
+
+    .btn-small {
+      padding: 8px 12px;
+      font-size: 13px;
+      border-radius: 10px;
+    }
+
+    .form-error {
+      padding: 10px 12px;
+      border-radius: var(--radius-sm);
+      background: rgba(255, 123, 123, 0.12);
+      color: #ff9a9a;
+      font-size: 13px;
+      border: 1px solid rgba(255, 123, 123, 0.25);
+    }
+
+    .result-title {
+      font-size: 17px;
+      font-weight: 700;
+    }
+
+    .result-text {
+      font-size: 14px;
+      color: var(--tg-hint);
+    }
+
+    .result-notes {
+      padding: 12px;
+      border-radius: var(--radius-sm);
+      background: var(--app-surface-3);
+      border: 1px solid var(--app-divider);
+    }
+
+    .result-notes-title {
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 6px;
+      color: var(--tg-hint);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .result-notes-list {
+      display: grid;
+      gap: 6px;
+      font-size: 13px;
+    }
+
+    .modal-open {
+      overflow: hidden;
+    }
   </style>
   <script id="i18n-data" type="application/json">__I18N_PAYLOAD__</script>
 </head>
@@ -542,51 +1053,92 @@
   <div class="app">
     <!-- HEADER -->
     <header class="header">
-      <div class="header-brand">
-        <div class="header-logo">🎁</div>
-        <div class="header-title" data-i18n="web.app.title">Gift Auctions</div>
+      <div class="header-left">
+        <div class="header-avatar" id="header-avatar">GA</div>
       </div>
-      <div class="header-badge">
-        <span class="status-dot"></span>
-        <span data-i18n="web.app.liveBadge">Live</span>
+      <div class="header-center">
+        <div class="header-title hidden" id="header-title"></div>
+      </div>
+      <div class="header-right">
+        <button
+          class="header-action"
+          id="header-create"
+          type="button"
+          onclick="switchTab('create')"
+          aria-label="Create auction"
+        >
+          +
+        </button>
+        <button
+          class="header-balance hidden"
+          id="header-balance"
+          type="button"
+          onclick="switchTab('home')"
+          aria-label="Balance"
+        >
+          <span class="header-balance-icon">💰</span>
+          <span class="header-balance-amount" id="header-balance-amount">0.00</span>
+          <span class="header-balance-currency" id="header-balance-currency">USDT</span>
+        </button>
       </div>
     </header>
 
-    <!-- BALANCE CARD -->
-    <div class="balance-card">
-      <div class="balance-header">
-        <span class="balance-label" data-i18n="web.balance.totalLabel">Общий баланс</span>
-        <div class="balance-icon">👁</div>
+    <!-- HOME SECTION -->
+    <section class="section" id="home-section">
+      <div class="wallet-hero">
+        <div class="wallet-address" id="wallet-address">
+          My address is —
+        </div>
+        <div class="wallet-balance">
+          <span class="wallet-currency" id="balanceCurrency">$</span>
+          <span id="total-balance">0.00</span>
+        </div>
+        <div class="wallet-subline" id="balanceAvailableLine">Available: --</div>
       </div>
-      <div class="balance-amount">
-        <span id="total-balance">0</span>
-        <span class="balance-currency" id="balanceCurrency">USD</span>
-      </div>
-      <div class="balance-usd" id="balanceAvailableLine">Available: --</div>
-      <div class="balance-actions">
-        <button class="balance-btn" onclick="handleDeposit()">
-          <div class="balance-btn-icon">↓</div>
-          <span data-i18n="web.balance.actions.deposit">Пополнить</span>
+      <div class="wallet-actions">
+        <button class="action-tile" onclick="handleDeposit()">
+          <span class="action-icon">+</span>
+          <span data-i18n="web.balance.actions.deposit">Deposit</span>
         </button>
-        <button class="balance-btn" onclick="handleWithdraw()">
-          <div class="balance-btn-icon">↑</div>
-          <span data-i18n="web.balance.actions.withdraw">Вывести</span>
+        <button class="action-tile" onclick="handleWithdraw()">
+          <span class="action-icon">↑</span>
+          <span data-i18n="web.balance.actions.withdraw">Withdraw</span>
         </button>
       </div>
-    </div>
-
-    <!-- TABS -->
-    <div class="tabs">
-      <div class="tab active" onclick="switchTab('auctions')">🔨 <span data-i18n="web.tab.auctions">Аукционы</span></div>
-      <div class="tab" onclick="switchTab('create')">➕ <span data-i18n="web.tab.create">Создать</span></div>
-    </div>
+      <div class="empty-state hidden" id="home-empty-state">
+        <div class="empty-icon">✨</div>
+        <div class="empty-title" data-i18n="web.home.empty.title">Nothing here yet</div>
+        <div class="empty-text" data-i18n="web.home.empty.body">
+          Auctions and bids will show up here.
+        </div>
+      </div>
+      <div class="home-bids" id="home-bids-section">
+        <div class="section-header">
+          <h2 class="section-title" data-i18n="web.home.bids.title">Active bids</h2>
+          <a class="section-link" onclick="loadActiveBids()" data-i18n="web.home.bids.refresh">
+            Refresh
+          </a>
+        </div>
+        <div class="bids-list" id="active-bids-list">
+          <div class="loading">
+            <div class="spinner"></div>
+          </div>
+        </div>
+      </div>
+      <div class="home-auctions" id="home-auctions-section">
+        <div class="section-header">
+          <h2 class="section-title" data-i18n="web.home.auctions.title">Active auctions</h2>
+        </div>
+        <div class="auction-list" id="home-auctions-list">
+          <div class="loading">
+            <div class="spinner"></div>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <!-- AUCTIONS SECTION -->
-    <section class="section" id="auctions-section">
-      <div class="section-header">
-        <h2 class="section-title" data-i18n="web.section.active">Активные</h2>
-        <a class="section-link" onclick="loadAuctions()" data-i18n="web.action.refresh">Обновить</a>
-      </div>
+    <section class="section hidden" id="auctions-section">
       <div class="auction-list" id="auctions-list">
         <div class="loading">
           <div class="spinner"></div>
@@ -596,28 +1148,391 @@
 
     <!-- CREATE SECTION -->
     <section class="section hidden" id="create-section">
-      <div class="section-header">
-        <h2 class="section-title" data-i18n="web.section.create.title">Создать аукцион</h2>
-      </div>
-      <div class="empty-state">
-        <div class="empty-icon">🎨</div>
-        <div class="empty-title" data-i18n="web.empty.soon.title">Скоро</div>
-        <div class="empty-text" data-i18n="web.empty.soon.body">Функция создания аукционов в разработке</div>
-      </div>
+      <form class="create-form" id="create-form" onsubmit="submitCreateAuction(event)">
+        <div class="onboard-card" data-step="0">
+          <div class="onboard-header">
+            <div class="onboard-step">01</div>
+            <div>
+              <div class="onboard-title" data-i18n="web.create.card.basics.title">Basics</div>
+              <div class="onboard-subtitle" data-i18n="web.create.card.basics.subtitle">
+                Name and describe the auction
+              </div>
+            </div>
+            <div class="wizard-step" data-create-step>Step 1/5</div>
+          </div>
+          <div class="onboard-body">
+            <div class="field-group">
+              <label class="field-label" for="create-title" data-i18n="web.create.titleLabel">Title</label>
+              <input class="input" id="create-title" type="text" autocomplete="off" required>
+            </div>
+            <div class="field-group">
+              <label class="field-label" for="create-description" data-i18n="web.create.descriptionLabel">
+                Description
+              </label>
+              <textarea class="input input-textarea" id="create-description" rows="3"></textarea>
+            </div>
+          </div>
+          <div class="wizard-actions">
+            <div class="form-error create-error hidden" data-create-error></div>
+            <div class="wizard-buttons">
+              <button type="button" class="btn btn-primary" data-create-next data-i18n="web.create.next">
+                Next
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="onboard-card hidden" data-step="1">
+          <div class="onboard-header">
+            <div class="onboard-step">02</div>
+            <div>
+              <div class="onboard-title" data-i18n="web.create.card.rules.title">Rules</div>
+              <div class="onboard-subtitle" data-i18n="web.create.card.rules.subtitle">
+                Currency, rounds, and spots
+              </div>
+            </div>
+            <div class="wizard-step" data-create-step>Step 1/5</div>
+          </div>
+          <div class="onboard-body">
+            <div class="form-grid two-col">
+              <div class="field-group">
+                <label class="field-label" for="create-currency" data-i18n="web.create.currencyLabel">
+                  Currency
+                </label>
+                <input class="input" id="create-currency" type="text" value="USDT" autocomplete="off">
+              </div>
+              <div class="field-group">
+                <label class="field-label" for="create-rounds" data-i18n="web.create.roundsLabel">
+                  Rounds
+                </label>
+                <input class="input" id="create-rounds" type="number" min="1" max="20" value="3">
+              </div>
+              <div class="field-group">
+                <label
+                  class="field-label"
+                  for="create-allocation"
+                  data-i18n="web.create.allocationLabel"
+                >
+                  Spots per round
+                </label>
+                <input class="input" id="create-allocation" type="number" min="1" max="500" value="5">
+              </div>
+            </div>
+          </div>
+          <div class="wizard-actions">
+            <div class="form-error create-error hidden" data-create-error></div>
+            <div class="wizard-buttons">
+              <button type="button" class="btn btn-secondary" data-create-back data-i18n="web.create.back">
+                Back
+              </button>
+              <button type="button" class="btn btn-primary" data-create-next data-i18n="web.create.next">
+                Next
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="onboard-card hidden" data-step="2">
+          <div class="onboard-header">
+            <div class="onboard-step">03</div>
+            <div>
+              <div class="onboard-title" data-i18n="web.create.card.timing.title">Timing</div>
+              <div class="onboard-subtitle" data-i18n="web.create.card.timing.subtitle">
+                Round duration and start time
+              </div>
+            </div>
+            <div class="wizard-step" data-create-step>Step 1/5</div>
+          </div>
+          <div class="onboard-body">
+            <div class="form-grid two-col">
+              <div class="field-group">
+                <label class="field-label" for="create-duration" data-i18n="web.create.durationLabel">
+                  Round duration (sec)
+                </label>
+                <input class="input" id="create-duration" type="number" min="30" max="7200" value="300">
+              </div>
+              <div class="field-group">
+                <label
+                  class="field-label"
+                  for="create-start-offset"
+                  data-i18n="web.create.startOffsetLabel"
+                >
+                  Start offset (sec)
+                </label>
+                <input class="input" id="create-start-offset" type="number" min="0" max="86400" value="0">
+              </div>
+            </div>
+          </div>
+          <div class="wizard-actions">
+            <div class="form-error create-error hidden" data-create-error></div>
+            <div class="wizard-buttons">
+              <button type="button" class="btn btn-secondary" data-create-back data-i18n="web.create.back">
+                Back
+              </button>
+              <button type="button" class="btn btn-primary" data-create-next data-i18n="web.create.next">
+                Next
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="onboard-card hidden" data-step="3">
+          <div class="onboard-header">
+            <div class="onboard-step">04</div>
+            <div>
+              <div class="onboard-title" data-i18n="web.create.card.antisniping.title">Anti-sniping</div>
+              <div class="onboard-subtitle" data-i18n="web.create.card.antisniping.subtitle">
+                Extend rounds on late bids
+              </div>
+            </div>
+            <div class="wizard-step" data-create-step>Step 1/5</div>
+          </div>
+          <div class="onboard-body">
+            <div class="field-group">
+              <div class="toggle-row">
+                <input
+                  class="toggle-input"
+                  id="create-antisniping-toggle"
+                  type="checkbox"
+                  checked
+                >
+                <label class="toggle-label" for="create-antisniping-toggle" data-i18n="web.create.antiSnipingLabel">
+                  Anti-sniping
+                </label>
+              </div>
+              <div class="field-hint" data-i18n="web.create.antiSnipingHint">
+                Extend a round when bids arrive in the last seconds.
+              </div>
+            </div>
+            <div class="form-grid two-col" id="create-antisniping-fields">
+              <div class="field-group">
+                <label
+                  class="field-label"
+                  for="create-trigger-window"
+                  data-i18n="web.create.triggerWindowLabel"
+                >
+                  Trigger window (sec)
+                </label>
+                <input class="input" id="create-trigger-window" type="number" min="0" max="600" value="10">
+              </div>
+              <div class="field-group">
+                <label
+                  class="field-label"
+                  for="create-extension"
+                  data-i18n="web.create.extensionLabel"
+                >
+                  Extension (sec)
+                </label>
+                <input class="input" id="create-extension" type="number" min="0" max="600" value="15">
+              </div>
+              <div class="field-group">
+                <label
+                  class="field-label"
+                  for="create-max-extensions"
+                  data-i18n="web.create.maxExtensionsLabel"
+                >
+                  Max extensions
+                </label>
+                <input class="input" id="create-max-extensions" type="number" min="0" max="20" value="3">
+              </div>
+            </div>
+          </div>
+          <div class="wizard-actions">
+            <div class="form-error create-error hidden" data-create-error></div>
+            <div class="wizard-buttons">
+              <button type="button" class="btn btn-secondary" data-create-back data-i18n="web.create.back">
+                Back
+              </button>
+              <button type="button" class="btn btn-primary" data-create-next data-i18n="web.create.next">
+                Next
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="onboard-card hidden" data-step="4">
+          <div class="onboard-header">
+            <div class="onboard-step">05</div>
+            <div>
+              <div class="onboard-title" data-i18n="web.create.card.review.title">Review & launch</div>
+              <div class="onboard-subtitle" data-i18n="web.create.card.review.subtitle">
+                Create the auction
+              </div>
+            </div>
+            <div class="wizard-step" data-create-step>Step 1/5</div>
+          </div>
+          <div class="onboard-body">
+            <div class="wizard-actions">
+              <div class="form-error create-error hidden" data-create-error></div>
+              <div class="create-actions">
+                <button type="button" class="btn btn-secondary" data-create-back data-i18n="web.create.back">
+                  Back
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-secondary"
+                  onclick="resetCreateForm()"
+                  data-i18n="web.create.reset"
+                >
+                  Reset
+                </button>
+                <button type="submit" class="btn btn-primary" id="create-submit" data-i18n="web.create.submit">
+                  Create auction
+                </button>
+              </div>
+              <div class="form-note" id="create-status"></div>
+            </div>
+          </div>
+        </div>
+      </form>
     </section>
   </div>
 
   <!-- BOTTOM NAV -->
   <nav class="bottom-nav">
-    <button class="nav-btn active" onclick="switchTab('auctions')">
+    <button class="nav-btn active" data-tab="home" onclick="switchTab('home')">
+      <span class="nav-btn-icon">🏠</span>
+      <span data-i18n="web.tab.home">Главная</span>
+    </button>
+    <button class="nav-btn" data-tab="auctions" onclick="switchTab('auctions')">
       <span class="nav-btn-icon">🔨</span>
       <span data-i18n="web.tab.auctions">Аукционы</span>
     </button>
-    <button class="nav-btn" onclick="switchTab('create')">
+    <button class="nav-btn" data-tab="create" onclick="switchTab('create')">
       <span class="nav-btn-icon">➕</span>
       <span data-i18n="web.tab.create">Создать</span>
     </button>
   </nav>
+
+  <!-- DEPOSIT MODAL -->
+  <div
+    class="modal-overlay hidden"
+    id="deposit-modal"
+    onclick="handleModalBackdropClick(event, 'deposit-modal')"
+  >
+    <div class="modal-card" role="dialog" aria-modal="true">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title" id="deposit-title">Deposit</div>
+          <div class="modal-subtitle" id="deposit-subtitle"></div>
+        </div>
+        <button class="icon-btn" onclick="closeDepositModal()" aria-label="Close">x</button>
+      </div>
+      <div class="modal-body">
+        <div class="loading" id="deposit-loading">
+          <div class="spinner"></div>
+        </div>
+        <div class="hidden" id="deposit-content">
+          <div class="field-group">
+            <div class="field-label" data-i18n="web.deposit.addressLabel">Deposit address</div>
+            <div class="field-row">
+              <div class="field-value" id="deposit-address">--</div>
+              <button
+                class="btn btn-secondary btn-small"
+                onclick="copyDepositAddress()"
+                data-i18n="web.deposit.copyAddress"
+              >
+                Copy address
+              </button>
+            </div>
+          </div>
+          <div class="field-group hidden" id="deposit-memo-block">
+            <div class="field-label" data-i18n="web.deposit.memoLabel">Memo / Tag</div>
+            <div class="field-row">
+              <div class="field-value" id="deposit-memo">--</div>
+              <button
+                class="btn btn-secondary btn-small"
+                onclick="copyDepositMemo()"
+                data-i18n="web.deposit.copyMemo"
+              >
+                Copy memo
+              </button>
+            </div>
+            <div class="field-hint" data-i18n="web.deposit.memoHint">
+              Include the memo/tag so we can credit your deposit.
+            </div>
+          </div>
+          <div class="field-hint" id="deposit-warning" data-i18n="web.deposit.warning">
+            Credits after network confirmations.
+          </div>
+        </div>
+        <div class="hidden" id="deposit-error">
+          <div class="form-error" id="deposit-error-text"></div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" onclick="closeDepositModal()" data-i18n="web.deposit.done">
+          Done
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- WITHDRAW MODAL -->
+  <div
+    class="modal-overlay hidden"
+    id="withdraw-modal"
+    onclick="handleModalBackdropClick(event, 'withdraw-modal')"
+  >
+    <div class="modal-card" role="dialog" aria-modal="true">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title" id="withdraw-title">Withdraw</div>
+          <div class="modal-subtitle" id="withdraw-subtitle"></div>
+        </div>
+        <button class="icon-btn" onclick="closeWithdrawModal()" aria-label="Close">x</button>
+      </div>
+      <form class="modal-body" id="withdraw-form" onsubmit="submitWithdrawal(event)">
+        <div class="field-group">
+          <label class="field-label" for="withdraw-amount" data-i18n="web.withdraw.amountLabel">
+            Amount
+          </label>
+          <input class="input" id="withdraw-amount" type="number" min="0" step="any">
+          <div class="field-hint" id="withdraw-available"></div>
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="withdraw-address" data-i18n="web.withdraw.addressLabel">
+            Destination address
+          </label>
+          <input class="input" id="withdraw-address" type="text" autocomplete="off">
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="withdraw-memo" data-i18n="web.withdraw.memoLabel">
+            Memo / Tag (optional)
+          </label>
+          <input class="input" id="withdraw-memo" type="text" autocomplete="off">
+        </div>
+        <div class="form-error hidden" id="withdraw-error"></div>
+        <div class="modal-actions">
+          <button
+            type="button"
+            class="btn btn-secondary"
+            onclick="closeWithdrawModal()"
+            data-i18n="web.withdraw.cancel"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            class="btn btn-primary"
+            id="withdraw-submit"
+            data-i18n="web.withdraw.submit"
+          >
+            Request withdrawal
+          </button>
+        </div>
+      </form>
+      <div class="modal-body hidden" id="withdraw-result">
+        <div class="result-title" id="withdraw-result-title"></div>
+        <div class="result-text" id="withdraw-result-text"></div>
+        <div class="result-notes hidden" id="withdraw-result-notes">
+          <div class="result-notes-title" id="withdraw-result-notes-title"></div>
+          <div class="result-notes-list" id="withdraw-result-notes-list"></div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-primary" onclick="closeWithdrawModal()" data-i18n="web.withdraw.done">
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script>
@@ -632,6 +1547,17 @@
         return {};
       }
     })();
+    const webConfig = (() => {
+      const element = document.getElementById('web-config');
+      if (!element) return {};
+      try {
+        return JSON.parse(element.textContent || '{}');
+      } catch (error) {
+        console.warn('Failed to parse web config', error);
+        return {};
+      }
+    })();
+    const allowDemoUser = Boolean(webConfig.allowDemoUser);
 
     const catalogs = i18nPayload.catalogs || {};
     const supportedLocales = i18nPayload.supportedLocales || Object.keys(catalogs);
@@ -710,6 +1636,30 @@
       document.title = t('web.app.title');
       applyTranslations();
       updateBalanceUI();
+      updateWalletAddress();
+      updateCreateWizardUI();
+      updateHeaderTitle(uiState.activeTab);
+    }
+
+    function canUseHapticFeedback() {
+      if (!tg || !tg.HapticFeedback || typeof tg.HapticFeedback.impactOccurred !== 'function') {
+        return false;
+      }
+      if (typeof tg.isVersionAtLeast === 'function') {
+        return tg.isVersionAtLeast('6.1');
+      }
+      return true;
+    }
+
+    function triggerHapticImpact(style) {
+      if (!canUseHapticFeedback()) {
+        return;
+      }
+      try {
+        tg.HapticFeedback.impactOccurred(style);
+      } catch {
+        // Ignore unsupported haptic feedback errors.
+      }
     }
 
     if (tg) {
@@ -720,33 +1670,299 @@
     // State
     const state = {
       currentUser: null,
+      activeBids: [],
       auctions: [],
       balance: { available: 0, held: 0, current: 0, currency: 'USDT' }
+    };
+    const uiState = {
+      deposit: { address: '', memo: '', currency: '', strategy: '' },
+      withdrawSubmitting: false,
+      createSubmitting: false,
+      activeTab: 'home',
+      home: {
+        bidsLoaded: false,
+        bidsError: false,
+        auctionsLoaded: false,
+        auctionsError: false
+      }
+    };
+    const realtimeState = {
+      socket: null,
+      reconnectDelay: 1000,
+      reconnectTimer: null,
+      queue: [],
+      subscribedAuctionIds: new Set(),
+      auctionSnapshots: new Map()
+    };
+    const createWizard = { step: 0, steps: [] };
+    const createDefaults = {
+      rounds: 3,
+      allocationSize: 5,
+      roundDurationSeconds: 300,
+      startOffsetSeconds: 0,
+      antiSniping: {
+        triggerWindowSeconds: 10,
+        extensionSeconds: 15,
+        maxExtensions: 3
+      }
     };
 
     setLocale(detectLocale());
 
+    function getTelegramInitData() {
+      if (!tg || typeof tg.initData !== 'string') return '';
+      return tg.initData;
+    }
+
+    function getDemoUserId() {
+      if (!allowDemoUser) return null;
+      const stored = localStorage.getItem('demoUserId');
+      if (stored && stored.trim().length > 0) {
+        return stored.trim();
+      }
+      return 'demo';
+    }
+
+    function apiFetch(url, options = {}) {
+      const headers = Object.assign(
+        { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+        options.headers || {}
+      );
+      const initData = getTelegramInitData();
+      if (initData) {
+        headers['x-telegram-init-data'] = initData;
+      } else if (allowDemoUser) {
+        const demoUserId = getDemoUserId();
+        if (demoUserId) {
+          headers['x-demo-user-id'] = demoUserId;
+        }
+      }
+      return fetch(url, Object.assign({}, options, { headers }));
+    }
+
+    function getWebsocketUrl() {
+      const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      return `${protocol}://${window.location.host}/ws`;
+    }
+
+    function initRealtime() {
+      connectRealtime();
+    }
+
+    function connectRealtime() {
+      if (realtimeState.reconnectTimer) {
+        clearTimeout(realtimeState.reconnectTimer);
+        realtimeState.reconnectTimer = null;
+      }
+      const url = getWebsocketUrl();
+      let socket;
+      try {
+        socket = new WebSocket(url);
+      } catch (error) {
+        scheduleRealtimeReconnect();
+        return;
+      }
+      realtimeState.socket = socket;
+      socket.addEventListener('open', () => {
+        realtimeState.reconnectDelay = 1000;
+        realtimeState.subscribedAuctionIds.clear();
+        flushRealtimeQueue();
+        sendRealtimeAuth();
+        syncAuctionSubscriptions();
+      });
+      socket.addEventListener('message', (event) => {
+        handleRealtimeMessage(event.data);
+      });
+      socket.addEventListener('close', () => {
+        realtimeState.socket = null;
+        scheduleRealtimeReconnect();
+      });
+      socket.addEventListener('error', () => {
+        if (socket.readyState !== WebSocket.CLOSED) {
+          socket.close();
+        }
+      });
+    }
+
+    function scheduleRealtimeReconnect() {
+      if (realtimeState.reconnectTimer) {
+        return;
+      }
+      const delay = realtimeState.reconnectDelay;
+      realtimeState.reconnectTimer = setTimeout(() => {
+        realtimeState.reconnectTimer = null;
+        connectRealtime();
+      }, delay);
+      realtimeState.reconnectDelay = Math.min(realtimeState.reconnectDelay * 1.6, 30000);
+    }
+
+    function sendRealtime(payload) {
+      const message = JSON.stringify(payload);
+      const socket = realtimeState.socket;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(message);
+        return;
+      }
+      realtimeState.queue.push(message);
+    }
+
+    function flushRealtimeQueue() {
+      const socket = realtimeState.socket;
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      while (realtimeState.queue.length > 0) {
+        const message = realtimeState.queue.shift();
+        if (message) {
+          socket.send(message);
+        }
+      }
+    }
+
+    function sendRealtimeAuth() {
+      sendRealtime({
+        type: 'auth',
+        initData: getTelegramInitData(),
+        demoUserId: allowDemoUser ? getDemoUserId() : null
+      });
+    }
+
+    function handleRealtimeMessage(raw) {
+      let message;
+      try {
+        message = JSON.parse(raw);
+      } catch (error) {
+        return;
+      }
+      if (!message || typeof message.type !== 'string') {
+        return;
+      }
+      if (message.type === 'auctions') {
+        if (Array.isArray(message.data)) {
+          state.auctions = message.data;
+          uiState.home.auctionsLoaded = true;
+          uiState.home.auctionsError = false;
+          syncAuctionSubscriptions();
+          renderAuctionLists();
+        }
+        return;
+      }
+      if (message.type === 'active_bids') {
+        uiState.home.bidsLoaded = true;
+        uiState.home.bidsError = false;
+        renderActiveBids(Array.isArray(message.data) ? message.data : []);
+        return;
+      }
+      if (message.type === 'auction_snapshot') {
+        if (message.data && typeof message.data.auctionId === 'string') {
+          upsertAuctionSnapshot(message.data);
+        }
+        return;
+      }
+      if (message.type === 'error') {
+        console.warn('Realtime error:', message.message || message.code || message);
+      }
+    }
+
+    function getAuctionIdsFromState() {
+      if (!Array.isArray(state.auctions)) {
+        return [];
+      }
+      return state.auctions
+        .map((auction) => (auction && typeof auction._id === 'string' ? auction._id : null))
+        .filter((value) => typeof value === 'string');
+    }
+
+    function pruneAuctionSnapshots(nextIds) {
+      for (const auctionId of realtimeState.auctionSnapshots.keys()) {
+        if (!nextIds.has(auctionId)) {
+          realtimeState.auctionSnapshots.delete(auctionId);
+        }
+      }
+    }
+
+    function syncAuctionSubscriptions() {
+      const nextIds = new Set(getAuctionIdsFromState());
+      pruneAuctionSnapshots(nextIds);
+
+      for (const auctionId of nextIds) {
+        if (!realtimeState.subscribedAuctionIds.has(auctionId)) {
+          realtimeState.subscribedAuctionIds.add(auctionId);
+          sendRealtime({ type: 'subscribe', auctionId });
+        }
+      }
+
+      const removed = [];
+      for (const auctionId of realtimeState.subscribedAuctionIds) {
+        if (!nextIds.has(auctionId)) {
+          removed.push(auctionId);
+        }
+      }
+      for (const auctionId of removed) {
+        realtimeState.subscribedAuctionIds.delete(auctionId);
+        sendRealtime({ type: 'unsubscribe', auctionId });
+      }
+    }
+
+    function upsertAuctionSnapshot(snapshot) {
+      realtimeState.auctionSnapshots.set(snapshot.auctionId, snapshot);
+      renderAuctionLists();
+    }
+
     // Initialize
     async function init() {
+      initCreateForm();
+      initRealtime();
       await loadUser();
       await loadBalance();
+      await loadActiveBids();
       await loadAuctions();
     }
 
     // Load user
     async function loadUser() {
-      if (tg?.initDataUnsafe?.user) {
-        state.currentUser = tg.initDataUnsafe.user;
-      } else {
-        state.currentUser = { id: 'demo', first_name: 'Demo', username: 'demo' };
+      const session = await fetchSession();
+      if (session) {
+        state.currentUser = session;
+        updateWalletAddress();
+        updateHeaderAvatar();
+        sendRealtimeAuth();
+        return;
+      }
+      if (allowDemoUser) {
+        const demoUserId = getDemoUserId();
+        if (demoUserId) {
+          localStorage.setItem('demoUserId', demoUserId);
+          state.currentUser = { id: demoUserId, displayName: 'Demo user' };
+          updateWalletAddress();
+          updateHeaderAvatar();
+          sendRealtimeAuth();
+          return;
+        }
+      }
+      state.currentUser = null;
+      updateWalletAddress();
+      updateHeaderAvatar();
+      sendRealtimeAuth();
+    }
+
+    async function fetchSession() {
+      try {
+        const response = await apiFetch('/api/session');
+        if (!response.ok) return null;
+        const data = await response.json();
+        return data && data.user ? data.user : null;
+      } catch (error) {
+        console.warn('Failed to load session:', error);
+        return null;
       }
     }
 
     // Load balance
     async function loadBalance() {
+      if (!state.currentUser) return;
       try {
-        const userId = state.currentUser?.id || 'demo';
-        const response = await fetch(`/api/balance/${userId}`);
+        const response = await apiFetch('/api/balance');
         if (response.ok) {
           const data = await response.json();
           state.balance = Object.assign({}, state.balance, data);
@@ -762,34 +1978,126 @@
       const total = typeof state.balance.current === 'number' ? state.balance.current : 0;
       const available = typeof state.balance.available === 'number' ? state.balance.available : 0;
       const currency = state.balance.currency || 'USDT';
-      document.getElementById('total-balance').textContent = total.toFixed(2);
-      document.getElementById('balanceCurrency').textContent = currency;
-      document.getElementById('balanceAvailableLine').textContent = t('web.balance.availableLine', {
-        amount: available.toFixed(2),
-        currency
-      });
+      const balanceEl = document.getElementById('total-balance');
+      if (balanceEl) balanceEl.textContent = total.toFixed(2);
+      const balanceCurrency = document.getElementById('balanceCurrency');
+      if (balanceCurrency) {
+        const symbol =
+          currency === 'USD' || currency === 'USDT'
+            ? '$'
+            : currency === 'TON'
+              ? '₮'
+              : currency;
+        balanceCurrency.textContent = symbol;
+      }
+      const availableLine = document.getElementById('balanceAvailableLine');
+      if (availableLine) {
+        availableLine.textContent = t('web.balance.availableLine', {
+          amount: available.toFixed(2),
+          currency
+        });
+      }
+      const headerAmount = document.getElementById('header-balance-amount');
+      if (headerAmount) headerAmount.textContent = total.toFixed(2);
+      const headerCurrency = document.getElementById('header-balance-currency');
+      if (headerCurrency) headerCurrency.textContent = currency;
+      updateWithdrawAvailable();
+      updateCreateCurrency();
+    }
+
+    function formatUserHandle(user) {
+      if (!user) return '';
+      const rawValue =
+        (user.username ? `@${user.username}` : '') ||
+        user.displayName ||
+        user.firstName ||
+        user.id ||
+        '';
+      const raw = String(rawValue);
+      if (!raw) return '';
+      if (raw.length <= 16) return raw;
+      return `${raw.slice(0, 4)}...${raw.slice(-4)}`;
+    }
+
+    function updateWalletAddress() {
+      const addressLine = document.getElementById('wallet-address');
+      if (!addressLine) return;
+      if (!state.currentUser) {
+        addressLine.textContent = t('web.home.addressUnknown');
+        return;
+      }
+      const handle = formatUserHandle(state.currentUser);
+      addressLine.textContent = t('web.home.addressLabel', { value: handle || '—' });
+    }
+
+    function updateHeaderAvatar() {
+      const avatar = document.getElementById('header-avatar');
+      if (!avatar) return;
+      if (!state.currentUser) {
+        avatar.textContent = 'GA';
+        return;
+      }
+      const source =
+        state.currentUser.displayName ||
+        state.currentUser.firstName ||
+        state.currentUser.username ||
+        state.currentUser.id ||
+        'GA';
+      const cleaned = String(source).replace(/[^a-zA-Z0-9]/g, '');
+      avatar.textContent = (cleaned ? cleaned.slice(0, 2) : 'GA').toUpperCase();
+    }
+
+    function updateHeaderTitle(tab) {
+      const headerTitle = document.getElementById('header-title');
+      if (!headerTitle) return;
+      if (tab === 'create') {
+        headerTitle.textContent = t('web.section.create.title');
+        headerTitle.classList.remove('hidden');
+        return;
+      }
+      if (tab === 'auctions') {
+        headerTitle.textContent = t('web.section.active');
+        headerTitle.classList.remove('hidden');
+        return;
+      }
+      headerTitle.textContent = '';
+      headerTitle.classList.add('hidden');
+    }
+
+    function updateCreateCurrency() {
+      const input = document.getElementById('create-currency');
+      if (!input || input.dataset.autofill === 'false') return;
+      const currency = getCurrentCurrency();
+      if (!currency) return;
+      input.value = currency;
+      input.dataset.autofill = 'true';
     }
 
     // Load auctions
     async function loadAuctions() {
-      const container = document.getElementById('auctions-list');
-      container.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+      uiState.home.auctionsLoaded = false;
+      uiState.home.auctionsError = false;
+      setAuctionsLoading();
+      updateHomeVisibility();
 
       try {
-        const response = await fetch('/api/auctions');
-        if (response.ok) {
-          state.auctions = await response.json();
-          renderAuctions();
+        const response = await apiFetch('/api/auctions');
+        if (!response.ok) {
+          uiState.home.auctionsLoaded = true;
+          uiState.home.auctionsError = true;
+          renderAuctionErrors();
+          return;
         }
+        state.auctions = await response.json();
+        uiState.home.auctionsLoaded = true;
+        uiState.home.auctionsError = false;
+        syncAuctionSubscriptions();
+        renderAuctionLists();
       } catch (error) {
         console.error('Failed to load auctions:', error);
-        container.innerHTML = `
-          <div class="empty-state">
-            <div class="empty-icon">😕</div>
-            <div class="empty-title">${t('web.auctions.error.title')}</div>
-            <div class="empty-text">${t('web.auctions.error.body')}</div>
-          </div>
-        `;
+        uiState.home.auctionsLoaded = true;
+        uiState.home.auctionsError = true;
+        renderAuctionErrors();
       }
     }
 
@@ -800,43 +2108,111 @@
     }
 
     // Render auctions
-    function renderAuctions() {
-      const container = document.getElementById('auctions-list');
+    function setAuctionsLoading() {
+      setAuctionListLoading('auctions-list');
+      setAuctionListLoading('home-auctions-list');
+    }
 
-      if (state.auctions.length === 0) {
+    function setAuctionListLoading(containerId) {
+      const container = document.getElementById(containerId);
+      if (!container) return;
+      container.classList.add('is-loading');
+      container.classList.remove('is-empty', 'is-error');
+      container.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+    }
+
+    function renderAuctionErrors() {
+      renderAuctionError('auctions-list', '😕', 'web.auctions.error.title', 'web.auctions.error.body');
+      renderAuctionError('home-auctions-list', '😕', 'web.auctions.error.title', 'web.auctions.error.body');
+      updateHomeVisibility();
+    }
+
+    function renderAuctionError(containerId, icon, titleKey, bodyKey) {
+      const container = document.getElementById(containerId);
+      if (!container) return;
+      container.classList.add('is-error');
+      container.classList.remove('is-empty', 'is-loading');
+      container.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">${icon}</div>
+          <div class="empty-title">${t(titleKey)}</div>
+          <div class="empty-text">${t(bodyKey)}</div>
+        </div>
+      `;
+    }
+
+    function renderAuctionLists() {
+      renderAuctionList('auctions-list', {
+        icon: '🔨',
+        titleKey: 'web.auctions.empty.title',
+        bodyKey: 'web.auctions.empty.body'
+      });
+      renderAuctionList('home-auctions-list', {
+        icon: '🔨',
+        titleKey: 'web.auctions.empty.title',
+        bodyKey: 'web.auctions.empty.body'
+      });
+      updateHomeVisibility();
+    }
+
+    function renderAuctionList(containerId, emptyState) {
+      const container = document.getElementById(containerId);
+      if (!container) return;
+
+      if (!Array.isArray(state.auctions) || state.auctions.length === 0) {
+        container.classList.add('is-empty');
+        container.classList.remove('is-loading', 'is-error');
         container.innerHTML = `
           <div class="empty-state">
-            <div class="empty-icon">🔨</div>
-            <div class="empty-title">${t('web.auctions.empty.title')}</div>
-            <div class="empty-text">${t('web.auctions.empty.body')}</div>
+            <div class="empty-icon">${emptyState.icon}</div>
+            <div class="empty-title">${t(emptyState.titleKey)}</div>
+            <div class="empty-text">${t(emptyState.bodyKey)}</div>
           </div>
         `;
         return;
       }
 
-      container.innerHTML = state.auctions
+      container.classList.remove('is-empty', 'is-loading', 'is-error');
+      container.innerHTML = renderAuctionCards(state.auctions);
+    }
+
+    function renderAuctionCards(auctions) {
+      return auctions
         .map((auction) => {
-          const status = auction.status || 'draft';
+          const view = mergeAuctionSnapshot(auction);
+          const status = view.status || 'draft';
+          const rounds = Array.isArray(view.rounds) ? view.rounds.length : 0;
+          const spots = Array.isArray(view.rounds) && view.rounds.length > 0
+            ? view.rounds[0].allocationSize
+            : 0;
           return `
-            <div class="auction-card fade-in" onclick="openAuction('${auction._id}')">
+            <div class="auction-card fade-in" onclick="openAuction('${view._id}')">
               <div class="auction-header">
                 <div class="auction-icon">🎁</div>
                 <span class="auction-status ${status}">${formatStatusLabel(status)}</span>
               </div>
-              <h3 class="auction-title">${auction.title}</h3>
-              ${auction.description ? `<p class="auction-desc">${auction.description}</p>` : ''}
+              <h3 class="auction-title">${view.title}</h3>
+              ${view.description ? `<p class="auction-desc">${view.description}</p>` : ''}
               <div class="auction-stats">
                 <div class="stat">
                   <span class="stat-label">${t('web.auctions.stats.rounds')}</span>
-                  <span class="stat-value">${auction.rounds.length}</span>
+                  <span class="stat-value">${rounds}</span>
+                </div>
+                <div class="stat">
+                  <span class="stat-label">${t('web.auctions.stats.currentRound')}</span>
+                  <span class="stat-value">${formatAuctionRoundValue(view)}</span>
                 </div>
                 <div class="stat">
                   <span class="stat-label">${t('web.auctions.stats.currency')}</span>
-                  <span class="stat-value">${auction.currency}</span>
+                  <span class="stat-value">${view.currency}</span>
                 </div>
                 <div class="stat">
                   <span class="stat-label">${t('web.auctions.stats.spots')}</span>
-                  <span class="stat-value">${auction.rounds[0]?.allocationSize || 0}</span>
+                  <span class="stat-value">${spots}</span>
+                </div>
+                <div class="stat">
+                  <span class="stat-label">${t('web.auctions.stats.lastBid')}</span>
+                  <span class="stat-value">${formatAuctionLastBidValue(view)}</span>
                 </div>
               </div>
             </div>
@@ -845,47 +2221,973 @@
         .join('');
     }
 
-    // Switch tab
-    function switchTab(tab) {
-      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-      document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
+    function updateHomeVisibility() {
+      const bidsSection = document.getElementById('home-bids-section');
+      const auctionsSection = document.getElementById('home-auctions-section');
+      const emptyState = document.getElementById('home-empty-state');
 
-      if (event && event.target) {
-        if (event.target.classList.contains('tab')) {
-          event.target.classList.add('active');
-        } else if (event.target.closest('.nav-btn')) {
-          event.target.closest('.nav-btn').classList.add('active');
+      const bidsLoaded = uiState.home.bidsLoaded;
+      const auctionsLoaded = uiState.home.auctionsLoaded;
+      const bidsError = uiState.home.bidsError;
+      const auctionsError = uiState.home.auctionsError;
+
+      const hasBids = Array.isArray(state.activeBids) && state.activeBids.length > 0;
+      const hasAuctions = Array.isArray(state.auctions) && state.auctions.length > 0;
+
+      const showBidsSection = !bidsLoaded || bidsError || hasBids;
+      const showAuctionsSection = !auctionsLoaded || auctionsError || hasAuctions;
+      const showEmptyState =
+        bidsLoaded &&
+        auctionsLoaded &&
+        !bidsError &&
+        !auctionsError &&
+        !hasBids &&
+        !hasAuctions;
+
+      if (bidsSection) bidsSection.classList.toggle('hidden', !showBidsSection);
+      if (auctionsSection) auctionsSection.classList.toggle('hidden', !showAuctionsSection);
+      if (emptyState) emptyState.classList.toggle('hidden', !showEmptyState);
+    }
+
+    function mergeAuctionSnapshot(auction) {
+      if (!auction || typeof auction._id !== 'string') {
+        return auction;
+      }
+      const snapshot = realtimeState.auctionSnapshots.get(auction._id);
+      if (!snapshot) {
+        return auction;
+      }
+      return Object.assign({}, auction, {
+        status: snapshot.status ?? auction.status,
+        title: snapshot.title || auction.title,
+        currency: snapshot.currency || auction.currency,
+        currentRoundIndex:
+          typeof snapshot.currentRoundIndex === 'number'
+            ? snapshot.currentRoundIndex
+            : auction.currentRoundIndex ?? null,
+        roundStatus: snapshot.roundStatus ?? auction.roundStatus ?? null,
+        roundEffectiveEndAt:
+          snapshot.roundEffectiveEndAt !== undefined
+            ? snapshot.roundEffectiveEndAt
+            : auction.roundEffectiveEndAt ?? null,
+        roundLastBidAt:
+          snapshot.roundLastBidAt !== undefined
+            ? snapshot.roundLastBidAt
+            : auction.roundLastBidAt ?? null,
+        lastBidAmount:
+          snapshot.lastBidAmount !== undefined
+            ? snapshot.lastBidAmount
+            : auction.lastBidAmount ?? null
+      });
+    }
+
+    function formatAuctionRoundValue(auction) {
+      const totalRounds = Array.isArray(auction.rounds) ? auction.rounds.length : 0;
+      const roundIndex =
+        typeof auction.currentRoundIndex === 'number' && Number.isFinite(auction.currentRoundIndex)
+          ? auction.currentRoundIndex
+          : null;
+      if (roundIndex !== null && totalRounds > 0) {
+        return `${roundIndex + 1}/${totalRounds}`;
+      }
+      if (totalRounds > 0) {
+        return `—/${totalRounds}`;
+      }
+      return '—';
+    }
+
+    function formatAuctionLastBidValue(auction) {
+      const amount =
+        typeof auction.lastBidAmount === 'number' && Number.isFinite(auction.lastBidAmount)
+          ? auction.lastBidAmount
+          : null;
+      if (amount === null) {
+        return '—';
+      }
+      const currency = auction.currency || state.balance.currency || 'USDT';
+      return `${amount.toFixed(2)} ${currency}`;
+    }
+
+    function formatBidRoundLabel(bid) {
+      const totalRounds =
+        typeof bid.roundsCount === 'number' && Number.isFinite(bid.roundsCount)
+          ? bid.roundsCount
+          : null;
+      const roundIndex =
+        typeof bid.roundIndex === 'number' && Number.isFinite(bid.roundIndex)
+          ? bid.roundIndex
+          : null;
+      if (roundIndex !== null && totalRounds !== null && totalRounds > 0) {
+        return t('web.home.bids.roundLabel', { current: roundIndex + 1, total: totalRounds });
+      }
+      if (totalRounds !== null && totalRounds > 0) {
+        return t('web.home.bids.roundTotalLabel', { total: totalRounds });
+      }
+      return '';
+    }
+
+    function renderActiveBids(bids) {
+      const normalized = Array.isArray(bids) ? bids : [];
+      state.activeBids = normalized;
+      const container = document.getElementById('active-bids-list');
+      if (!container) return;
+
+      if (normalized.length === 0) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-icon">🧾</div>
+            <div class="empty-title">${t('web.home.bids.empty.title')}</div>
+            <div class="empty-text">${t('web.home.bids.empty.body')}</div>
+          </div>
+        `;
+        updateHomeVisibility();
+        return;
+      }
+
+      container.innerHTML = normalized
+        .map((bid) => {
+          const status = bid.auctionStatus || 'draft';
+          const statusLabel = formatStatusLabel(status);
+          const amount = typeof bid.amount === 'number' ? bid.amount : 0;
+          const currency = bid.currency || state.balance.currency || 'USDT';
+          const title = bid.auctionTitle || t('web.home.bids.unknownAuction');
+          const roundLabel = formatBidRoundLabel(bid);
+          const metaParts = [
+            t('web.home.bids.status.active'),
+            roundLabel
+          ].filter(Boolean);
+          return `
+            <div class="bid-card">
+              <div class="bid-main">
+                <div class="bid-title">${title}</div>
+                <div class="bid-meta">
+                  <span class="bid-status ${status}">${statusLabel}</span>
+                  ${metaParts.map((entry) => `<span>${entry}</span>`).join('')}
+                </div>
+              </div>
+              <div class="bid-amount">${amount.toFixed(2)}<span>${currency}</span></div>
+            </div>
+          `;
+        })
+        .join('');
+      updateHomeVisibility();
+    }
+
+    function renderActiveBidsError() {
+      const container = document.getElementById('active-bids-list');
+      if (!container) return;
+      container.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">⚠️</div>
+          <div class="empty-title">${t('web.home.bids.error.title')}</div>
+          <div class="empty-text">${t('web.home.bids.error.body')}</div>
+        </div>
+      `;
+      updateHomeVisibility();
+    }
+
+    async function loadActiveBids() {
+      const container = document.getElementById('active-bids-list');
+      if (!container) return;
+
+      if (!state.currentUser) {
+        uiState.home.bidsLoaded = true;
+        uiState.home.bidsError = false;
+        renderActiveBids([]);
+        return;
+      }
+
+      uiState.home.bidsLoaded = false;
+      uiState.home.bidsError = false;
+      updateHomeVisibility();
+      container.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+      try {
+        const response = await apiFetch('/api/bids/active');
+        if (!response.ok) {
+          uiState.home.bidsLoaded = true;
+          uiState.home.bidsError = true;
+          renderActiveBidsError();
+          return;
+        }
+        const data = await readJsonSafe(response);
+        uiState.home.bidsLoaded = true;
+        uiState.home.bidsError = false;
+        renderActiveBids(Array.isArray(data) ? data : []);
+      } catch (error) {
+        uiState.home.bidsLoaded = true;
+        uiState.home.bidsError = true;
+        renderActiveBidsError();
+      }
+    }
+
+    function initCreateForm() {
+      const form = document.getElementById('create-form');
+      if (!form) return;
+      const currencyInput = document.getElementById('create-currency');
+      if (currencyInput) {
+        currencyInput.addEventListener('input', () => {
+          currencyInput.dataset.autofill = 'false';
+        });
+      }
+      const toggle = document.getElementById('create-antisniping-toggle');
+      if (toggle) {
+        toggle.addEventListener('change', toggleAntiSnipingFields);
+      }
+      initCreateWizard();
+      resetCreateForm(false);
+      toggleAntiSnipingFields();
+    }
+
+    function initCreateWizard() {
+      createWizard.steps = Array.from(document.querySelectorAll('.onboard-card[data-step]'));
+      if (createWizard.steps.length === 0) return;
+      createWizard.step = 0;
+      document.querySelectorAll('[data-create-next]').forEach((button) => {
+        button.addEventListener('click', handleCreateNext);
+      });
+      document.querySelectorAll('[data-create-back]').forEach((button) => {
+        button.addEventListener('click', handleCreateBack);
+      });
+      updateCreateWizardUI();
+    }
+
+    function updateCreateWizardUI() {
+      if (createWizard.steps.length === 0) return;
+      createWizard.steps.forEach((card, index) => {
+        card.classList.toggle('hidden', index !== createWizard.step);
+      });
+      document.querySelectorAll('[data-create-step]').forEach((indicator) => {
+        indicator.textContent = t('web.create.stepLabel', {
+          current: createWizard.step + 1,
+          total: createWizard.steps.length
+        });
+      });
+    }
+
+    function handleCreateNext() {
+      if (!validateCreateStep(createWizard.step)) return;
+      createWizard.step = Math.min(createWizard.step + 1, createWizard.steps.length - 1);
+      setCreateError('');
+      updateCreateWizardUI();
+    }
+
+    function handleCreateBack() {
+      if (createWizard.step <= 0) return;
+      createWizard.step = Math.max(createWizard.step - 1, 0);
+      setCreateError('');
+      updateCreateWizardUI();
+    }
+
+    function validateCreateStep(step) {
+      setCreateError('');
+      const titleInput = document.getElementById('create-title');
+      const currencyInput = document.getElementById('create-currency');
+      if (step === 0) {
+        const title = titleInput ? titleInput.value.trim() : '';
+        if (!title) {
+          setCreateError(t('web.create.error.requiredTitle'));
+          return false;
+        }
+        return true;
+      }
+      if (step === 1) {
+        const currency = currencyInput ? currencyInput.value.trim() : '';
+        if (!currency) {
+          setCreateError(t('web.create.error.requiredCurrency'));
+          return false;
+        }
+        const rounds = readCreateNumber('create-rounds', NaN);
+        const allocationSize = readCreateNumber('create-allocation', NaN);
+        if (!validateCreateRange(rounds, 1, 20, t('web.create.roundsLabel'))) return false;
+        if (!validateCreateRange(allocationSize, 1, 500, t('web.create.allocationLabel'))) {
+          return false;
+        }
+        return true;
+      }
+      if (step === 2) {
+        const roundDurationSeconds = readCreateNumber('create-duration', NaN);
+        const startOffsetSeconds = readCreateNumber('create-start-offset', NaN);
+        if (!validateCreateRange(roundDurationSeconds, 30, 7200, t('web.create.durationLabel'))) {
+          return false;
+        }
+        if (!validateCreateRange(startOffsetSeconds, 0, 86400, t('web.create.startOffsetLabel'))) {
+          return false;
+        }
+        return true;
+      }
+      if (step === 3) {
+        const toggle = document.getElementById('create-antisniping-toggle');
+        if (!toggle || !toggle.checked) {
+          return true;
+        }
+        const triggerWindowSeconds = readCreateNumber('create-trigger-window', NaN);
+        const extensionSeconds = readCreateNumber('create-extension', NaN);
+        const maxExtensions = readCreateNumber('create-max-extensions', NaN);
+        if (
+          !validateCreateRange(
+            triggerWindowSeconds,
+            0,
+            600,
+            t('web.create.triggerWindowLabel')
+          )
+        ) {
+          return false;
+        }
+        if (!validateCreateRange(extensionSeconds, 0, 600, t('web.create.extensionLabel'))) {
+          return false;
+        }
+        if (!validateCreateRange(maxExtensions, 0, 20, t('web.create.maxExtensionsLabel'))) {
+          return false;
+        }
+        return true;
+      }
+      return true;
+    }
+
+    function resetCreateForm(clearStatus = true) {
+      const title = document.getElementById('create-title');
+      const description = document.getElementById('create-description');
+      const currency = document.getElementById('create-currency');
+      const rounds = document.getElementById('create-rounds');
+      const allocation = document.getElementById('create-allocation');
+      const duration = document.getElementById('create-duration');
+      const startOffset = document.getElementById('create-start-offset');
+      const triggerWindow = document.getElementById('create-trigger-window');
+      const extension = document.getElementById('create-extension');
+      const maxExtensions = document.getElementById('create-max-extensions');
+      const toggle = document.getElementById('create-antisniping-toggle');
+
+      if (title) title.value = '';
+      if (description) description.value = '';
+      if (currency) {
+        currency.value = getCurrentCurrency() || 'USDT';
+        currency.dataset.autofill = 'true';
+      }
+      if (rounds) rounds.value = String(createDefaults.rounds);
+      if (allocation) allocation.value = String(createDefaults.allocationSize);
+      if (duration) duration.value = String(createDefaults.roundDurationSeconds);
+      if (startOffset) startOffset.value = String(createDefaults.startOffsetSeconds);
+      if (triggerWindow) triggerWindow.value = String(createDefaults.antiSniping.triggerWindowSeconds);
+      if (extension) extension.value = String(createDefaults.antiSniping.extensionSeconds);
+      if (maxExtensions) maxExtensions.value = String(createDefaults.antiSniping.maxExtensions);
+      if (toggle) toggle.checked = true;
+
+      setCreateError('');
+      if (clearStatus) {
+        setCreateStatus('', 'info');
+      }
+      createWizard.step = 0;
+      updateCreateWizardUI();
+      toggleAntiSnipingFields();
+    }
+
+    function toggleAntiSnipingFields() {
+      const toggle = document.getElementById('create-antisniping-toggle');
+      const fields = document.getElementById('create-antisniping-fields');
+      if (!toggle || !fields) return;
+      fields.classList.toggle('hidden', !toggle.checked);
+    }
+
+    function setCreateError(message) {
+      const errors = document.querySelectorAll('[data-create-error]');
+      if (errors.length === 0) return;
+      errors.forEach((error) => {
+        error.textContent = message || '';
+        error.classList.toggle('hidden', !message);
+      });
+    }
+
+    function setCreateStatus(message, tone) {
+      const status = document.getElementById('create-status');
+      if (!status) return;
+      status.textContent = message || '';
+      status.classList.toggle('success', tone === 'success');
+      status.classList.toggle('error', tone === 'error');
+    }
+
+    function setCreateSubmitting(submitting) {
+      uiState.createSubmitting = submitting;
+      const button = document.getElementById('create-submit');
+      if (button) {
+        button.disabled = submitting;
+      }
+    }
+
+    function readCreateNumber(id, fallback) {
+      const input = document.getElementById(id);
+      if (!input) return fallback;
+      const value = Number(input.value);
+      if (!Number.isFinite(value)) return fallback;
+      return value;
+    }
+
+    function validateCreateRange(value, min, max, label) {
+      if (!Number.isFinite(value) || !Number.isInteger(value)) {
+        setCreateError(t('web.create.error.invalid', { field: label }));
+        return false;
+      }
+      if (value < min || value > max) {
+        setCreateError(t('web.create.error.range', { field: label, min, max }));
+        return false;
+      }
+      return true;
+    }
+
+    async function submitCreateAuction(event) {
+      event.preventDefault();
+      if (uiState.createSubmitting) return;
+      if (!state.currentUser) {
+        showAlert(t('web.auth.required'));
+        return;
+      }
+
+      const titleInput = document.getElementById('create-title');
+      const descriptionInput = document.getElementById('create-description');
+      const currencyInput = document.getElementById('create-currency');
+      const toggle = document.getElementById('create-antisniping-toggle');
+
+      const title = titleInput ? titleInput.value.trim() : '';
+      const description = descriptionInput ? descriptionInput.value.trim() : '';
+      const currency = currencyInput && currencyInput.value.trim()
+        ? currencyInput.value.trim()
+        : getCurrentCurrency();
+      const rounds = readCreateNumber('create-rounds', NaN);
+      const allocationSize = readCreateNumber('create-allocation', NaN);
+      const roundDurationSeconds = readCreateNumber('create-duration', NaN);
+      const startOffsetSeconds = readCreateNumber('create-start-offset', NaN);
+
+      setCreateError('');
+      setCreateStatus('', 'info');
+
+      if (!title) {
+        setCreateError(t('web.create.error.requiredTitle'));
+        return;
+      }
+
+      if (!validateCreateRange(rounds, 1, 20, t('web.create.roundsLabel'))) return;
+      if (!validateCreateRange(allocationSize, 1, 500, t('web.create.allocationLabel'))) return;
+      if (!validateCreateRange(roundDurationSeconds, 30, 7200, t('web.create.durationLabel'))) return;
+      if (!validateCreateRange(startOffsetSeconds, 0, 86400, t('web.create.startOffsetLabel'))) return;
+
+      const payload = {
+        title,
+        currency: currency || 'USDT',
+        rounds,
+        allocationSize,
+        roundDurationSeconds,
+        startOffsetSeconds
+      };
+
+      if (description) {
+        payload.description = description;
+      }
+
+      if (toggle && toggle.checked) {
+        const triggerWindowSeconds = readCreateNumber('create-trigger-window', NaN);
+        const extensionSeconds = readCreateNumber('create-extension', NaN);
+        const maxExtensions = readCreateNumber('create-max-extensions', NaN);
+
+        if (
+          !validateCreateRange(
+            triggerWindowSeconds,
+            0,
+            600,
+            t('web.create.triggerWindowLabel')
+          )
+        ) {
+          return;
+        }
+        if (
+          !validateCreateRange(
+            extensionSeconds,
+            0,
+            600,
+            t('web.create.extensionLabel')
+          )
+        ) {
+          return;
+        }
+        if (
+          !validateCreateRange(
+            maxExtensions,
+            0,
+            20,
+            t('web.create.maxExtensionsLabel')
+          )
+        ) {
+          return;
+        }
+        payload.antiSniping = {
+          triggerWindowSeconds,
+          extensionSeconds,
+          maxExtensions
+        };
+      }
+
+      setCreateSubmitting(true);
+      setCreateStatus(t('web.create.status.creating'), 'info');
+
+      try {
+        const response = await apiFetch('/api/auctions', {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+        const data = await readJsonSafe(response);
+        if (!response.ok) {
+          setCreateError(
+            t('web.create.error.requestFailed', {
+              message: data?.message || t('errors.unknown')
+            })
+          );
+          setCreateStatus(t('web.create.status.failed'), 'error');
+          setCreateSubmitting(false);
+          return;
+        }
+
+        setCreateStatus(
+          t('web.create.status.success', { id: data?._id || '-' }),
+          'success'
+        );
+        setCreateSubmitting(false);
+        await loadAuctions();
+      } catch (error) {
+        setCreateError(t('web.create.error.network'));
+        setCreateStatus(t('web.create.status.failed'), 'error');
+        setCreateSubmitting(false);
+      }
+    }
+
+    function showAlert(message) {
+      if (tg && typeof tg.showAlert === 'function') {
+        try {
+          const result = tg.showAlert(message);
+          if (result && typeof result.catch === 'function') {
+            result.catch(() => {
+              alert(message);
+            });
+          }
+          return;
+        } catch (error) {
+          alert(message);
+          return;
         }
       }
+      alert(message);
+    }
 
-      if (tab === 'auctions') {
-        document.getElementById('auctions-section').classList.remove('hidden');
-        document.getElementById('create-section').classList.add('hidden');
-        document.querySelectorAll('.tab')[0].classList.add('active');
-        document.querySelectorAll('.nav-btn')[0].classList.add('active');
-      } else {
-        document.getElementById('auctions-section').classList.add('hidden');
-        document.getElementById('create-section').classList.remove('hidden');
-        document.querySelectorAll('.tab')[1].classList.add('active');
-        document.querySelectorAll('.nav-btn')[1].classList.add('active');
+    function setModalOpen(id, open) {
+      const modal = document.getElementById(id);
+      if (!modal) return;
+      modal.classList.toggle('hidden', !open);
+      document.body.classList.toggle('modal-open', open);
+    }
+
+    function handleModalBackdropClick(event, modalId) {
+      if (!event || event.target !== event.currentTarget) {
+        return;
+      }
+      if (modalId === 'deposit-modal') {
+        closeDepositModal();
+      } else if (modalId === 'withdraw-modal') {
+        closeWithdrawModal();
+      }
+    }
+
+    function getCurrentCurrency() {
+      return state.balance.currency || 'USDT';
+    }
+
+    async function readJsonSafe(response) {
+      try {
+        return await response.json();
+      } catch (error) {
+        return null;
+      }
+    }
+
+    async function copyToClipboard(value) {
+      if (!value) return false;
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(value);
+          return true;
+        }
+      } catch (error) {
+        // fall through to legacy path
       }
 
-      if (tg) {
-        tg.HapticFeedback.impactOccurred('light');
+      try {
+        const input = document.createElement('textarea');
+        input.value = value;
+        input.style.position = 'fixed';
+        input.style.opacity = '0';
+        document.body.appendChild(input);
+        input.focus();
+        input.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(input);
+        return ok;
+      } catch (error) {
+        return false;
+      }
+    }
+
+    function updateDepositTexts(currency) {
+      const title = document.getElementById('deposit-title');
+      const subtitle = document.getElementById('deposit-subtitle');
+      if (title) {
+        title.textContent = t('web.deposit.title', { currency });
+      }
+      if (subtitle) {
+        subtitle.textContent = t('web.deposit.subtitle', { currency });
+      }
+    }
+
+    function resetDepositModal() {
+      uiState.deposit = { address: '', memo: '', currency: '', strategy: '' };
+      const loading = document.getElementById('deposit-loading');
+      const content = document.getElementById('deposit-content');
+      const error = document.getElementById('deposit-error');
+      if (loading) loading.classList.remove('hidden');
+      if (content) content.classList.add('hidden');
+      if (error) error.classList.add('hidden');
+    }
+
+    function showDepositError(message) {
+      const loading = document.getElementById('deposit-loading');
+      const content = document.getElementById('deposit-content');
+      const error = document.getElementById('deposit-error');
+      const errorText = document.getElementById('deposit-error-text');
+      if (loading) loading.classList.add('hidden');
+      if (content) content.classList.add('hidden');
+      if (error) error.classList.remove('hidden');
+      if (errorText) {
+        errorText.textContent = message || t('web.deposit.errorBody');
+      }
+    }
+
+    function renderDepositAddress() {
+      const loading = document.getElementById('deposit-loading');
+      const content = document.getElementById('deposit-content');
+      const error = document.getElementById('deposit-error');
+      const addressEl = document.getElementById('deposit-address');
+      const memoBlock = document.getElementById('deposit-memo-block');
+      const memoEl = document.getElementById('deposit-memo');
+      if (loading) loading.classList.add('hidden');
+      if (error) error.classList.add('hidden');
+      if (content) content.classList.remove('hidden');
+      if (addressEl) addressEl.textContent = uiState.deposit.address || '--';
+      if (memoBlock) {
+        if (uiState.deposit.memo) {
+          memoBlock.classList.remove('hidden');
+          if (memoEl) memoEl.textContent = uiState.deposit.memo;
+        } else {
+          memoBlock.classList.add('hidden');
+          if (memoEl) memoEl.textContent = '';
+        }
+      }
+    }
+
+    async function openDepositModal() {
+      if (!state.currentUser) {
+        showAlert(t('web.auth.required'));
+        return;
+      }
+      const currency = getCurrentCurrency();
+      updateDepositTexts(currency);
+      resetDepositModal();
+      setModalOpen('deposit-modal', true);
+      triggerHapticImpact('light');
+      try {
+        const response = await apiFetch(
+          `/api/crypto/deposit-address?currency=${encodeURIComponent(currency)}`
+        );
+        const data = await readJsonSafe(response);
+        if (!response.ok) {
+          showDepositError(data?.message || t('web.deposit.errorBody'));
+          return;
+        }
+        uiState.deposit = {
+          address: data?.address || '',
+          memo: data?.memo || '',
+          currency: data?.currency || currency,
+          strategy: data?.strategy || ''
+        };
+        updateDepositTexts(uiState.deposit.currency || currency);
+        renderDepositAddress();
+      } catch (error) {
+        showDepositError(t('web.deposit.errorBody'));
+      }
+    }
+
+    function closeDepositModal() {
+      setModalOpen('deposit-modal', false);
+    }
+
+    async function copyDepositAddress() {
+      const ok = await copyToClipboard(uiState.deposit.address);
+      showAlert(ok ? t('web.deposit.copied') : t('web.deposit.copyFailed'));
+    }
+
+    async function copyDepositMemo() {
+      const ok = await copyToClipboard(uiState.deposit.memo);
+      showAlert(ok ? t('web.deposit.copied') : t('web.deposit.copyFailed'));
+    }
+
+    function updateWithdrawTexts(currency) {
+      const title = document.getElementById('withdraw-title');
+      const subtitle = document.getElementById('withdraw-subtitle');
+      if (title) {
+        title.textContent = t('web.withdraw.title', { currency });
+      }
+      if (subtitle) {
+        subtitle.textContent = t('web.withdraw.subtitle', { currency });
+      }
+    }
+
+    function updateWithdrawAvailable() {
+      const line = document.getElementById('withdraw-available');
+      if (!line) return;
+      const available = typeof state.balance.available === 'number' ? state.balance.available : 0;
+      const currency = getCurrentCurrency();
+      line.textContent = t('web.withdraw.available', {
+        amount: available.toFixed(2),
+        currency
+      });
+    }
+
+    function setWithdrawError(message) {
+      const errorEl = document.getElementById('withdraw-error');
+      if (!errorEl) return;
+      errorEl.textContent = message;
+      errorEl.classList.remove('hidden');
+    }
+
+    function clearWithdrawError() {
+      const errorEl = document.getElementById('withdraw-error');
+      if (!errorEl) return;
+      errorEl.textContent = '';
+      errorEl.classList.add('hidden');
+    }
+
+    function setWithdrawSubmitting(submitting) {
+      uiState.withdrawSubmitting = submitting;
+      const button = document.getElementById('withdraw-submit');
+      if (button) {
+        button.disabled = submitting;
+        button.textContent = submitting ? t('web.withdraw.processing') : t('web.withdraw.submit');
+      }
+    }
+
+    function resetWithdrawModal() {
+      updateWithdrawTexts(getCurrentCurrency());
+      updateWithdrawAvailable();
+      clearWithdrawError();
+      const form = document.getElementById('withdraw-form');
+      const result = document.getElementById('withdraw-result');
+      if (form) form.classList.remove('hidden');
+      if (result) result.classList.add('hidden');
+      const amountInput = document.getElementById('withdraw-amount');
+      const addressInput = document.getElementById('withdraw-address');
+      const memoInput = document.getElementById('withdraw-memo');
+      if (amountInput) amountInput.value = '';
+      if (addressInput) addressInput.value = '';
+      if (memoInput) memoInput.value = '';
+      setWithdrawSubmitting(false);
+    }
+
+    function openWithdrawModal() {
+      if (!state.currentUser) {
+        showAlert(t('web.auth.required'));
+        return;
+      }
+      resetWithdrawModal();
+      setModalOpen('withdraw-modal', true);
+      triggerHapticImpact('light');
+    }
+
+    function closeWithdrawModal() {
+      setModalOpen('withdraw-modal', false);
+    }
+
+    function buildWithdrawalNotes(codes, mapping) {
+      return (codes || []).map((code) => {
+        const key = mapping[code];
+        return key ? t(key) : code;
+      });
+    }
+
+    function renderWithdrawResult(decision, payload) {
+      const resolvedDecision =
+        decision === 'approve' || decision === 'review' || decision === 'reject'
+          ? decision
+          : 'review';
+      const form = document.getElementById('withdraw-form');
+      const result = document.getElementById('withdraw-result');
+      const title = document.getElementById('withdraw-result-title');
+      const text = document.getElementById('withdraw-result-text');
+      const notes = document.getElementById('withdraw-result-notes');
+      const notesTitle = document.getElementById('withdraw-result-notes-title');
+      const notesList = document.getElementById('withdraw-result-notes-list');
+      if (form) form.classList.add('hidden');
+      if (result) result.classList.remove('hidden');
+
+      if (resolvedDecision === 'approve') {
+        if (title) title.textContent = t('web.withdraw.successTitle');
+        if (text) text.textContent = t('web.withdraw.successBody');
+        if (notes) notes.classList.add('hidden');
+        return;
+      }
+
+      if (resolvedDecision === 'review') {
+        if (title) title.textContent = t('web.withdraw.reviewTitle');
+        if (text) text.textContent = t('web.withdraw.reviewBody');
+        const flags = buildWithdrawalNotes(payload.flags, {
+          new_address: 'web.withdraw.flag.new_address',
+          first_withdrawal: 'web.withdraw.flag.first_withdrawal',
+          amount_spike: 'web.withdraw.flag.amount_spike',
+          manual_threshold: 'web.withdraw.flag.manual_threshold'
+        });
+        if (notes && notesTitle && notesList) {
+          notes.classList.toggle('hidden', flags.length === 0);
+          notesTitle.textContent = t('web.withdraw.flagsTitle');
+          notesList.innerHTML = flags.map((entry) => `<div>${entry}</div>`).join('');
+        }
+        return;
+      }
+
+      if (title) title.textContent = t('web.withdraw.rejectedTitle');
+      if (text) text.textContent = t('web.withdraw.rejectedBody');
+      const violations = buildWithdrawalNotes(payload.violations, {
+        min_amount: 'web.withdraw.violation.min_amount',
+        max_amount: 'web.withdraw.violation.max_amount',
+        daily_limit: 'web.withdraw.violation.daily_limit',
+        hourly_limit: 'web.withdraw.violation.hourly_limit',
+        daily_count_limit: 'web.withdraw.violation.daily_count_limit',
+        cooldown: 'web.withdraw.violation.cooldown',
+        allowlist_required: 'web.withdraw.violation.allowlist_required'
+      });
+      if (notes && notesTitle && notesList) {
+        notes.classList.toggle('hidden', violations.length === 0);
+        notesTitle.textContent = t('web.withdraw.issuesTitle');
+        notesList.innerHTML = violations.map((entry) => `<div>${entry}</div>`).join('');
+      }
+    }
+
+    async function submitWithdrawal(event) {
+      event.preventDefault();
+      if (uiState.withdrawSubmitting) return;
+
+      const amountInput = document.getElementById('withdraw-amount');
+      const addressInput = document.getElementById('withdraw-address');
+      const memoInput = document.getElementById('withdraw-memo');
+      const amount = amountInput ? parseFloat(amountInput.value) : 0;
+      const address = addressInput ? addressInput.value.trim() : '';
+      const memo = memoInput ? memoInput.value.trim() : '';
+      const available = typeof state.balance.available === 'number' ? state.balance.available : 0;
+      const currency = getCurrentCurrency();
+
+      clearWithdrawError();
+
+      if (!Number.isFinite(amount) || amount <= 0) {
+        setWithdrawError(t('web.withdraw.error.invalidAmount'));
+        return;
+      }
+
+      if (amount > available + 1e-9) {
+        setWithdrawError(t('web.withdraw.error.amountTooHigh'));
+        return;
+      }
+
+      if (!address) {
+        setWithdrawError(t('web.withdraw.error.addressRequired'));
+        return;
+      }
+
+      setWithdrawSubmitting(true);
+
+      try {
+        const response = await apiFetch('/api/crypto/withdrawals', {
+          method: 'POST',
+          body: JSON.stringify({
+            amount,
+            currency,
+            destinationAddress: address,
+            memo: memo.length > 0 ? memo : undefined
+          })
+        });
+        const data = await readJsonSafe(response);
+        if (!response.ok) {
+          setWithdrawError(
+            t('web.withdraw.error.requestFailed', {
+              message: data?.message || t('errors.unknown')
+            })
+          );
+          setWithdrawSubmitting(false);
+          return;
+        }
+
+        if (data?.balance) {
+          state.balance = Object.assign({}, state.balance, data.balance);
+          updateBalanceUI();
+        }
+
+        renderWithdrawResult(data?.decision, data || {});
+        setWithdrawSubmitting(false);
+      } catch (error) {
+        setWithdrawError(t('web.withdraw.error.network'));
+        setWithdrawSubmitting(false);
+      }
+    }
+
+    // Switch tab
+    function switchTab(tab, silent = false) {
+      const nextTab = tab === 'auctions' || tab === 'create' || tab === 'home' ? tab : 'home';
+      uiState.activeTab = nextTab;
+
+      document.querySelectorAll('.tab').forEach((node) => {
+        node.classList.toggle('active', node.dataset.tab === nextTab);
+      });
+      document.querySelectorAll('.nav-btn').forEach((node) => {
+        node.classList.toggle('active', node.dataset.tab === nextTab);
+      });
+
+      const homeSection = document.getElementById('home-section');
+      const auctionsSection = document.getElementById('auctions-section');
+      const createSection = document.getElementById('create-section');
+
+      if (homeSection) homeSection.classList.toggle('hidden', nextTab !== 'home');
+      if (auctionsSection) auctionsSection.classList.toggle('hidden', nextTab !== 'auctions');
+      if (createSection) createSection.classList.toggle('hidden', nextTab !== 'create');
+
+      const headerBalance = document.getElementById('header-balance');
+      if (headerBalance) headerBalance.classList.toggle('hidden', nextTab === 'home');
+      const headerCreate = document.getElementById('header-create');
+      if (headerCreate) headerCreate.classList.toggle('hidden', nextTab !== 'home');
+      updateHeaderTitle(nextTab);
+
+      if (nextTab === 'home') {
+        loadActiveBids();
+        loadAuctions();
+      }
+
+      if (!silent && tg) {
+        triggerHapticImpact('light');
       }
     }
 
     // Actions
     function handleDeposit() {
-      if (tg) tg.showAlert(t('web.actions.depositComing'));
+      openDepositModal();
     }
 
     function handleWithdraw() {
-      if (tg) tg.showAlert(t('web.actions.withdrawComing'));
+      openWithdrawModal();
     }
 
     function openAuction(id) {
-      if (tg) tg.HapticFeedback.impactOccurred('medium');
+      triggerHapticImpact('medium');
       window.location.href = `/auction/${id}`;
     }
 

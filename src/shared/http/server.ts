@@ -1,11 +1,23 @@
 // Fastify server factory.
-import fastify, { type FastifyBaseLogger, type FastifyInstance } from "fastify";
-import type { Logger } from "pino";
+import fastify, { type FastifyInstance } from "fastify";
+import { pino, type Logger } from "pino";
 import type { AppConfig } from "../config.js";
+import { registerMetricsRoutes } from "./metrics.js";
 
-export function createServer({ logger }: { logger: Logger; config: AppConfig }): FastifyInstance {
-  return fastify({
-    logger: logger as unknown as FastifyBaseLogger,
+export function createServer({ logger, config }: { logger: Logger; config: AppConfig }): FastifyInstance {
+  const app = fastify({
+    logger: {
+      level: config.logLevel,
+      base: {
+        service: config.serviceName,
+        env: config.env
+      },
+      timestamp: pino.stdTimeFunctions.isoTime
+    },
     trustProxy: true
   });
+
+  registerMetricsRoutes(app, config);
+
+  return app;
 }
