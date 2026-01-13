@@ -11,7 +11,8 @@ import {
   mongoCollections,
   type AuctionDocument,
   type AuctionStatus,
-  type BidDocument
+  type BidDocument,
+  type RoundResultDocument
 } from "../../shared/storage/mongoSchemas.js";
 import { parseRankingMember } from "../auction-engine/bidRanking.js";
 import { BidError, createBidService } from "../auction-engine/bidService.js";
@@ -55,6 +56,7 @@ export async function registerWebRoutes(
   const ledgerRepository = createLedgerRepository(deps.mongo);
   const bidService = createBidService(deps);
   const bids = deps.mongo.db.collection<BidDocument>(mongoCollections.bids);
+  const roundResults = deps.mongo.db.collection<RoundResultDocument>(mongoCollections.roundResults);
 
   app.get("/", async (request, reply) => {
     const html = await loadHtml("index.html");
@@ -336,6 +338,135 @@ export async function registerWebRoutes(
     const balance = await ledgerRepository.getBalance(params.userId, currency);
     return balance;
   });
+
+  app.get("/api/profile/:userId", async (request, reply) => {
+    const params = request.params as { userId: string };
+    const userId = params.userId;
+
+    if (!userId) {
+      return reply.code(400).send({ error: "invalid_request", message: "User id required." });
+    }
+
+    try {
+      // Get user auctions (created by this user)
+      const auctions = deps.mongo.db.collection<AuctionDocument>(mongoCollections.auctions);
+      const userAuctions = await auctions
+        .find({ createdBy: userId })
+        .sort({ createdAt: -1 })
+        .limit(50)
+        .toArray();
+
+      // Get user bids count
+      const bidsCount = await bids.countDocuments({ userId });
+
+      // Get user balance
+      const balance = await ledgerRepository.getBalance(userId, "USDT");
+
+      const publicAuction = (auction: WithId<AuctionDocument>) => ({
+        _id: auction._id.toHexString(),
+        title: auction.title,
+        description: auction.description,
+        status: auction.status,
+        currency: auction.currency,
+        startsAt: auction.startsAt,
+        endsAt: auction.endsAt,
+        createdAt: auction.createdAt,
+        rounds: auction.rounds.map((round) => ({
+          index: round.index,
+          allocationSize: round.allocationSize,
+          startAt: round.startAt,
+          endAt: round.endAt
+        }))
+      });
+
+      const participationIds = (await bids.distinct("auctionId", { userId }))
+        .map((value) => coerceObjectId(value))
+        .filter((value): value is ObjectId => value !== null);
+
+      const participatedAuctionDocs = participationIds.length
+        ? await auctions
+            .find({ _id: { $in: participationIds } })
+            .sort({ createdAt: -1 })
+            .limit(50)
+            .toArray()
+        : [];
+
+      const participationStats = participationIds.length
+        ? await bids
+            .aggregate<{
+              _id: ObjectId;
+              bidsCount: number;
+              lastBidAt: Date | null;
+            }>([
+              { $match: { userId, auctionId: { $in: participationIds } } },
+              {
+                $group: {
+                  _id: "$auctionId",
+                  bidsCount: { $sum: 1 },
+                  lastBidAt: { $max: "$createdAt" }
+                }
+              }
+            ])
+            .toArray()
+        : [];
+
+      const statsByAuction = new Map<string, { bidsCount: number; lastBidAt: Date | null }>();
+      for (const stat of participationStats) {
+        statsByAuction.set(stat._id.toHexString(), {
+          bidsCount: stat.bidsCount,
+          lastBidAt: stat.lastBidAt ?? null
+        });
+      }
+
+      const participationResults = participationIds.length
+        ? await roundResults
+            .find({
+              auctionId: { $in: participationIds },
+              "winners.userId": userId
+            })
+            .toArray()
+        : [];
+
+      const placementByAuction = new Map<string, number>();
+      for (const result of participationResults) {
+        const auctionId = result.auctionId.toHexString();
+        for (const winner of result.winners) {
+          if (winner.userId !== userId) {
+            continue;
+          }
+          const current = placementByAuction.get(auctionId);
+          if (current === undefined || winner.rank < current) {
+            placementByAuction.set(auctionId, winner.rank);
+          }
+        }
+      }
+
+      const participatedAuctions = participatedAuctionDocs.map((auction) => {
+        const base = publicAuction(auction);
+        const stats = statsByAuction.get(base._id);
+        return {
+          ...base,
+          bidsCount: stats?.bidsCount ?? 0,
+          lastBidAt: stats?.lastBidAt ?? null,
+          placement: placementByAuction.get(base._id) ?? null
+        };
+      });
+
+      const activeAuctions = participatedAuctions.filter((auction) => auction.status === "live");
+
+      return {
+        userId,
+        auctionsCreated: userAuctions.length,
+        bidsPlaced: bidsCount,
+        balance,
+        auctions: userAuctions.map(publicAuction),
+        activeAuctions,
+        participatedAuctions
+      };
+    } catch (error) {
+      return reply.code(500).send({ error: "internal_error", message: "Failed to load profile." });
+    }
+  });
 }
 
 function resolveUserId(request: FastifyRequest, fallback?: string | null): string | null {
@@ -356,6 +487,16 @@ function parseNumber(value: string | undefined): number | null {
   }
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function coerceObjectId(value: unknown): ObjectId | null {
+  if (value instanceof ObjectId) {
+    return value;
+  }
+  if (typeof value === "string" && ObjectId.isValid(value)) {
+    return new ObjectId(value);
+  }
+  return null;
 }
 
 function normalizeLimit(value: string | undefined): number {

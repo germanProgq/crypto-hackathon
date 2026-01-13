@@ -423,7 +423,7 @@
       backdrop-filter: blur(20px) saturate(180%);
       border-top: 1px solid rgba(255, 255, 255, 0.1);
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
+      grid-template-columns: repeat(3, 1fr);
       gap: 4px;
       z-index: 100;
     }
@@ -451,6 +451,189 @@
 
     .nav-btn-icon {
       font-size: 24px;
+    }
+
+    /* === PROFILE STYLES === */
+
+    .profile-card {
+      padding: 16px;
+      border-radius: var(--radius-lg);
+      background: var(--gradient-card);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: var(--shadow-md);
+      margin-bottom: 16px;
+    }
+
+    .profile-identity {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .profile-identity-main {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .profile-avatar {
+      width: 52px;
+      height: 52px;
+      border-radius: 14px;
+      background: var(--gradient-primary);
+      display: grid;
+      place-items: center;
+      font-size: 24px;
+      box-shadow: 0 6px 16px rgba(42, 171, 238, 0.4);
+    }
+
+    .profile-name {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.4px;
+    }
+
+    .profile-handle {
+      font-size: 13px;
+      color: var(--tg-hint);
+    }
+
+    .profile-status {
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      background: rgba(52, 199, 89, 0.2);
+      color: #34c759;
+    }
+
+    .profile-meta {
+      display: flex;
+      gap: 16px;
+      margin-top: 12px;
+      color: var(--tg-hint);
+      font-size: 12px;
+    }
+
+    .profile-meta strong {
+      color: var(--tg-text);
+      font-weight: 600;
+      margin-left: 6px;
+    }
+
+    .profile-stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .profile-stat {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      text-align: center;
+    }
+
+    .profile-stat-label {
+      font-size: 11px;
+      color: var(--tg-hint);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+
+    .profile-stat-value {
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .profile-section {
+      margin-top: 14px;
+    }
+
+    .profile-section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+
+    .profile-section-title {
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    .profile-section-meta {
+      font-size: 12px;
+      color: var(--tg-hint);
+      font-weight: 600;
+    }
+
+    .profile-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .profile-auction {
+      padding: 12px 14px;
+      border-radius: var(--radius-md);
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .profile-auction-info {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .profile-auction-title {
+      font-size: 15px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .profile-auction-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      font-size: 12px;
+      color: var(--tg-hint);
+    }
+
+    .profile-auction-rank {
+      min-width: 52px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(42, 171, 238, 0.2);
+      color: var(--tg-accent);
+      font-size: 12px;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    .profile-auction-rank.pending {
+      background: rgba(142, 142, 147, 0.2);
+      color: var(--tg-hint);
+    }
+
+    @media (max-width: 380px) {
+      .profile-stats {
+        grid-template-columns: repeat(2, 1fr);
+      }
     }
 
     /* === BUTTONS === */
@@ -552,7 +735,7 @@
     </header>
 
     <!-- BALANCE CARD -->
-    <div class="balance-card">
+    <div class="balance-card" id="balance-card">
       <div class="balance-header">
         <span class="balance-label">Общий баланс</span>
         <div class="balance-icon">👁</div>
@@ -575,15 +758,15 @@
     </div>
 
     <!-- TABS -->
-    <div class="tabs">
-      <div class="tab active" onclick="switchTab('auctions')">🔨 Аукционы</div>
-      <div class="tab" onclick="switchTab('create')">➕ Создать</div>
+    <div class="tabs" id="main-tabs">
+      <div class="tab active" data-tab="auctions" onclick="switchTab('auctions')">🔨 Аукционы</div>
+      <div class="tab" data-tab="create" onclick="switchTab('create')">➕ Создать</div>
     </div>
 
     <!-- AUCTIONS SECTION -->
     <section class="section" id="auctions-section">
       <div class="section-header">
-        <h2 class="section-title">Активные</h2>
+        <h2 class="section-title">Доступные аукционы</h2>
         <a class="section-link" onclick="loadAuctions()">Обновить</a>
       </div>
       <div class="auction-list" id="auctions-list">
@@ -598,23 +781,157 @@
       <div class="section-header">
         <h2 class="section-title">Создать аукцион</h2>
       </div>
-      <div class="empty-state">
-        <div class="empty-icon">🎨</div>
-        <div class="empty-title">Скоро</div>
-        <div class="empty-text">Функция создания аукционов в разработке</div>
+
+      <div class="auction-card" style="margin-bottom: 16px;">
+        <h3 class="auction-title" style="margin-bottom: 12px;">Основная информация</h3>
+
+        <div style="display: flex; flex-direction: column; gap: 12px;">
+          <div>
+            <label style="display: block; font-size: 13px; color: var(--tg-hint); margin-bottom: 6px;">Название аукциона</label>
+            <input type="text" id="create-title" placeholder="Например: iPhone 15 Pro" style="width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.1); background: rgba(255, 255, 255, 0.05); color: var(--tg-text); font-size: 15px;">
+          </div>
+
+          <div>
+            <label style="display: block; font-size: 13px; color: var(--tg-hint); margin-bottom: 6px;">Описание (опционально)</label>
+            <textarea id="create-description" placeholder="Описание аукциона" style="width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.1); background: rgba(255, 255, 255, 0.05); color: var(--tg-text); font-size: 15px; min-height: 80px; resize: vertical;"></textarea>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+            <div>
+              <label style="display: block; font-size: 13px; color: var(--tg-hint); margin-bottom: 6px;">Валюта</label>
+              <input type="text" id="create-currency" value="USDT" style="width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.1); background: rgba(255, 255, 255, 0.05); color: var(--tg-text); font-size: 15px;">
+            </div>
+
+            <div>
+              <label style="display: block; font-size: 13px; color: var(--tg-hint); margin-bottom: 6px;">Количество раундов</label>
+              <input type="number" id="create-rounds" value="3" min="1" max="10" style="width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.1); background: rgba(255, 255, 255, 0.05); color: var(--tg-text); font-size: 15px;">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="auction-card" style="margin-bottom: 16px;">
+        <h3 class="auction-title" style="margin-bottom: 12px;">Настройки раунда</h3>
+
+        <div style="display: flex; flex-direction: column; gap: 12px;">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+            <div>
+              <label style="display: block; font-size: 13px; color: var(--tg-hint); margin-bottom: 6px;">Мест в раунде</label>
+              <input type="number" id="create-allocation" value="5" min="1" max="100" style="width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.1); background: rgba(255, 255, 255, 0.05); color: var(--tg-text); font-size: 15px;">
+            </div>
+
+            <div>
+              <label style="display: block; font-size: 13px; color: var(--tg-hint); margin-bottom: 6px;">Длительность (сек)</label>
+              <input type="number" id="create-duration" value="300" min="30" max="3600" style="width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.1); background: rgba(255, 255, 255, 0.05); color: var(--tg-text); font-size: 15px;">
+            </div>
+          </div>
+
+          <div>
+            <label style="display: block; font-size: 13px; color: var(--tg-hint); margin-bottom: 6px;">Начало через (секунд)</label>
+            <input type="number" id="create-offset" value="60" min="0" max="86400" style="width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.1); background: rgba(255, 255, 255, 0.05); color: var(--tg-text); font-size: 15px;">
+          </div>
+        </div>
+      </div>
+
+      <button class="btn btn-primary" onclick="createAuction()" style="width: 100%; margin-bottom: 16px;">
+        Создать аукцион
+      </button>
+
+      <div id="create-status" style="text-align: center; font-size: 14px; color: var(--tg-hint);"></div>
+    </section>
+
+    <!-- PROFILE SECTION -->
+    <section class="section hidden" id="profile-section">
+      <div class="section-header">
+        <h2 class="section-title">Профиль</h2>
+        <a class="section-link" onclick="loadProfile()">Обновить</a>
+      </div>
+
+      <div class="profile-card">
+        <div class="profile-identity">
+          <div class="profile-identity-main">
+            <div class="profile-avatar" id="profile-avatar">👤</div>
+            <div>
+              <div class="profile-name" id="profile-name">Loading...</div>
+              <div class="profile-handle" id="profile-username">@username</div>
+            </div>
+          </div>
+          <span class="profile-status" id="profile-status">Active</span>
+        </div>
+        <div class="profile-meta">
+          <span>ID <strong id="profile-id">-</strong></span>
+        </div>
+        <div class="profile-stats">
+          <div class="profile-stat">
+            <span class="profile-stat-label">Создано</span>
+            <span class="profile-stat-value" id="profile-auctions-count">0</span>
+          </div>
+          <div class="profile-stat">
+            <span class="profile-stat-label">Ставок</span>
+            <span class="profile-stat-value" id="profile-bids-count">0</span>
+          </div>
+          <div class="profile-stat">
+            <span class="profile-stat-label">Участий</span>
+            <span class="profile-stat-value" id="profile-participations-count">0</span>
+          </div>
+          <div class="profile-stat">
+            <span class="profile-stat-label">Лучшее место</span>
+            <span class="profile-stat-value" id="profile-best-rank">—</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="profile-section">
+        <div class="profile-section-header">
+          <h3 class="profile-section-title">Активные аукционы</h3>
+          <span class="profile-section-meta" id="profile-active-count">0</span>
+        </div>
+        <div class="profile-list" id="profile-active-list">
+          <div class="loading">
+            <div class="spinner"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="profile-section">
+        <div class="profile-section-header">
+          <h3 class="profile-section-title">Участвовал</h3>
+          <span class="profile-section-meta">Место</span>
+        </div>
+        <div class="profile-list" id="profile-participated-list">
+          <div class="loading">
+            <div class="spinner"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="profile-section">
+        <div class="profile-section-header">
+          <h3 class="profile-section-title">Созданные аукционы</h3>
+        </div>
+        <div class="profile-list" id="profile-created-list">
+          <div class="loading">
+            <div class="spinner"></div>
+          </div>
+        </div>
       </div>
     </section>
+
   </div>
 
   <!-- BOTTOM NAV -->
   <nav class="bottom-nav">
-    <button class="nav-btn active" onclick="switchTab('auctions')">
+    <button class="nav-btn active" data-tab="auctions" onclick="switchTab('auctions')">
       <span class="nav-btn-icon">🔨</span>
       <span>Аукционы</span>
     </button>
-    <button class="nav-btn" onclick="switchTab('create')">
+    <button class="nav-btn" data-tab="create" onclick="switchTab('create')">
       <span class="nav-btn-icon">➕</span>
       <span>Создать</span>
+    </button>
+    <button class="nav-btn" data-tab="profile" onclick="switchTab('profile')">
+      <span class="nav-btn-icon">👤</span>
+      <span>Профиль</span>
     </button>
   </nav>
 
@@ -631,7 +948,8 @@
     const state = {
       currentUser: null,
       auctions: [],
-      balance: { available: 0, held: 0, total: 0 }
+      balance: { available: 0, held: 0, total: 0 },
+      profile: null
     };
 
     // Initialize
@@ -679,7 +997,9 @@
       try {
         const response = await fetch('/api/auctions');
         if (response.ok) {
-          state.auctions = await response.json();
+          const allAuctions = await response.json();
+          // Filter only live auctions that users can participate in
+          state.auctions = allAuctions.filter(auction => auction.status === 'live');
           renderAuctions();
         }
       } catch (error) {
@@ -702,8 +1022,8 @@
         container.innerHTML = `
           <div class="empty-state">
             <div class="empty-icon">🔨</div>
-            <div class="empty-title">Нет активных аукционов</div>
-            <div class="empty-text">Новые аукционы скоро появятся</div>
+            <div class="empty-title">Нет доступных аукционов</div>
+            <div class="empty-text">В данный момент нет активных аукционов для участия</div>
           </div>
         `;
         return;
@@ -735,32 +1055,238 @@
       `).join('');
     }
 
+    // Load profile
+    async function loadProfile() {
+      const userId = state.currentUser?.id || 'demo';
+      setProfileLoading();
+
+      try {
+        const response = await fetch(`/api/profile/${userId}`);
+        if (response.ok) {
+          state.profile = await response.json();
+          updateProfileUI();
+          renderProfileActiveAuctions();
+          renderProfileParticipatedAuctions();
+          renderProfileCreatedAuctions();
+        } else {
+          renderProfileError();
+        }
+      } catch (error) {
+        console.error('Failed to load profile:', error);
+        renderProfileError();
+      }
+    }
+
+    // Update profile UI
+    function updateProfileUI() {
+      if (!state.profile) return;
+
+      const user = state.currentUser || { id: 'demo', first_name: 'Demo', username: 'demo' };
+      const participated = Array.isArray(state.profile.participatedAuctions)
+        ? state.profile.participatedAuctions
+        : [];
+      const active = Array.isArray(state.profile.activeAuctions) ? state.profile.activeAuctions : [];
+      const placements = participated
+        .map((auction) => auction.placement)
+        .filter((rank) => Number.isFinite(rank));
+      const bestRank = placements.length ? Math.min(...placements) : null;
+
+      document.getElementById('profile-name').textContent = user.first_name || user.username || 'User';
+      document.getElementById('profile-username').textContent = user.username ? `@${user.username}` : `ID: ${user.id}`;
+      document.getElementById('profile-status').textContent = 'АКТИВЕН';
+      document.getElementById('profile-id').textContent = String(user.id).substring(0, 8);
+      document.getElementById('profile-auctions-count').textContent = state.profile.auctionsCreated || 0;
+      document.getElementById('profile-bids-count').textContent = state.profile.bidsPlaced || 0;
+      document.getElementById('profile-participations-count').textContent = participated.length;
+      document.getElementById('profile-best-rank').textContent = bestRank ? `#${bestRank}` : '—';
+      document.getElementById('profile-active-count').textContent = active.length;
+    }
+
+    function setProfileLoading() {
+      document.getElementById('profile-active-list').innerHTML =
+        '<div class="loading"><div class="spinner"></div></div>';
+      document.getElementById('profile-participated-list').innerHTML =
+        '<div class="loading"><div class="spinner"></div></div>';
+      document.getElementById('profile-created-list').innerHTML =
+        '<div class="loading"><div class="spinner"></div></div>';
+    }
+
+    function renderProfileError() {
+      const errorMarkup = `
+        <div class="empty-state">
+          <div class="empty-icon">😕</div>
+          <div class="empty-title">Ошибка загрузки</div>
+          <div class="empty-text">Не удалось загрузить профиль</div>
+        </div>
+      `;
+      document.getElementById('profile-active-list').innerHTML = errorMarkup;
+      document.getElementById('profile-participated-list').innerHTML = errorMarkup;
+      document.getElementById('profile-created-list').innerHTML = errorMarkup;
+    }
+
+    function formatStatusLabel(status) {
+      switch (status) {
+        case 'live':
+          return 'Активен';
+        case 'closed':
+          return 'Закрыт';
+        case 'draft':
+          return 'Черновик';
+        default:
+          return status;
+      }
+    }
+
+    function buildProfileAuctionCard(auction, options = {}) {
+      const statusLabel = formatStatusLabel(auction.status);
+      const roundsCount = auction.rounds ? auction.rounds.length : 0;
+      const placesCount = auction.rounds?.[0]?.allocationSize || 0;
+      const bidsCount = auction.bidsCount ?? null;
+      const metaParts = [
+        `<span class="auction-status ${auction.status}">${statusLabel}</span>`,
+        auction.currency ? `<span>${auction.currency}</span>` : null,
+        options.showRounds ? `<span>Раундов: ${roundsCount}</span>` : null,
+        options.showPlaces ? `<span>Мест: ${placesCount}</span>` : null,
+        options.showBids && bidsCount !== null ? `<span>Ставок: ${bidsCount}</span>` : null
+      ].filter(Boolean);
+
+      const placement = Number.isFinite(auction.placement) ? `#${auction.placement}` : '—';
+      const rankLabel = options.rankLabel ?? placement;
+      const rankClass =
+        options.rankClass ?? (rankLabel === '—' || rankLabel === 'Идет' ? 'pending' : '');
+
+      return `
+        <div class="profile-auction" onclick="openAuction('${auction._id}')">
+          <div class="profile-auction-info">
+            <div class="profile-auction-title">${auction.title}</div>
+            <div class="profile-auction-meta">${metaParts.join('')}</div>
+          </div>
+          <div class="profile-auction-rank ${rankClass}">${rankLabel}</div>
+        </div>
+      `;
+    }
+
+    function renderProfileActiveAuctions() {
+      const container = document.getElementById('profile-active-list');
+      const auctions = Array.isArray(state.profile?.activeAuctions) ? state.profile.activeAuctions : [];
+
+      if (!auctions.length) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-icon">⏳</div>
+            <div class="empty-title">Нет активных участий</div>
+            <div class="empty-text">Подайте ставку, чтобы появиться в списке</div>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = auctions
+        .map((auction) =>
+          buildProfileAuctionCard(auction, {
+            showRounds: true,
+            showPlaces: true,
+            rankLabel: Number.isFinite(auction.placement) ? `#${auction.placement}` : 'Идет'
+          })
+        )
+        .join('');
+    }
+
+    function renderProfileParticipatedAuctions() {
+      const container = document.getElementById('profile-participated-list');
+      const auctions = Array.isArray(state.profile?.participatedAuctions)
+        ? state.profile.participatedAuctions
+        : [];
+
+      if (!auctions.length) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-icon">🧩</div>
+            <div class="empty-title">Нет истории участия</div>
+            <div class="empty-text">Ваши аукционы появятся здесь</div>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = auctions
+        .map((auction) =>
+          buildProfileAuctionCard(auction, {
+            showRounds: false,
+            showPlaces: false,
+            showBids: true
+          })
+        )
+        .join('');
+    }
+
+    function renderProfileCreatedAuctions() {
+      const container = document.getElementById('profile-created-list');
+      const auctions = Array.isArray(state.profile?.auctions) ? state.profile.auctions : [];
+
+      if (!auctions.length) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-icon">📦</div>
+            <div class="empty-title">Нет созданных аукционов</div>
+            <div class="empty-text">Создайте свой первый аукцион</div>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = auctions
+        .map((auction) =>
+          buildProfileAuctionCard(auction, {
+            showRounds: true,
+            showPlaces: true,
+            rankLabel: formatStatusLabel(auction.status),
+            rankClass: auction.status === 'live' ? '' : 'pending'
+          })
+        )
+        .join('');
+    }
+
     // Switch tab
     function switchTab(tab) {
-      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-      document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
+      const balanceCard = document.getElementById('balance-card');
+      const mainTabs = document.getElementById('main-tabs');
+      const auctionsSection = document.getElementById('auctions-section');
+      const createSection = document.getElementById('create-section');
+      const profileSection = document.getElementById('profile-section');
 
-      if (event && event.target) {
-        if (event.target.classList.contains('tab')) {
-          event.target.classList.add('active');
-        } else if (event.target.closest('.nav-btn')) {
-          event.target.closest('.nav-btn').classList.add('active');
+      // Hide all sections
+      auctionsSection.classList.add('hidden');
+      createSection.classList.add('hidden');
+      profileSection.classList.add('hidden');
+
+      // Show/hide balance and tabs based on current tab
+      if (tab === 'profile') {
+        balanceCard.classList.add('hidden');
+        mainTabs.classList.add('hidden');
+        profileSection.classList.remove('hidden');
+        loadProfile();
+      } else {
+        balanceCard.classList.remove('hidden');
+        mainTabs.classList.remove('hidden');
+
+        if (tab === 'auctions') {
+          auctionsSection.classList.remove('hidden');
+        } else if (tab === 'create') {
+          createSection.classList.remove('hidden');
         }
       }
 
-      if (tab === 'auctions') {
-        document.getElementById('auctions-section').classList.remove('hidden');
-        document.getElementById('create-section').classList.add('hidden');
-        document.querySelectorAll('.tab')[0].classList.add('active');
-        document.querySelectorAll('.nav-btn')[0].classList.add('active');
-      } else {
-        document.getElementById('auctions-section').classList.add('hidden');
-        document.getElementById('create-section').classList.remove('hidden');
-        document.querySelectorAll('.tab')[1].classList.add('active');
-        document.querySelectorAll('.nav-btn')[1].classList.add('active');
-      }
+      // Update active states
+      document.querySelectorAll('.nav-btn').forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.tab === tab);
+      });
 
-      if (tg) {
+      document.querySelectorAll('.tab').forEach((button) => {
+        button.classList.toggle('active', button.dataset.tab === tab);
+      });
+
+      if (tg?.HapticFeedback) {
         tg.HapticFeedback.impactOccurred('light');
       }
     }
@@ -775,8 +1301,91 @@
     }
 
     function openAuction(id) {
-      if (tg) tg.HapticFeedback.impactOccurred('medium');
+      if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
       window.location.href = `/auction/${id}`;
+    }
+
+    // Create auction
+    async function createAuction() {
+      const statusEl = document.getElementById('create-status');
+      const title = document.getElementById('create-title').value.trim();
+      const description = document.getElementById('create-description').value.trim();
+      const currency = document.getElementById('create-currency').value.trim() || 'USDT';
+      const rounds = parseInt(document.getElementById('create-rounds').value) || 3;
+      const allocationSize = parseInt(document.getElementById('create-allocation').value) || 5;
+      const roundDurationSeconds = parseInt(document.getElementById('create-duration').value) || 300;
+      const startOffsetSeconds = parseInt(document.getElementById('create-offset').value) || 60;
+
+      if (!title) {
+        statusEl.textContent = 'Пожалуйста, введите название аукциона';
+        statusEl.style.color = '#ff3b30';
+        return;
+      }
+
+      statusEl.textContent = 'Создание аукциона...';
+      statusEl.style.color = 'var(--tg-hint)';
+
+      try {
+        const response = await fetch('/api/auctions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            title,
+            description: description || undefined,
+            currency,
+            rounds,
+            allocationSize,
+            roundDurationSeconds,
+            startOffsetSeconds
+          })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+          statusEl.textContent = '✅ Аукцион успешно создан!';
+          statusEl.style.color = '#34c759';
+
+          // Clear form
+          document.getElementById('create-title').value = '';
+          document.getElementById('create-description').value = '';
+          document.getElementById('create-currency').value = 'USDT';
+          document.getElementById('create-rounds').value = '3';
+          document.getElementById('create-allocation').value = '5';
+          document.getElementById('create-duration').value = '300';
+          document.getElementById('create-offset').value = '60';
+
+          // Reload auctions
+          await loadAuctions();
+
+          // Switch to auctions tab after 2 seconds
+          setTimeout(() => {
+            switchTab('auctions');
+            statusEl.textContent = '';
+          }, 2000);
+
+          if (tg?.HapticFeedback) {
+            tg.HapticFeedback.notificationOccurred('success');
+          }
+        } else {
+          statusEl.textContent = `❌ Ошибка: ${data.message || 'Не удалось создать аукцион'}`;
+          statusEl.style.color = '#ff3b30';
+
+          if (tg?.HapticFeedback) {
+            tg.HapticFeedback.notificationOccurred('error');
+          }
+        }
+      } catch (error) {
+        console.error('Failed to create auction:', error);
+        statusEl.textContent = '❌ Ошибка подключения к серверу';
+        statusEl.style.color = '#ff3b30';
+
+        if (tg?.HapticFeedback) {
+          tg.HapticFeedback.notificationOccurred('error');
+        }
+      }
     }
 
     // Start app
