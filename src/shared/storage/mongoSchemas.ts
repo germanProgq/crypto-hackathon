@@ -79,6 +79,8 @@ export interface AuctionRoundStateDocument {
   lastBidAt?: Date;
   startedAt?: Date;
   closedAt?: Date;
+  finalizedAt?: Date;
+  settlementCompletedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -373,6 +375,8 @@ const roundStateValidator: Document = {
       lastBidAt: { bsonType: "date" },
       startedAt: { bsonType: "date" },
       closedAt: { bsonType: "date" },
+      finalizedAt: { bsonType: "date" },
+      settlementCompletedAt: { bsonType: "date" },
       createdAt: { bsonType: "date" },
       updatedAt: { bsonType: "date" }
     }
@@ -865,6 +869,10 @@ export const mongoIndexSpecs: Array<{ collection: string; indexes: IndexDescript
       {
         key: { status: 1, nextTransitionAt: 1, auctionId: 1 },
         name: "auction_round_state_next"
+      },
+      {
+        key: { status: 1, settlementCompletedAt: 1, closedAt: 1, effectiveEndAt: 1 },
+        name: "auction_round_state_settlement"
       },
       { key: { auctionId: 1, status: 1 }, name: "auction_round_state_status" },
       { key: { status: 1, scheduledStartAt: 1 }, name: "auction_round_state_startAt" },

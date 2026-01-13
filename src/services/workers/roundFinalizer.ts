@@ -8,7 +8,9 @@ import {
 } from "../../shared/storage/mongoSchemas.js";
 import { createRoundFinalizationService } from "../auction-engine/roundFinalizationService.js";
 
-const finalizerIntervalMs = 200;
+const minFinalizerDelayMs = 50;
+const maxFinalizerDelayMs = 2000;
+const idleFinalizerDelayMs = 1000;
 const finalizerLockTtlMs = 20000;
 const finalizerBatchSize = 50;
 
@@ -18,43 +20,60 @@ export async function registerRoundFinalizer(
 ): Promise<void> {
   const finalizationService = createRoundFinalizationService(deps);
   let tickInFlight = false;
+  let timeout: NodeJS.Timeout | null = null;
 
   const tick = async () => {
     if (tickInFlight) {
+      scheduleNext(minFinalizerDelayMs);
       return;
     }
 
     tickInFlight = true;
     try {
-      await runFinalizerTick(deps, finalizationService);
+      const nextDelay = await runFinalizerTick(deps, finalizationService);
+      scheduleNext(nextDelay);
     } catch (error) {
       deps.logger.error({ err: error }, "Round finalizer tick failed");
+      scheduleNext(idleFinalizerDelayMs);
     } finally {
       tickInFlight = false;
     }
   };
 
-  const timer = setInterval(() => {
-    void tick();
-  }, finalizerIntervalMs);
+  const scheduleNext = (delayMs: number) => {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+    const clamped = Math.max(minFinalizerDelayMs, Math.min(maxFinalizerDelayMs, delayMs));
+    timeout = setTimeout(() => {
+      void tick();
+    }, clamped);
+  };
 
-  void tick();
+  scheduleNext(0);
 
   app.addHook("onClose", async () => {
-    clearInterval(timer);
+    if (timeout) {
+      clearTimeout(timeout);
+      timeout = null;
+    }
   });
 }
 
 async function runFinalizerTick(
   deps: ServiceDependencies,
   service: ReturnType<typeof createRoundFinalizationService>
-): Promise<void> {
+): Promise<number> {
   const roundStates = await deps.mongo.db
     .collection<AuctionRoundStateDocument>(mongoCollections.auctionRoundStates)
-    .find({ status: "closed" })
+    .find({ status: "closed", settlementCompletedAt: { $exists: false } })
     .sort({ closedAt: 1, effectiveEndAt: 1 })
     .limit(finalizerBatchSize)
     .toArray();
+
+  if (roundStates.length === 0) {
+    return idleFinalizerDelayMs;
+  }
 
   for (const state of roundStates) {
     const lockKey = buildFinalizerLockKey(state.auctionId.toHexString(), state.roundIndex);
@@ -69,6 +88,8 @@ async function runFinalizerTick(
       await releaseRedisLock(deps.redis, lock);
     }
   }
+
+  return roundStates.length >= finalizerBatchSize ? minFinalizerDelayMs : idleFinalizerDelayMs;
 }
 
 function buildFinalizerLockKey(auctionId: string, roundIndex: number): string {

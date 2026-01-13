@@ -83,6 +83,16 @@ export function createAuctionRepository(mongo: MongoDependencies) {
       .toArray();
   }
 
+  async function getNextTransitionAt(): Promise<Date | null> {
+    const nextState = await roundStates
+      .find({ status: { $in: ["scheduled", "live"] } })
+      .project<{ nextTransitionAt: Date }>({ nextTransitionAt: 1 })
+      .sort({ nextTransitionAt: 1 })
+      .limit(1)
+      .next();
+    return nextState?.nextTransitionAt ?? null;
+  }
+
   async function ensureRoundStates(
     auction: WithId<AuctionDocument>,
     session?: ClientSession
@@ -276,6 +286,7 @@ export function createAuctionRepository(mongo: MongoDependencies) {
     getLiveRoundState,
     listRoundStates,
     listDueRoundStates,
+    getNextTransitionAt,
     ensureRoundStates,
     backfillMissingNextTransitionAt,
     refreshNextTransitionAt,

@@ -53,7 +53,7 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
 
   async function finalizeClosedRounds(limit = 25): Promise<number> {
     const closedRounds = await roundStates
-      .find({ status: "closed" })
+      .find({ status: "closed", settlementCompletedAt: { $exists: false } })
       .sort({ closedAt: 1, effectiveEndAt: 1 })
       .limit(limit)
       .toArray();
@@ -89,6 +89,17 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
     let settlementCompleted = Boolean(existingResult?.settlementCompletedAt);
     const isFinalRound = isFinalRoundIndex(auction.rounds, roundIndex);
 
+    if (existingResult?.finalizedAt) {
+      await markRoundFinalized(auctionId, roundIndex, existingResult.finalizedAt);
+    }
+    if (existingResult?.settlementCompletedAt) {
+      await markRoundSettlementCompleted(
+        auctionId,
+        roundIndex,
+        existingResult.settlementCompletedAt
+      );
+    }
+
     if (!existingResult) {
       winners = await resolveRoundWinners(auction, roundIndex);
       const now = new Date();
@@ -105,6 +116,7 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
         },
         { upsert: true }
       );
+      await markRoundFinalized(auctionId, roundIndex, now);
     }
 
     if (!settlementCompleted) {
@@ -137,6 +149,7 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
         { $set: { settlementCompletedAt: settledAt } }
       );
       settlementCompleted = true;
+      await markRoundSettlementCompleted(auctionId, roundIndex, settledAt);
     }
 
     return {
@@ -145,6 +158,28 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
       winnerCount: winners.length,
       settlementCompleted
     };
+  }
+
+  async function markRoundFinalized(
+    auctionId: ObjectId,
+    roundIndex: number,
+    finalizedAt: Date
+  ): Promise<void> {
+    await roundStates.updateOne(
+      { auctionId, roundIndex, finalizedAt: { $exists: false } },
+      { $set: { finalizedAt, updatedAt: finalizedAt } }
+    );
+  }
+
+  async function markRoundSettlementCompleted(
+    auctionId: ObjectId,
+    roundIndex: number,
+    settledAt: Date
+  ): Promise<void> {
+    await roundStates.updateOne(
+      { auctionId, roundIndex, settlementCompletedAt: { $exists: false } },
+      { $set: { settlementCompletedAt: settledAt, updatedAt: settledAt } }
+    );
   }
 
   async function resolveRoundWinners(

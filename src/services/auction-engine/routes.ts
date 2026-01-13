@@ -10,14 +10,20 @@ import {
   type AuctionDocument,
   type AuctionRoundConfig,
   type AuctionRoundStateDocument,
-  type AuctionRoundStatus,
   type AuctionStatus,
   type BidDocument
 } from "../../shared/storage/mongoSchemas.js";
 import { LedgerError } from "../ledger/ledgerStore.js";
 import { parseAuctionConfig, type AuctionConfig } from "./auctionConfig.js";
+import {
+  readAuctionSnapshotFromRedis,
+  readRoundStateFromRedis,
+  writeAuctionSnapshotToRedis,
+  writeRoundStateToRedis,
+  type AuctionSnapshotCache,
+  type RoundStateCache
+} from "./auctionCache.js";
 import { BidError, createBidService } from "./bidService.js";
-import { buildAuctionSnapshotKey, buildRoundStateKey } from "./auctionKeys.js";
 import { createAuctionRepository } from "./auctionStore.js";
 
 const auditSchema = z
@@ -61,13 +67,8 @@ const listQuerySchema = z
   })
   .strict();
 
-const snapshotTtlSeconds = 5;
-const roundStateTtlSeconds = 5;
 const defaultListLimit = 20;
 const maxListLimit = 100;
-
-const auctionStatusValues: AuctionStatus[] = ["draft", "live", "closed"];
-const roundStatusValues: AuctionRoundStatus[] = ["scheduled", "live", "closed"];
 
 type ListingSpec = {
   status: AuctionStatus;
@@ -80,18 +81,7 @@ type ListingCursor = {
   id: ObjectId;
 };
 
-type AuctionSnapshotResponse = {
-  auctionId: string;
-  status: AuctionStatus;
-  title: string;
-  currency: string;
-  currentRoundIndex: number | null;
-  roundStatus: AuctionRoundStatus | null;
-  roundEffectiveEndAt: Date | null;
-  roundLastBidAt: Date | null;
-  updatedAt: Date;
-  lastBidAmount: number | null;
-};
+type AuctionSnapshotResponse = AuctionSnapshotCache;
 
 type RoundTimers = {
   now: Date;
@@ -100,18 +90,7 @@ type RoundTimers = {
   untilEffectiveEndMs: number;
 };
 
-type RoundStatePayload = {
-  status: AuctionRoundStatus;
-  roundIndex: number;
-  scheduledStartAt: Date;
-  scheduledEndAt: Date;
-  effectiveEndAt: Date;
-  extensionCount: number;
-  lastBidAt: Date | null;
-  startedAt: Date | null;
-  closedAt: Date | null;
-  allocationSize: number;
-};
+type RoundStatePayload = RoundStateCache;
 
 type RoundStateResponse = RoundStatePayload & {
   timers: RoundTimers;
@@ -661,219 +640,6 @@ function findRoundConfig(
   return round;
 }
 
-async function readAuctionSnapshotFromRedis(
-  redis: RedisClient,
-  auctionId: string
-): Promise<AuctionSnapshotResponse | null> {
-  const key = buildAuctionSnapshotKey(auctionId);
-  const data = await redis.hgetall(key);
-  if (Object.keys(data).length === 0) {
-    return null;
-  }
-
-  const status = parseAuctionStatus(data.status);
-  const roundStatus = parseRoundStatus(data.roundStatus);
-  const currentRoundIndex = parseRedisInt(data.currentRoundIndex);
-  const roundEffectiveEndAt = parseRedisDate(data.roundEffectiveEndAt);
-  const updatedAt = parseRedisDate(data.updatedAt);
-  const title = parseRedisText(data.title);
-  const currency = parseRedisText(data.currency);
-  if (
-    !status ||
-    !roundStatus ||
-    currentRoundIndex === null ||
-    !roundEffectiveEndAt ||
-    !updatedAt ||
-    !title ||
-    !currency
-  ) {
-    return null;
-  }
-  if (data.auctionId && data.auctionId !== auctionId) {
-    return null;
-  }
-
-  const roundLastBidAt = parseRedisDate(data.roundLastBidAt);
-  const lastBidAmount = parseRedisNumber(data.lastBidAmount);
-
-  return {
-    auctionId,
-    status,
-    title,
-    currency,
-    currentRoundIndex,
-    roundStatus,
-    roundEffectiveEndAt,
-    roundLastBidAt,
-    updatedAt,
-    lastBidAmount
-  };
-}
-
-async function readRoundStateFromRedis(
-  redis: RedisClient,
-  auctionId: string,
-  roundIndex: number
-): Promise<RoundStatePayload | null> {
-  const key = buildRoundStateKey(auctionId, roundIndex);
-  const data = await redis.hgetall(key);
-  if (Object.keys(data).length === 0) {
-    return null;
-  }
-
-  const status = parseRoundStatus(data.status);
-  const storedIndex = parseRedisInt(data.roundIndex);
-  const scheduledStartAt = parseRedisDate(data.scheduledStartAt);
-  const scheduledEndAt = parseRedisDate(data.scheduledEndAt);
-  const effectiveEndAt = parseRedisDate(data.effectiveEndAt);
-  const extensionCount = parseRedisInt(data.extensionCount);
-  const allocationSize = parseRedisInt(data.allocationSize);
-
-  if (
-    !status ||
-    storedIndex === null ||
-    storedIndex !== roundIndex ||
-    !scheduledStartAt ||
-    !scheduledEndAt ||
-    !effectiveEndAt ||
-    extensionCount === null ||
-    allocationSize === null
-  ) {
-    return null;
-  }
-
-  return {
-    status,
-    roundIndex: storedIndex,
-    scheduledStartAt,
-    scheduledEndAt,
-    effectiveEndAt,
-    extensionCount,
-    lastBidAt: parseRedisDate(data.lastBidAt),
-    startedAt: null,
-    closedAt: null,
-    allocationSize
-  };
-}
-
-async function writeAuctionSnapshotToRedis(
-  redis: RedisClient,
-  snapshot: AuctionSnapshotResponse
-): Promise<void> {
-  const key = buildAuctionSnapshotKey(snapshot.auctionId);
-  const fields: Record<string, string> = {
-    auctionId: snapshot.auctionId,
-    status: snapshot.status,
-    title: snapshot.title,
-    currency: snapshot.currency,
-    updatedAt: snapshot.updatedAt.toISOString()
-  };
-
-  if (snapshot.currentRoundIndex !== null) {
-    fields.currentRoundIndex = snapshot.currentRoundIndex.toString();
-  }
-  if (snapshot.roundStatus) {
-    fields.roundStatus = snapshot.roundStatus;
-  }
-  if (snapshot.roundEffectiveEndAt) {
-    fields.roundEffectiveEndAt = snapshot.roundEffectiveEndAt.toISOString();
-  }
-  if (snapshot.roundLastBidAt) {
-    fields.roundLastBidAt = snapshot.roundLastBidAt.toISOString();
-  }
-  if (snapshot.lastBidAmount !== null) {
-    fields.lastBidAmount = snapshot.lastBidAmount.toString();
-  }
-
-  const pipeline = redis.multi();
-  pipeline.hset(key, fields);
-  pipeline.expire(key, snapshotTtlSeconds);
-  await pipeline.exec();
-}
-
-async function writeRoundStateToRedis(
-  redis: RedisClient,
-  auctionId: string,
-  state: RoundStatePayload
-): Promise<void> {
-  const key = buildRoundStateKey(auctionId, state.roundIndex);
-  const fields: Record<string, string> = {
-    status: state.status,
-    roundIndex: state.roundIndex.toString(),
-    scheduledStartAt: state.scheduledStartAt.toISOString(),
-    scheduledEndAt: state.scheduledEndAt.toISOString(),
-    effectiveEndAt: state.effectiveEndAt.toISOString(),
-    extensionCount: state.extensionCount.toString(),
-    allocationSize: state.allocationSize.toString(),
-    updatedAt: new Date().toISOString()
-  };
-
-  if (state.lastBidAt) {
-    fields.lastBidAt = state.lastBidAt.toISOString();
-  }
-
-  const pipeline = redis.multi();
-  pipeline.hset(key, fields);
-  pipeline.expire(key, roundStateTtlSeconds);
-  await pipeline.exec();
-}
-
-function parseRedisDate(value?: string): Date | null {
-  if (!value) {
-    return null;
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return null;
-  }
-  return parsed;
-}
-
-function parseRedisInt(value?: string): number | null {
-  if (!value) {
-    return null;
-  }
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed)) {
-    return null;
-  }
-  return parsed;
-}
-
-function parseRedisNumber(value?: string): number | null {
-  if (!value) {
-    return null;
-  }
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) {
-    return null;
-  }
-  return parsed;
-}
-
-function parseRedisText(value?: string): string | null {
-  if (!value) {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-function parseAuctionStatus(value?: string): AuctionStatus | null {
-  if (!value) {
-    return null;
-  }
-  return auctionStatusValues.includes(value as AuctionStatus) ? (value as AuctionStatus) : null;
-}
-
-function parseRoundStatus(value?: string): AuctionRoundStatus | null {
-  if (!value) {
-    return null;
-  }
-  return roundStatusValues.includes(value as AuctionRoundStatus)
-    ? (value as AuctionRoundStatus)
-    : null;
-}
 
 function handleBidError(reply: FastifyReply, error: unknown) {
   if (error instanceof BidError) {

@@ -26,13 +26,19 @@ import {
   buildTopKey,
   buildUserRateLimitKey
 } from "./auctionKeys.js";
+import {
+  buildAuctionSnapshotFields,
+  buildRoundStateFields,
+  roundStateTtlSeconds,
+  snapshotTtlSeconds,
+  type AuctionSnapshotCache,
+  type RoundStateCache
+} from "./auctionCache.js";
 import { createAuctionRepository } from "./auctionStore.js";
 import { buildRankingMember, parseRankingMember } from "./bidRanking.js";
 
 const bidLockTtlMs = 8000;
 const rateLimitWindowSeconds = 1;
-const snapshotTtlSeconds = 5;
-const roundStateTtlSeconds = 5;
 const topSetTtlSeconds = 10;
 const bidIdempotencyTtlSeconds = 600;
 const idempotencyWaitMs = 750;
@@ -358,13 +364,37 @@ async function updateRedisCaches(redis: RedisClient, result: BidTransactionResul
     ? buildRankingMember(result.previousBid._id, result.previousBid.createdAt)
     : null;
 
-  const now = new Date().toISOString();
-  const lastBidAt = result.roundState.lastBidAt
-    ? result.roundState.lastBidAt.toISOString()
-    : result.bid.createdAt.toISOString();
+  const updatedAt = new Date();
+  const lastBidAt = result.roundState.lastBidAt ?? result.bid.createdAt;
   const bidIsLatest =
     !result.roundState.lastBidAt ||
     result.roundState.lastBidAt.getTime() === result.bid.createdAt.getTime();
+
+  const roundStateCache: RoundStateCache = {
+    status: result.roundState.status,
+    roundIndex: result.roundState.roundIndex,
+    scheduledStartAt: result.roundState.scheduledStartAt,
+    scheduledEndAt: result.roundState.scheduledEndAt,
+    effectiveEndAt: result.roundState.effectiveEndAt,
+    extensionCount: result.roundState.extensionCount,
+    lastBidAt,
+    startedAt: result.roundState.startedAt ?? null,
+    closedAt: result.roundState.closedAt ?? null,
+    allocationSize: result.roundConfig.allocationSize
+  };
+
+  const snapshot: AuctionSnapshotCache = {
+    auctionId: result.auction._id.toHexString(),
+    status: result.auction.status,
+    title: result.auction.title,
+    currency: result.auction.currency,
+    currentRoundIndex: result.roundState.roundIndex,
+    roundStatus: result.roundState.status,
+    roundEffectiveEndAt: result.roundState.effectiveEndAt,
+    roundLastBidAt: lastBidAt,
+    updatedAt,
+    lastBidAmount: bidIsLatest ? result.bid.amount : null
+  };
 
   const pipeline = redis.multi();
   if (result.updateRanking) {
@@ -373,32 +403,9 @@ async function updateRedisCaches(redis: RedisClient, result: BidTransactionResul
       pipeline.zrem(rankingKey, previousMember);
     }
   }
-  pipeline.hset(roundStateKey, {
-    status: result.roundState.status,
-    roundIndex: result.roundState.roundIndex.toString(),
-    scheduledStartAt: result.roundState.scheduledStartAt.toISOString(),
-    scheduledEndAt: result.roundState.scheduledEndAt.toISOString(),
-    effectiveEndAt: result.roundState.effectiveEndAt.toISOString(),
-    extensionCount: result.roundState.extensionCount.toString(),
-    lastBidAt,
-    updatedAt: now,
-    allocationSize: result.roundConfig.allocationSize.toString()
-  });
+  pipeline.hset(roundStateKey, buildRoundStateFields(roundStateCache, updatedAt));
   pipeline.expire(roundStateKey, roundStateTtlSeconds);
-  pipeline.hset(auctionSnapshotKey, {
-    auctionId: result.auction._id.toHexString(),
-    status: result.auction.status,
-    title: result.auction.title,
-    currency: result.auction.currency,
-    currentRoundIndex: result.roundState.roundIndex.toString(),
-    roundStatus: result.roundState.status,
-    roundEffectiveEndAt: result.roundState.effectiveEndAt.toISOString(),
-    roundLastBidAt: lastBidAt,
-    updatedAt: now
-  });
-  if (bidIsLatest) {
-    pipeline.hset(auctionSnapshotKey, { lastBidAmount: result.bid.amount.toString() });
-  }
+  pipeline.hset(auctionSnapshotKey, buildAuctionSnapshotFields(snapshot));
   pipeline.expire(auctionSnapshotKey, snapshotTtlSeconds);
   pipeline.set(idempotencyKey, result.bid._id.toHexString(), "EX", bidIdempotencyTtlSeconds);
   await pipeline.exec();
