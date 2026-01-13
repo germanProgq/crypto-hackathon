@@ -5,6 +5,10 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ObjectId, type WithId } from "mongodb";
+import type { Locale } from "../../shared/config.js";
+import { resolveLocale, type Catalog } from "../../shared/i18n/index.js";
+import enCatalog from "../../shared/i18n/en.js";
+import ruCatalog from "../../shared/i18n/ru.js";
 import type { ServiceDependencies } from "../../shared/service.js";
 import {
   mongoCollections,
@@ -14,6 +18,7 @@ import {
 } from "../../shared/storage/mongoSchemas.js";
 import {
   invalidateActiveAuctionListCache,
+  readAuctionSnapshotFromRedis,
   readActiveAuctionListFromRedis,
   writeActiveAuctionListToRedis
 } from "../auction-engine/auctionCache.js";
@@ -23,6 +28,10 @@ import { createAuctionRepository } from "../auction-engine/auctionStore.js";
 import { createLedgerRepository, LedgerError } from "../ledger/ledgerStore.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
+const webCatalogs: Record<Locale, Catalog> = {
+  en: enCatalog,
+  ru: ruCatalog
+};
 
 type CreateAuctionBody = {
   title: string;
@@ -91,7 +100,7 @@ export async function registerWebRoutes(
   const bids = deps.mongo.db.collection<BidDocument>(mongoCollections.bids);
 
   app.get("/", async (request, reply) => {
-    const html = await loadHtml("index.html");
+    const html = await loadHtml("index.html", request, deps);
     return reply.type("text/html").send(html);
   });
 
@@ -228,76 +237,74 @@ export async function registerWebRoutes(
       return reply.code(400).send({ error: "invalid_request", message: "Invalid auction id." });
     }
     const auctionId = params.auctionId;
-    const snapshotKey = `auction:${auctionId}:snapshot`;
-    const snapshot = await deps.redis.hgetall(snapshotKey);
+    const snapshot = await readAuctionSnapshotFromRedis(deps.redis, auctionId);
+    if (snapshot) {
+      return {
+        auctionId: snapshot.auctionId,
+        status: snapshot.status,
+        title: snapshot.title,
+        currency: snapshot.currency,
+        currentRoundIndex: snapshot.currentRoundIndex,
+        roundStatus: snapshot.roundStatus,
+        roundEffectiveEndAt: snapshot.roundEffectiveEndAt?.toISOString() ?? null,
+        roundLastBidAt: snapshot.roundLastBidAt?.toISOString() ?? null,
+        lastBidAmount: snapshot.lastBidAmount,
+        updatedAt: snapshot.updatedAt.toISOString(),
+        serverTime: new Date().toISOString()
+      };
+    }
 
-    if (Object.keys(snapshot).length === 0) {
-      const auction = await auctionRepository.getAuctionById(new ObjectId(auctionId));
-      if (!auction) {
-        return reply.code(404).send({ error: "not_found", message: "Auction not found." });
-      }
-      const now = new Date();
-      if (
-        auction.currentRoundIndex !== undefined &&
-        auction.roundStatus !== undefined &&
-        auction.roundEffectiveEndAt !== undefined
-      ) {
-        return {
-          auctionId,
-          status: auction.status,
-          title: auction.title,
-          currency: auction.currency,
-          currentRoundIndex: auction.currentRoundIndex,
-          roundStatus: auction.roundStatus,
-          roundEffectiveEndAt: auction.roundEffectiveEndAt?.toISOString() ?? null,
-          roundLastBidAt: auction.roundLastBidAt?.toISOString() ?? null,
-          lastBidAmount: auction.lastBidAmount ?? null,
-          updatedAt: auction.updatedAt?.toISOString() ?? null,
-          serverTime: now.toISOString()
-        };
-      }
-
-      const roundState = await auctionRepository.getLiveRoundState(new ObjectId(auctionId));
-      if (roundState) {
-        await auctionRepository.updateAuctionSnapshot(
-          auction._id,
-          {
-            currentRoundIndex: roundState.roundIndex,
-            roundStatus: roundState.status,
-            roundEffectiveEndAt: roundState.effectiveEndAt,
-            roundLastBidAt: roundState.lastBidAt ?? null,
-            lastBidAmount: null
-          },
-          now
-        );
-      }
+    const auction = await auctionRepository.getAuctionById(new ObjectId(auctionId));
+    if (!auction) {
+      return reply.code(404).send({ error: "not_found", message: "Auction not found." });
+    }
+    const now = new Date();
+    if (
+      auction.currentRoundIndex !== undefined &&
+      auction.roundStatus !== undefined &&
+      auction.roundEffectiveEndAt !== undefined
+    ) {
       return {
         auctionId,
         status: auction.status,
         title: auction.title,
         currency: auction.currency,
-        currentRoundIndex: roundState?.roundIndex ?? null,
-        roundStatus: roundState?.status ?? null,
-        roundEffectiveEndAt: roundState?.effectiveEndAt?.toISOString() ?? null,
-        roundLastBidAt: roundState?.lastBidAt?.toISOString() ?? null,
-        lastBidAmount: null,
-        updatedAt: roundState?.updatedAt?.toISOString() ?? null,
+        currentRoundIndex: auction.currentRoundIndex,
+        roundStatus: auction.roundStatus,
+        roundEffectiveEndAt: auction.roundEffectiveEndAt?.toISOString() ?? null,
+        roundLastBidAt: auction.roundLastBidAt?.toISOString() ?? null,
+        lastBidAmount: auction.lastBidAmount ?? null,
+        updatedAt: auction.updatedAt?.toISOString() ?? null,
         serverTime: now.toISOString()
       };
     }
 
+    const roundState = await auctionRepository.getLiveRoundState(new ObjectId(auctionId));
+    if (roundState) {
+      await auctionRepository.updateAuctionSnapshot(
+        auction._id,
+        {
+          currentRoundIndex: roundState.roundIndex,
+          roundStatus: roundState.status,
+          roundEffectiveEndAt: roundState.effectiveEndAt,
+          roundLastBidAt: roundState.lastBidAt ?? null,
+          lastBidAmount: null
+        },
+        now
+      );
+    }
     return {
-      auctionId: snapshot.auctionId ?? auctionId,
-      status: snapshot.status ?? null,
-      title: snapshot.title ?? null,
-      currency: snapshot.currency ?? null,
-      currentRoundIndex: parseNumber(snapshot.currentRoundIndex),
-      roundStatus: snapshot.roundStatus ?? null,
-      roundEffectiveEndAt: snapshot.roundEffectiveEndAt ?? null,
-      roundLastBidAt: snapshot.roundLastBidAt ?? null,
-      lastBidAmount: parseNumber(snapshot.lastBidAmount),
-      updatedAt: snapshot.updatedAt ?? null,
-      serverTime: new Date().toISOString()
+      auctionId,
+      status: auction.status,
+      title: auction.title,
+      currency: auction.currency,
+      currentRoundIndex: roundState?.roundIndex ?? null,
+      roundStatus: roundState?.status ?? null,
+      roundEffectiveEndAt: roundState?.effectiveEndAt?.toISOString() ?? null,
+      roundLastBidAt: roundState?.lastBidAt?.toISOString() ?? null,
+      lastBidAmount: null,
+      updatedAt: roundState?.updatedAt?.toISOString() ?? null,
+      serverTime: now.toISOString()
     };
   });
 
@@ -452,14 +459,6 @@ function resolveUserId(request: FastifyRequest, fallback?: string | null): strin
   return null;
 }
 
-function parseNumber(value: string | undefined): number | null {
-  if (!value) {
-    return null;
-  }
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
 function normalizeLimit(value: string | undefined): number {
   if (!value) {
     return 20;
@@ -471,13 +470,56 @@ function normalizeLimit(value: string | undefined): number {
   return Math.min(50, Math.max(1, Math.floor(parsed)));
 }
 
-async function loadHtml(filename: string): Promise<string> {
+type WebI18nPayload = {
+  locale: Locale;
+  defaultLocale: Locale;
+  supportedLocales: Locale[];
+  catalogs: Record<Locale, Catalog>;
+};
+
+async function loadHtml(
+  filename: string,
+  request: FastifyRequest,
+  deps: ServiceDependencies
+): Promise<string> {
+  let html = "";
   try {
     const filePath = join(__dirname, "static", filename);
-    return await readFile(filePath, "utf-8");
+    html = await readFile(filePath, "utf-8");
   } catch {
-    return getDefaultHtml();
+    html = getDefaultHtml();
   }
+
+  const locale = resolveWebLocale(request, deps);
+  return injectI18n(html, {
+    locale,
+    defaultLocale: deps.config.i18n.defaultLocale,
+    supportedLocales: deps.config.i18n.supportedLocales,
+    catalogs: webCatalogs
+  });
+}
+
+function resolveWebLocale(request: FastifyRequest, deps: ServiceDependencies): Locale {
+  const query = request.query as { lang?: string };
+  const headerValue = request.headers["accept-language"];
+  const acceptLanguage = Array.isArray(headerValue) ? headerValue.join(",") : headerValue;
+  const candidate = (typeof query.lang === "string" && query.lang.length > 0
+    ? query.lang
+    : acceptLanguage) ?? undefined;
+
+  return resolveLocale(candidate, deps.config.i18n.defaultLocale, deps.config.i18n.supportedLocales);
+}
+
+function injectI18n(html: string, payload: WebI18nPayload): string {
+  const serialized = JSON.stringify(payload).replace(/</g, "\\u003c");
+  if (html.includes("__I18N_PAYLOAD__")) {
+    return html.replace("__I18N_PAYLOAD__", serialized);
+  }
+  const scriptTag = `<script id="i18n-data" type="application/json">${serialized}</script>`;
+  if (html.includes("</head>")) {
+    return html.replace("</head>", `${scriptTag}\n</head>`);
+  }
+  return `${scriptTag}\n${html}`;
 }
 
 function getDefaultHtml(): string {

@@ -536,6 +536,7 @@
       color: var(--tg-hint);
     }
   </style>
+  <script id="i18n-data" type="application/json">__I18N_PAYLOAD__</script>
 </head>
 <body>
   <div class="app">
@@ -543,48 +544,48 @@
     <header class="header">
       <div class="header-brand">
         <div class="header-logo">🎁</div>
-        <div class="header-title">Gift Auctions</div>
+        <div class="header-title" data-i18n="web.app.title">Gift Auctions</div>
       </div>
       <div class="header-badge">
         <span class="status-dot"></span>
-        <span>Live</span>
+        <span data-i18n="web.app.liveBadge">Live</span>
       </div>
     </header>
 
     <!-- BALANCE CARD -->
     <div class="balance-card">
       <div class="balance-header">
-        <span class="balance-label">Общий баланс</span>
+        <span class="balance-label" data-i18n="web.balance.totalLabel">Общий баланс</span>
         <div class="balance-icon">👁</div>
       </div>
       <div class="balance-amount">
         <span id="total-balance">0</span>
-        <span class="balance-currency">USD</span>
+        <span class="balance-currency" id="balanceCurrency">USD</span>
       </div>
-      <div class="balance-usd">Available: <span id="available-balance">0</span> USD</div>
+      <div class="balance-usd" id="balanceAvailableLine">Available: --</div>
       <div class="balance-actions">
         <button class="balance-btn" onclick="handleDeposit()">
           <div class="balance-btn-icon">↓</div>
-          <span>Пополнить</span>
+          <span data-i18n="web.balance.actions.deposit">Пополнить</span>
         </button>
         <button class="balance-btn" onclick="handleWithdraw()">
           <div class="balance-btn-icon">↑</div>
-          <span>Вывести</span>
+          <span data-i18n="web.balance.actions.withdraw">Вывести</span>
         </button>
       </div>
     </div>
 
     <!-- TABS -->
     <div class="tabs">
-      <div class="tab active" onclick="switchTab('auctions')">🔨 Аукционы</div>
-      <div class="tab" onclick="switchTab('create')">➕ Создать</div>
+      <div class="tab active" onclick="switchTab('auctions')">🔨 <span data-i18n="web.tab.auctions">Аукционы</span></div>
+      <div class="tab" onclick="switchTab('create')">➕ <span data-i18n="web.tab.create">Создать</span></div>
     </div>
 
     <!-- AUCTIONS SECTION -->
     <section class="section" id="auctions-section">
       <div class="section-header">
-        <h2 class="section-title">Активные</h2>
-        <a class="section-link" onclick="loadAuctions()">Обновить</a>
+        <h2 class="section-title" data-i18n="web.section.active">Активные</h2>
+        <a class="section-link" onclick="loadAuctions()" data-i18n="web.action.refresh">Обновить</a>
       </div>
       <div class="auction-list" id="auctions-list">
         <div class="loading">
@@ -596,12 +597,12 @@
     <!-- CREATE SECTION -->
     <section class="section hidden" id="create-section">
       <div class="section-header">
-        <h2 class="section-title">Создать аукцион</h2>
+        <h2 class="section-title" data-i18n="web.section.create.title">Создать аукцион</h2>
       </div>
       <div class="empty-state">
         <div class="empty-icon">🎨</div>
-        <div class="empty-title">Скоро</div>
-        <div class="empty-text">Функция создания аукционов в разработке</div>
+        <div class="empty-title" data-i18n="web.empty.soon.title">Скоро</div>
+        <div class="empty-text" data-i18n="web.empty.soon.body">Функция создания аукционов в разработке</div>
       </div>
     </section>
   </div>
@@ -610,18 +611,107 @@
   <nav class="bottom-nav">
     <button class="nav-btn active" onclick="switchTab('auctions')">
       <span class="nav-btn-icon">🔨</span>
-      <span>Аукционы</span>
+      <span data-i18n="web.tab.auctions">Аукционы</span>
     </button>
     <button class="nav-btn" onclick="switchTab('create')">
       <span class="nav-btn-icon">➕</span>
-      <span>Создать</span>
+      <span data-i18n="web.tab.create">Создать</span>
     </button>
   </nav>
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script>
-    // Initialize Telegram WebApp
     const tg = window.Telegram?.WebApp;
+    const i18nPayload = (() => {
+      const element = document.getElementById('i18n-data');
+      if (!element) return {};
+      try {
+        return JSON.parse(element.textContent || '{}');
+      } catch (error) {
+        console.warn('Failed to parse i18n payload', error);
+        return {};
+      }
+    })();
+
+    const catalogs = i18nPayload.catalogs || {};
+    const supportedLocales = i18nPayload.supportedLocales || Object.keys(catalogs);
+    const defaultLocale = i18nPayload.defaultLocale || 'en';
+    const i18nState = { locale: defaultLocale };
+
+    function parseLocaleCandidate(value) {
+      const cleaned = String(value || '').toLowerCase().trim();
+      return cleaned.replace('_', '-').split('-')[0] || '';
+    }
+
+    function resolveLocale(input, fallback, supported) {
+      if (!input) return fallback;
+      const candidates = String(input)
+        .split(',')
+        .map((entry) => (entry.split(';')[0] || entry).trim())
+        .map(parseLocaleCandidate)
+        .filter(Boolean);
+      for (const candidate of candidates) {
+        if (supported.includes(candidate)) {
+          return candidate;
+        }
+      }
+      return fallback;
+    }
+
+    function interpolate(template, params) {
+      if (!params) return template;
+      return template.replace(/\{\{(\w+)\}\}/g, (match, key) => {
+        if (Object.prototype.hasOwnProperty.call(params, key)) {
+          return String(params[key]);
+        }
+        return match;
+      });
+    }
+
+    function t(key, params) {
+      const locale = i18nState.locale;
+      const primaryCatalog = catalogs[locale] || catalogs[defaultLocale] || {};
+      const fallbackCatalog = catalogs[defaultLocale] || {};
+      const template = primaryCatalog[key] || fallbackCatalog[key] || key;
+      return interpolate(template, params);
+    }
+
+    function applyTranslations() {
+      document.querySelectorAll('[data-i18n]').forEach((node) => {
+        const key = node.getAttribute('data-i18n');
+        if (key) {
+          node.textContent = t(key);
+        }
+      });
+    }
+
+    function detectLocale() {
+      const params = new URLSearchParams(window.location.search);
+      const queryLocale = params.get('lang');
+      if (queryLocale) {
+        localStorage.setItem('webLocale', queryLocale);
+      }
+      const storedLocale = localStorage.getItem('webLocale');
+      const telegramLocale = tg?.initDataUnsafe?.user?.language_code || tg?.initDataUnsafe?.language_code;
+      const browserLocale = navigator.language;
+      return (
+        queryLocale ||
+        storedLocale ||
+        telegramLocale ||
+        browserLocale ||
+        i18nPayload.locale ||
+        defaultLocale
+      );
+    }
+
+    function setLocale(nextLocale) {
+      i18nState.locale = resolveLocale(nextLocale, defaultLocale, supportedLocales);
+      document.documentElement.lang = i18nState.locale;
+      document.title = t('web.app.title');
+      applyTranslations();
+      updateBalanceUI();
+    }
+
     if (tg) {
       tg.ready();
       tg.expand();
@@ -631,8 +721,10 @@
     const state = {
       currentUser: null,
       auctions: [],
-      balance: { available: 0, held: 0, total: 0 }
+      balance: { available: 0, held: 0, current: 0, currency: 'USDT' }
     };
+
+    setLocale(detectLocale());
 
     // Initialize
     async function init() {
@@ -657,7 +749,7 @@
         const response = await fetch(`/api/balance/${userId}`);
         if (response.ok) {
           const data = await response.json();
-          state.balance = data;
+          state.balance = Object.assign({}, state.balance, data);
           updateBalanceUI();
         }
       } catch (error) {
@@ -667,8 +759,15 @@
 
     // Update balance UI
     function updateBalanceUI() {
-      document.getElementById('total-balance').textContent = state.balance.total.toFixed(2);
-      document.getElementById('available-balance').textContent = state.balance.available.toFixed(2);
+      const total = typeof state.balance.current === 'number' ? state.balance.current : 0;
+      const available = typeof state.balance.available === 'number' ? state.balance.available : 0;
+      const currency = state.balance.currency || 'USDT';
+      document.getElementById('total-balance').textContent = total.toFixed(2);
+      document.getElementById('balanceCurrency').textContent = currency;
+      document.getElementById('balanceAvailableLine').textContent = t('web.balance.availableLine', {
+        amount: available.toFixed(2),
+        currency
+      });
     }
 
     // Load auctions
@@ -687,11 +786,17 @@
         container.innerHTML = `
           <div class="empty-state">
             <div class="empty-icon">😕</div>
-            <div class="empty-title">Ошибка загрузки</div>
-            <div class="empty-text">Не удалось загрузить аукционы</div>
+            <div class="empty-title">${t('web.auctions.error.title')}</div>
+            <div class="empty-text">${t('web.auctions.error.body')}</div>
           </div>
         `;
       }
+    }
+
+    function formatStatusLabel(status) {
+      const key = `web.auctions.status.${status}`;
+      const value = t(key);
+      return value === key ? status : value;
     }
 
     // Render auctions
@@ -702,37 +807,42 @@
         container.innerHTML = `
           <div class="empty-state">
             <div class="empty-icon">🔨</div>
-            <div class="empty-title">Нет активных аукционов</div>
-            <div class="empty-text">Новые аукционы скоро появятся</div>
+            <div class="empty-title">${t('web.auctions.empty.title')}</div>
+            <div class="empty-text">${t('web.auctions.empty.body')}</div>
           </div>
         `;
         return;
       }
 
-      container.innerHTML = state.auctions.map(auction => `
-        <div class="auction-card fade-in" onclick="openAuction('${auction._id}')">
-          <div class="auction-header">
-            <div class="auction-icon">🎁</div>
-            <span class="auction-status ${auction.status}">${auction.status}</span>
-          </div>
-          <h3 class="auction-title">${auction.title}</h3>
-          ${auction.description ? `<p class="auction-desc">${auction.description}</p>` : ''}
-          <div class="auction-stats">
-            <div class="stat">
-              <span class="stat-label">Раундов</span>
-              <span class="stat-value">${auction.rounds.length}</span>
+      container.innerHTML = state.auctions
+        .map((auction) => {
+          const status = auction.status || 'draft';
+          return `
+            <div class="auction-card fade-in" onclick="openAuction('${auction._id}')">
+              <div class="auction-header">
+                <div class="auction-icon">🎁</div>
+                <span class="auction-status ${status}">${formatStatusLabel(status)}</span>
+              </div>
+              <h3 class="auction-title">${auction.title}</h3>
+              ${auction.description ? `<p class="auction-desc">${auction.description}</p>` : ''}
+              <div class="auction-stats">
+                <div class="stat">
+                  <span class="stat-label">${t('web.auctions.stats.rounds')}</span>
+                  <span class="stat-value">${auction.rounds.length}</span>
+                </div>
+                <div class="stat">
+                  <span class="stat-label">${t('web.auctions.stats.currency')}</span>
+                  <span class="stat-value">${auction.currency}</span>
+                </div>
+                <div class="stat">
+                  <span class="stat-label">${t('web.auctions.stats.spots')}</span>
+                  <span class="stat-value">${auction.rounds[0]?.allocationSize || 0}</span>
+                </div>
+              </div>
             </div>
-            <div class="stat">
-              <span class="stat-label">Валюта</span>
-              <span class="stat-value">${auction.currency}</span>
-            </div>
-            <div class="stat">
-              <span class="stat-label">Места</span>
-              <span class="stat-value">${auction.rounds[0]?.allocationSize || 0}</span>
-            </div>
-          </div>
-        </div>
-      `).join('');
+          `;
+        })
+        .join('');
     }
 
     // Switch tab
@@ -767,11 +877,11 @@
 
     // Actions
     function handleDeposit() {
-      if (tg) tg.showAlert('Deposit functionality coming soon!');
+      if (tg) tg.showAlert(t('web.actions.depositComing'));
     }
 
     function handleWithdraw() {
-      if (tg) tg.showAlert('Withdraw functionality coming soon!');
+      if (tg) tg.showAlert(t('web.actions.withdrawComing'));
     }
 
     function openAuction(id) {

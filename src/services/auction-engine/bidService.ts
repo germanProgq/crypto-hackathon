@@ -29,6 +29,8 @@ import {
 import {
   buildAuctionSnapshotFields,
   buildRoundStateFields,
+  primeAuctionSnapshotCache,
+  primeRoundStateCache,
   roundStateTtlSeconds,
   snapshotTtlSeconds,
   type AuctionSnapshotCache,
@@ -456,13 +458,11 @@ function toPlacementResult(result: BidTransactionResult): BidPlacementResult {
 }
 
 async function updateRedisCaches(redis: RedisClient, result: BidTransactionResult): Promise<void> {
-  const rankingKey = buildRankingKey(result.auction._id.toHexString());
-  const roundStateKey = buildRoundStateKey(
-    result.auction._id.toHexString(),
-    result.roundState.roundIndex
-  );
-  const auctionSnapshotKey = buildAuctionSnapshotKey(result.auction._id.toHexString());
-  const topKey = buildTopKey(result.auction._id.toHexString());
+  const auctionIdText = result.auction._id.toHexString();
+  const rankingKey = buildRankingKey(auctionIdText);
+  const roundStateKey = buildRoundStateKey(auctionIdText, result.roundState.roundIndex);
+  const auctionSnapshotKey = buildAuctionSnapshotKey(auctionIdText);
+  const topKey = buildTopKey(auctionIdText);
   const idempotencyKey = buildBidIdempotencyKey(result.bid.idempotencyKey);
 
   const rankingMember = buildRankingMember(result.bid._id, result.bid.createdAt);
@@ -534,6 +534,8 @@ async function updateRedisCaches(redis: RedisClient, result: BidTransactionResul
     idempotencyKey,
     ...scriptArgs
   );
+  primeRoundStateCache(auctionIdText, roundStateCache);
+  primeAuctionSnapshotCache(snapshot);
 }
 
 async function enforceRateLimits(

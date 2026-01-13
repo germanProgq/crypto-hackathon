@@ -10,6 +10,45 @@ import {
 export const snapshotTtlSeconds = 5;
 export const roundStateTtlSeconds = 5;
 const activeAuctionListKey = buildActiveAuctionListKey();
+const inProcessCacheTtlMs = 2000;
+const inProcessCacheMaxEntries = 512;
+
+type CacheEntry<V> = {
+  value: V;
+  expiresAt: number;
+};
+
+class TtlLruCache<V> {
+  private readonly entries = new Map<string, CacheEntry<V>>();
+
+  constructor(private readonly maxEntries: number, private readonly ttlMs: number) {}
+
+  get(key: string): V | null {
+    const entry = this.entries.get(key);
+    if (!entry) {
+      return null;
+    }
+    if (entry.expiresAt <= Date.now()) {
+      this.entries.delete(key);
+      return null;
+    }
+    this.entries.delete(key);
+    this.entries.set(key, entry);
+    return entry.value;
+  }
+
+  set(key: string, value: V): void {
+    const expiresAt = Date.now() + this.ttlMs;
+    this.entries.delete(key);
+    this.entries.set(key, { value, expiresAt });
+    if (this.entries.size > this.maxEntries) {
+      const oldestKey = this.entries.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.entries.delete(oldestKey);
+      }
+    }
+  }
+}
 
 export type AuctionSnapshotCache = {
   auctionId: string;
@@ -36,6 +75,25 @@ export type RoundStateCache = {
   closedAt: Date | null;
   allocationSize: number;
 };
+
+const snapshotCache = new TtlLruCache<AuctionSnapshotCache>(
+  inProcessCacheMaxEntries,
+  inProcessCacheTtlMs
+);
+const roundStateCache = new TtlLruCache<RoundStateCache>(
+  inProcessCacheMaxEntries,
+  inProcessCacheTtlMs
+);
+const snapshotReadsInFlight = new Map<string, Promise<AuctionSnapshotCache | null>>();
+const roundStateReadsInFlight = new Map<string, Promise<RoundStateCache | null>>();
+
+export function primeAuctionSnapshotCache(snapshot: AuctionSnapshotCache): void {
+  snapshotCache.set(buildAuctionSnapshotKey(snapshot.auctionId), snapshot);
+}
+
+export function primeRoundStateCache(auctionId: string, state: RoundStateCache): void {
+  roundStateCache.set(buildRoundStateKey(auctionId, state.roundIndex), state);
+}
 
 export async function readActiveAuctionListFromRedis(
   redis: RedisClient
@@ -73,48 +131,70 @@ export async function readAuctionSnapshotFromRedis(
   auctionId: string
 ): Promise<AuctionSnapshotCache | null> {
   const key = buildAuctionSnapshotKey(auctionId);
-  const data = await redis.hgetall(key);
-  if (Object.keys(data).length === 0) {
-    return null;
+  const cached = snapshotCache.get(key);
+  if (cached) {
+    return cached;
+  }
+  const pending = snapshotReadsInFlight.get(key);
+  if (pending) {
+    return pending;
   }
 
-  const status = parseAuctionStatus(data.status);
-  const roundStatus = parseRoundStatus(data.roundStatus);
-  const currentRoundIndex = parseRedisInt(data.currentRoundIndex);
-  const roundEffectiveEndAt = parseRedisDate(data.roundEffectiveEndAt);
-  const updatedAt = parseRedisDate(data.updatedAt);
-  const title = parseRedisText(data.title);
-  const currency = parseRedisText(data.currency);
-  if (
-    !status ||
-    !roundStatus ||
-    currentRoundIndex === null ||
-    !roundEffectiveEndAt ||
-    !updatedAt ||
-    !title ||
-    !currency
-  ) {
-    return null;
-  }
-  if (data.auctionId && data.auctionId !== auctionId) {
-    return null;
-  }
+  const fetchPromise = (async () => {
+    const data = await redis.hgetall(key);
+    if (Object.keys(data).length === 0) {
+      return null;
+    }
 
-  const roundLastBidAt = parseRedisDate(data.roundLastBidAt);
-  const lastBidAmount = parseRedisNumber(data.lastBidAmount);
+    const status = parseAuctionStatus(data.status);
+    const roundStatus = parseRoundStatus(data.roundStatus);
+    const currentRoundIndex = parseRedisInt(data.currentRoundIndex);
+    const roundEffectiveEndAt = parseRedisDate(data.roundEffectiveEndAt);
+    const updatedAt = parseRedisDate(data.updatedAt);
+    const title = parseRedisText(data.title);
+    const currency = parseRedisText(data.currency);
+    if (
+      !status ||
+      !roundStatus ||
+      currentRoundIndex === null ||
+      !roundEffectiveEndAt ||
+      !updatedAt ||
+      !title ||
+      !currency
+    ) {
+      return null;
+    }
+    if (data.auctionId && data.auctionId !== auctionId) {
+      return null;
+    }
 
-  return {
-    auctionId,
-    status,
-    title,
-    currency,
-    currentRoundIndex,
-    roundStatus,
-    roundEffectiveEndAt,
-    roundLastBidAt,
-    updatedAt,
-    lastBidAmount
-  };
+    const roundLastBidAt = parseRedisDate(data.roundLastBidAt);
+    const lastBidAmount = parseRedisNumber(data.lastBidAmount);
+
+    return {
+      auctionId,
+      status,
+      title,
+      currency,
+      currentRoundIndex,
+      roundStatus,
+      roundEffectiveEndAt,
+      roundLastBidAt,
+      updatedAt,
+      lastBidAmount
+    };
+  })();
+
+  snapshotReadsInFlight.set(key, fetchPromise);
+  try {
+    const result = await fetchPromise;
+    if (result) {
+      snapshotCache.set(key, result);
+    }
+    return result;
+  } finally {
+    snapshotReadsInFlight.delete(key);
+  }
 }
 
 export async function readRoundStateFromRedis(
@@ -123,44 +203,66 @@ export async function readRoundStateFromRedis(
   roundIndex: number
 ): Promise<RoundStateCache | null> {
   const key = buildRoundStateKey(auctionId, roundIndex);
-  const data = await redis.hgetall(key);
-  if (Object.keys(data).length === 0) {
-    return null;
+  const cached = roundStateCache.get(key);
+  if (cached) {
+    return cached;
+  }
+  const pending = roundStateReadsInFlight.get(key);
+  if (pending) {
+    return pending;
   }
 
-  const status = parseRoundStatus(data.status);
-  const storedIndex = parseRedisInt(data.roundIndex);
-  const scheduledStartAt = parseRedisDate(data.scheduledStartAt);
-  const scheduledEndAt = parseRedisDate(data.scheduledEndAt);
-  const effectiveEndAt = parseRedisDate(data.effectiveEndAt);
-  const extensionCount = parseRedisInt(data.extensionCount);
-  const allocationSize = parseRedisInt(data.allocationSize);
+  const fetchPromise = (async () => {
+    const data = await redis.hgetall(key);
+    if (Object.keys(data).length === 0) {
+      return null;
+    }
 
-  if (
-    !status ||
-    storedIndex === null ||
-    storedIndex !== roundIndex ||
-    !scheduledStartAt ||
-    !scheduledEndAt ||
-    !effectiveEndAt ||
-    extensionCount === null ||
-    allocationSize === null
-  ) {
-    return null;
+    const status = parseRoundStatus(data.status);
+    const storedIndex = parseRedisInt(data.roundIndex);
+    const scheduledStartAt = parseRedisDate(data.scheduledStartAt);
+    const scheduledEndAt = parseRedisDate(data.scheduledEndAt);
+    const effectiveEndAt = parseRedisDate(data.effectiveEndAt);
+    const extensionCount = parseRedisInt(data.extensionCount);
+    const allocationSize = parseRedisInt(data.allocationSize);
+
+    if (
+      !status ||
+      storedIndex === null ||
+      storedIndex !== roundIndex ||
+      !scheduledStartAt ||
+      !scheduledEndAt ||
+      !effectiveEndAt ||
+      extensionCount === null ||
+      allocationSize === null
+    ) {
+      return null;
+    }
+
+    return {
+      status,
+      roundIndex: storedIndex,
+      scheduledStartAt,
+      scheduledEndAt,
+      effectiveEndAt,
+      extensionCount,
+      lastBidAt: parseRedisDate(data.lastBidAt),
+      startedAt: null,
+      closedAt: null,
+      allocationSize
+    };
+  })();
+
+  roundStateReadsInFlight.set(key, fetchPromise);
+  try {
+    const result = await fetchPromise;
+    if (result) {
+      roundStateCache.set(key, result);
+    }
+    return result;
+  } finally {
+    roundStateReadsInFlight.delete(key);
   }
-
-  return {
-    status,
-    roundIndex: storedIndex,
-    scheduledStartAt,
-    scheduledEndAt,
-    effectiveEndAt,
-    extensionCount,
-    lastBidAt: parseRedisDate(data.lastBidAt),
-    startedAt: null,
-    closedAt: null,
-    allocationSize
-  };
 }
 
 export async function writeAuctionSnapshotToRedis(
@@ -175,6 +277,7 @@ export async function writeAuctionSnapshotToRedis(
   pipeline.hset(key, fields);
   pipeline.expire(key, ttlSeconds);
   await pipeline.exec();
+  primeAuctionSnapshotCache(snapshot);
 }
 
 export async function writeRoundStateToRedis(
@@ -191,6 +294,7 @@ export async function writeRoundStateToRedis(
   pipeline.hset(key, fields);
   pipeline.expire(key, ttlSeconds);
   await pipeline.exec();
+  primeRoundStateCache(auctionId, state);
 }
 
 export function buildAuctionSnapshotFields(

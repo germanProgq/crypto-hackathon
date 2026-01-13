@@ -13,6 +13,8 @@ import {
   buildAuctionSnapshotFields,
   buildRoundStateFields,
   invalidateActiveAuctionListCache,
+  primeAuctionSnapshotCache,
+  primeRoundStateCache,
   roundStateTtlSeconds,
   snapshotTtlSeconds,
   type AuctionSnapshotCache,
@@ -183,6 +185,9 @@ async function updateAuctionCaches(
     auction.rounds.map((round) => [round.index, round])
   );
   const pipeline = redis.multi();
+  const auctionIdText = auction._id.toHexString();
+  const roundStatesToPrime: RoundStateCache[] = [];
+  let snapshotToPrime: AuctionSnapshotCache | null = null;
   let hasOps = false;
 
   for (const state of updatedStates) {
@@ -202,7 +207,8 @@ async function updateAuctionCaches(
       closedAt: state.closedAt ?? null,
       allocationSize: roundConfig.allocationSize
     };
-    const roundStateKey = buildRoundStateKey(auction._id.toHexString(), state.roundIndex);
+    roundStatesToPrime.push(roundCache);
+    const roundStateKey = buildRoundStateKey(auctionIdText, state.roundIndex);
     pipeline.hset(roundStateKey, buildRoundStateFields(roundCache, now));
     pipeline.expire(roundStateKey, roundStateTtlSeconds);
     hasOps = true;
@@ -222,7 +228,7 @@ async function updateAuctionCaches(
 
   if (current) {
     const snapshot: AuctionSnapshotCache = {
-      auctionId: auction._id.toHexString(),
+      auctionId: auctionIdText,
       status: auction.status,
       title: auction.title,
       currency: auction.currency,
@@ -233,7 +239,8 @@ async function updateAuctionCaches(
       updatedAt: now,
       lastBidAmount: null
     };
-    const snapshotKey = buildAuctionSnapshotKey(auction._id.toHexString());
+    snapshotToPrime = snapshot;
+    const snapshotKey = buildAuctionSnapshotKey(auctionIdText);
     pipeline.hset(snapshotKey, buildAuctionSnapshotFields(snapshot));
     pipeline.expire(snapshotKey, snapshotTtlSeconds);
     hasOps = true;
@@ -253,5 +260,11 @@ async function updateAuctionCaches(
 
   if (hasOps) {
     await pipeline.exec();
+    for (const state of roundStatesToPrime) {
+      primeRoundStateCache(auctionIdText, state);
+    }
+    if (snapshotToPrime) {
+      primeAuctionSnapshotCache(snapshotToPrime);
+    }
   }
 }

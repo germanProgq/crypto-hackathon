@@ -116,7 +116,32 @@ const ruCatalog = {
   "bot.notification.roundStarting": "⏰ Раунд {{round}} аукциона {{auctionId}} начинается!",
   "bot.error.sessionExpired": "Ваша сессия истекла. Пожалуйста, начните заново.",
   "bot.error.tryAgain": "Произошла ошибка. Попробуйте еще раз.",
-  "bot.error.contactSupport": "Если проблема сохраняется, обратитесь в поддержку."
+  "bot.error.contactSupport": "Если проблема сохраняется, обратитесь в поддержку.",
+  "web.app.title": "Аукционы подарков",
+  "web.app.liveBadge": "В эфире",
+  "web.balance.totalLabel": "Общий баланс",
+  "web.balance.availableLine": "Доступно: {{amount}} {{currency}}",
+  "web.balance.actions.deposit": "Пополнить",
+  "web.balance.actions.withdraw": "Вывести",
+  "web.tab.auctions": "Аукционы",
+  "web.tab.create": "Создать",
+  "web.section.active": "Активные",
+  "web.action.refresh": "Обновить",
+  "web.section.create.title": "Создать аукцион",
+  "web.empty.soon.title": "Скоро",
+  "web.empty.soon.body": "Функция создания аукционов в разработке",
+  "web.auctions.empty.title": "Нет активных аукционов",
+  "web.auctions.empty.body": "Новые аукционы скоро появятся",
+  "web.auctions.error.title": "Ошибка загрузки",
+  "web.auctions.error.body": "Не удалось загрузить аукционы",
+  "web.auctions.stats.rounds": "Раундов",
+  "web.auctions.stats.currency": "Валюта",
+  "web.auctions.stats.spots": "Места",
+  "web.auctions.status.live": "Активен",
+  "web.auctions.status.draft": "Черновик",
+  "web.auctions.status.closed": "Закрыт",
+  "web.actions.depositComing": "Пополнение скоро будет доступно!",
+  "web.actions.withdrawComing": "Вывод скоро будет доступен!"
 } as const;
 
 export default ruCatalog;

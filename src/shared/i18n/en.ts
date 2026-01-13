@@ -116,7 +116,32 @@ const enCatalog = {
   "bot.notification.roundStarting": "⏰ Round {{round}} of auction {{auctionId}} is starting!",
   "bot.error.sessionExpired": "Your session expired. Please start over.",
   "bot.error.tryAgain": "An error occurred. Please try again.",
-  "bot.error.contactSupport": "If the problem persists, contact support."
+  "bot.error.contactSupport": "If the problem persists, contact support.",
+  "web.app.title": "Gift Auctions",
+  "web.app.liveBadge": "Live",
+  "web.balance.totalLabel": "Total balance",
+  "web.balance.availableLine": "Available: {{amount}} {{currency}}",
+  "web.balance.actions.deposit": "Deposit",
+  "web.balance.actions.withdraw": "Withdraw",
+  "web.tab.auctions": "Auctions",
+  "web.tab.create": "Create",
+  "web.section.active": "Active",
+  "web.action.refresh": "Refresh",
+  "web.section.create.title": "Create auction",
+  "web.empty.soon.title": "Soon",
+  "web.empty.soon.body": "Auction creation is in progress",
+  "web.auctions.empty.title": "No active auctions",
+  "web.auctions.empty.body": "New auctions will appear soon",
+  "web.auctions.error.title": "Load error",
+  "web.auctions.error.body": "Failed to load auctions",
+  "web.auctions.stats.rounds": "Rounds",
+  "web.auctions.stats.currency": "Currency",
+  "web.auctions.stats.spots": "Spots",
+  "web.auctions.status.live": "Live",
+  "web.auctions.status.draft": "Draft",
+  "web.auctions.status.closed": "Closed",
+  "web.actions.depositComing": "Deposit functionality coming soon!",
+  "web.actions.withdrawComing": "Withdraw functionality coming soon!"
 } as const;
 
 export default enCatalog;
