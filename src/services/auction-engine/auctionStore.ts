@@ -16,7 +16,7 @@ import {
 } from "../../shared/storage/mongoSchemas.js";
 import { applyAntiSnipingExtension, type RoundTransition } from "./roundStateMachine.js";
 
-const antiSnipingUpdateAttempts = 3;
+const antiSnipingUpdateAttempts = 8;
 
 export interface RoundBidUpdateResult {
   state: WithId<AuctionRoundStateDocument>;

@@ -57,6 +57,9 @@ services:
       MONGO_URI: mongodb://mongo:27017/crypto_hack?replicaSet=rs0&directConnection=true
       MONGO_DB: crypto_hack
       REDIS_URL: redis://redis:6379
+      RATE_LIMIT_USER_PER_SECOND: ${RATE_LIMIT_USER_PER_SECOND:-5}
+      RATE_LIMIT_AUCTION_USER_PER_SECOND: ${RATE_LIMIT_AUCTION_USER_PER_SECOND:-3}
+      RATE_LIMIT_IP_PER_SECOND: ${RATE_LIMIT_IP_PER_SECOND:-20}
     command: ["npm", "run", "dev:auction-engine"]
     ports:
       - "4001:4001"

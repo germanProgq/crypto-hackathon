@@ -1,4 +1,5 @@
 // Ledger reconciliation check for load test users.
+import { performance } from "node:perf_hooks";
 import {
   buildRunId,
   buildUserList,
@@ -43,12 +44,15 @@ async function main() {
     return result;
   });
 
+  const loadStart = performance.now();
   await runTasksWithLimit(tasks, concurrency);
+  const loadDurationMs = performance.now() - loadStart;
 
   console.log("reconcile complete", {
     stats: formatStats(computeStats(durations)),
     issueCount: issues.length,
-    issues
+    issues,
+    loadDurationMs: Math.round(loadDurationMs)
   });
 
   if (issues.length > 0) {

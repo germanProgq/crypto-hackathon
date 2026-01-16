@@ -600,7 +600,12 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
       const entryOps: Array<AnyBulkWriteOperation<LedgerEntryDocument>> = [];
       const accountIncrements = new Map<
         string,
-        { userId: string; currency: string; count: number }
+        {
+          userId: string;
+          currency: string;
+          count: number;
+          totals: Partial<Record<LedgerEntryDocument["entryType"], number>>;
+        }
       >();
 
       for (const settlement of operations) {
@@ -647,11 +652,14 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
         const existingAccount = accountIncrements.get(accountKey);
         if (existingAccount) {
           existingAccount.count += 1;
+          existingAccount.totals[entryType] =
+            (existingAccount.totals[entryType] ?? 0) + settlement.amount;
         } else {
           accountIncrements.set(accountKey, {
             userId: settlement.userId,
             currency: settlement.currency,
-            count: 1
+            count: 1,
+            totals: { [entryType]: settlement.amount }
           });
         }
       }
@@ -663,6 +671,10 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
       if (accountIncrements.size > 0) {
         const accountOps: Array<AnyBulkWriteOperation<LedgerAccountDocument>> = [];
         for (const account of accountIncrements.values()) {
+          const increments: Record<string, number> = { sequence: account.count };
+          for (const [entryType, amount] of Object.entries(account.totals)) {
+            increments[`totals.${entryType}`] = amount;
+          }
           accountOps.push({
             updateOne: {
               filter: { userId: account.userId, currency: account.currency },
@@ -673,7 +685,7 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
                   createdAt: now
                 },
                 $set: { updatedAt: now },
-                $inc: { sequence: account.count }
+                $inc: increments
               },
               upsert: true
             }

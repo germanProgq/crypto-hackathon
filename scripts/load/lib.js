@@ -1,6 +1,7 @@
 // Load test helpers for auction services.
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { Agent, setGlobalDispatcher } from "undici";
 
 export function parseArgs(argv) {
   const args = {};
@@ -74,12 +75,13 @@ export function readText(value, fallback, defaultValue) {
   return trimmed.length > 0 ? trimmed : defaultValue;
 }
 
-export async function fetchJson(url, options = {}) {
+export async function fetchRequest(url, options = {}) {
   const {
     method = "GET",
     body,
     headers = {},
-    timeoutMs = 10000
+    timeoutMs = 10000,
+    parseJson = false
   } = options;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -100,14 +102,18 @@ export async function fetchJson(url, options = {}) {
       body: payload,
       signal: controller.signal
     });
-    const text = await response.text();
     let data = null;
-    if (text) {
-      try {
-        data = JSON.parse(text);
-      } catch {
-        data = text;
+    if (parseJson) {
+      const text = await response.text();
+      if (text) {
+        try {
+          data = JSON.parse(text);
+        } catch {
+          data = text;
+        }
       }
+    } else {
+      await drainResponse(response);
     }
 
     return { ok: response.ok, status: response.status, data };
@@ -116,9 +122,20 @@ export async function fetchJson(url, options = {}) {
   }
 }
 
+export async function fetchJson(url, options = {}) {
+  return fetchRequest(url, { ...options, parseJson: true });
+}
+
 export async function timedJson(url, options) {
   const start = performance.now();
   const response = await fetchJson(url, options);
+  const durationMs = performance.now() - start;
+  return { ...response, durationMs };
+}
+
+export async function timedRequest(url, options) {
+  const start = performance.now();
+  const response = await fetchRequest(url, options);
   const durationMs = performance.now() - start;
   return { ...response, durationMs };
 }
@@ -142,9 +159,30 @@ export async function createAuction({
     startOffsetSeconds,
     antiSniping
   };
+  let origin = webUrl;
+  try {
+    origin = new URL(webUrl).origin;
+  } catch {
+    // Keep the provided webUrl if it is not a valid URL.
+  }
+  const telegramInitData = readText(
+    process.env.LOAD_TELEGRAM_INIT_DATA,
+    process.env.TELEGRAM_INIT_DATA,
+    ""
+  );
+  const demoUserId = telegramInitData
+    ? ""
+    : readText(process.env.LOAD_DEMO_USER_ID, process.env.WEB_DEMO_USER_ID, "demo");
+  const headers = { origin };
+  if (telegramInitData) {
+    headers["x-telegram-init-data"] = telegramInitData;
+  } else if (demoUserId) {
+    headers["x-demo-user-id"] = demoUserId;
+  }
   const response = await fetchJson(`${webUrl}/api/auctions`, {
     method: "POST",
-    body: payload
+    body: payload,
+    headers
   });
   if (!response.ok || !response.data || !response.data._id) {
     throw new Error(
@@ -204,7 +242,7 @@ export async function seedDeposits({
       idempotencyKey: `deposit-${userId}-${Date.now()}-${randomUUID()}`,
       entryType: "deposit_confirmed"
     };
-    const response = await fetchJson(`${ledgerUrl}/ledger/entries`, {
+    const response = await fetchRequest(`${ledgerUrl}/ledger/entries`, {
       method: "POST",
       body: payload,
       timeoutMs
@@ -224,14 +262,16 @@ export async function placeBid({
   amount,
   idempotencyKey,
   ip,
-  timeoutMs
+  timeoutMs,
+  parseJson = false
 }) {
   const headers = ip ? { "x-forwarded-for": ip } : undefined;
-  return timedJson(`${auctionUrl}/auctions/${auctionId}/bids`, {
+  return timedRequest(`${auctionUrl}/auctions/${auctionId}/bids`, {
     method: "POST",
     body: { userId, amount, idempotencyKey },
     headers,
-    timeoutMs
+    timeoutMs,
+    parseJson
   });
 }
 
@@ -342,4 +382,63 @@ export function formatStatusCounts(statusCounts) {
     error: statusCounts.error,
     byStatus: Object.fromEntries(entries)
   };
+}
+
+async function drainResponse(response) {
+  if (!response?.body) {
+    return;
+  }
+  try {
+    await response.arrayBuffer();
+  } catch {
+    try {
+      await response.body.cancel();
+    } catch {
+      // Ignore body teardown errors.
+    }
+  }
+}
+
+configureLoadHttp();
+
+function configureLoadHttp() {
+  const connections = Math.max(
+    1,
+    Math.floor(readNumber(process.env.LOAD_HTTP_CONNECTIONS, undefined, 200))
+  );
+  const pipelining = Math.max(
+    1,
+    Math.floor(readNumber(process.env.LOAD_HTTP_PIPELINING, undefined, 1))
+  );
+  const keepAliveTimeout = Math.max(
+    1000,
+    Math.floor(readNumber(process.env.LOAD_HTTP_KEEP_ALIVE_TIMEOUT_MS, undefined, 10000))
+  );
+  const keepAliveMaxTimeout = Math.max(
+    1000,
+    Math.floor(readNumber(process.env.LOAD_HTTP_KEEP_ALIVE_MAX_TIMEOUT_MS, undefined, 60000))
+  );
+  const headersTimeout = Math.max(
+    1000,
+    Math.floor(readNumber(process.env.LOAD_HTTP_HEADERS_TIMEOUT_MS, undefined, 30000))
+  );
+  const bodyTimeout = Math.max(
+    1000,
+    Math.floor(readNumber(process.env.LOAD_HTTP_BODY_TIMEOUT_MS, undefined, 30000))
+  );
+
+  if (!Number.isFinite(connections) || connections <= 0) {
+    return;
+  }
+
+  setGlobalDispatcher(
+    new Agent({
+      connections,
+      pipelining,
+      keepAliveTimeout,
+      keepAliveMaxTimeout,
+      headersTimeout,
+      bodyTimeout
+    })
+  );
 }

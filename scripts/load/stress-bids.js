@@ -1,5 +1,6 @@
 // Concurrent bid stress test for auction engine.
 import { randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import {
   buildForwardedIp,
   buildRunId,
@@ -26,7 +27,13 @@ async function main() {
   const totalBids = Math.max(1, Math.floor(readNumber(args.bids, process.env.STRESS_BIDS, 200)));
   const concurrency = Math.max(
     1,
-    Math.floor(readNumber(args.concurrency, process.env.STRESS_CONCURRENCY, 50))
+    Math.floor(
+      readNumber(
+        args.concurrency,
+        process.env.STRESS_CONCURRENCY,
+        Math.min(totalBids, 150)
+      )
+    )
   );
   const userCount = Math.max(
     1,
@@ -44,7 +51,7 @@ async function main() {
     currency: config.currency,
     rounds: 1,
     allocationSize: Math.max(1, Math.floor(userCount / 4)),
-    roundDurationSeconds: Math.max(6, Math.ceil(totalBids / Math.max(1, concurrency)) + 2),
+    roundDurationSeconds: Math.max(30, Math.ceil(totalBids / Math.max(1, concurrency)) + 2),
     startOffsetSeconds: 0,
     antiSniping: {
       triggerWindowSeconds: 8,
@@ -58,7 +65,7 @@ async function main() {
     auctionId,
     roundIndex: 0,
     status: "live",
-    timeoutMs: 8000,
+    timeoutMs: 30000,
     pollMs: 100
   });
 
@@ -99,13 +106,16 @@ async function main() {
     }
   });
 
+  const loadStart = performance.now();
   await runTasksWithLimit(tasks, concurrency);
+  const loadDurationMs = performance.now() - loadStart;
 
   const stats = computeStats(durations);
   console.log("stress test complete", {
     auctionId,
     stats: formatStats(stats),
-    status: formatStatusCounts(statusCounts)
+    status: formatStatusCounts(statusCounts),
+    loadDurationMs: Math.round(loadDurationMs)
   });
 }
 

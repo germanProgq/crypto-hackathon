@@ -21,6 +21,7 @@ export interface AppConfig {
   mongo: {
     uri: string;
     dbName: string;
+    poolMax: number;
   };
   redis: {
     url: string;
@@ -227,6 +228,7 @@ function createEnvSchema(defaultPort: number) {
       .refine(isMongoUri, "MONGO_URI must start with mongodb:// or mongodb+srv://")
       .default("mongodb://127.0.0.1:27017"),
     MONGO_DB: z.string().min(1).default("crypto_hack"),
+    MONGO_POOL_MAX: z.coerce.number().int().min(10).max(1000).default(200),
     REDIS_URL: z
       .string()
       .min(1)
@@ -395,7 +397,8 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
     logLevel: parsed.LOG_LEVEL,
     mongo: {
       uri: parsed.MONGO_URI,
-      dbName: parsed.MONGO_DB
+      dbName: parsed.MONGO_DB,
+      poolMax: parsed.MONGO_POOL_MAX
     },
     redis: {
       url: parsed.REDIS_URL,

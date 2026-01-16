@@ -134,6 +134,7 @@ export interface LedgerAccountDocument {
   sequence: number;
   createdAt: Date;
   updatedAt: Date;
+  totals?: Partial<Record<LedgerEntryType, number>>;
 }
 
 export interface RoundResultDocument {

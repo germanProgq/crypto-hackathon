@@ -11,6 +11,7 @@ import {
 } from "../../shared/storage/mongoSchemas.js";
 
 export type LedgerTotals = Record<LedgerEntryType, number>;
+type LedgerAccountTotals = Partial<Record<LedgerEntryType, number>>;
 
 export interface LedgerBalance {
   userId: string;
@@ -119,7 +120,7 @@ export function createLedgerRepository(mongo: MongoDependencies) {
   const ledgerAccounts = mongo.db.collection<LedgerAccountDocument>(mongoCollections.ledgerAccounts);
 
   async function getBalance(userId: string, currency: string): Promise<LedgerBalance> {
-    const totals = await getLedgerTotals(ledgerEntries, userId, currency);
+    const totals = await getAccountTotals(ledgerEntries, ledgerAccounts, userId, currency);
     return buildBalance(userId, currency, totals);
   }
 
@@ -128,7 +129,7 @@ export function createLedgerRepository(mongo: MongoDependencies) {
     currency: string,
     session: ClientSession
   ): Promise<LedgerBalance> {
-    return getBalanceWithSession(ledgerEntries, userId, currency, session);
+    return getBalanceWithSession(ledgerEntries, ledgerAccounts, userId, currency, session);
   }
 
   async function getHistory(
@@ -214,6 +215,7 @@ export function createLedgerRepository(mongo: MongoDependencies) {
       const entry = await broadcastWithdrawalWithSession(toWithdrawalInput(input), session);
       const balance = await getBalanceWithSession(
         ledgerEntries,
+        ledgerAccounts,
         input.userId,
         input.currency,
         session
@@ -232,9 +234,10 @@ export function createLedgerRepository(mongo: MongoDependencies) {
     validateEntryInput(input);
 
     await touchAccount(ledgerAccounts, input.userId, input.currency, session);
-    const entry = await insertLedgerEntry(ledgerEntries, input, session);
+    const entry = await insertLedgerEntry(ledgerEntries, ledgerAccounts, input, session);
     const balance = await getBalanceWithSession(
       ledgerEntries,
+      ledgerAccounts,
       input.userId,
       input.currency,
       session
@@ -272,6 +275,7 @@ export function createLedgerRepository(mongo: MongoDependencies) {
       if (holdEntry.idempotencyKey === input.idempotencyKey) {
         const balance = await getBalanceWithSession(
           ledgerEntries,
+          ledgerAccounts,
           input.userId,
           input.currency,
           session
@@ -284,6 +288,7 @@ export function createLedgerRepository(mongo: MongoDependencies) {
 
     const balance = await getBalanceWithSession(
       ledgerEntries,
+      ledgerAccounts,
       input.userId,
       input.currency,
       session
@@ -295,6 +300,7 @@ export function createLedgerRepository(mongo: MongoDependencies) {
 
     const entry = await insertLedgerEntry(
       ledgerEntries,
+      ledgerAccounts,
       {
         userId: input.userId,
         entryType: "hold_created",
@@ -309,6 +315,7 @@ export function createLedgerRepository(mongo: MongoDependencies) {
 
     const updated = await getBalanceWithSession(
       ledgerEntries,
+      ledgerAccounts,
       input.userId,
       input.currency,
       session
@@ -356,6 +363,7 @@ export function createLedgerRepository(mongo: MongoDependencies) {
       if (existing.idempotencyKey === input.idempotencyKey) {
         const balance = await getBalanceWithSession(
           ledgerEntries,
+          ledgerAccounts,
           input.userId,
           input.currency,
           session
@@ -368,6 +376,7 @@ export function createLedgerRepository(mongo: MongoDependencies) {
 
     const balance = await getBalanceWithSession(
       ledgerEntries,
+      ledgerAccounts,
       input.userId,
       input.currency,
       session
@@ -379,6 +388,7 @@ export function createLedgerRepository(mongo: MongoDependencies) {
 
     const entry = await insertLedgerEntry(
       ledgerEntries,
+      ledgerAccounts,
       {
         userId: input.userId,
         entryType: "withdrawal_requested",
@@ -393,6 +403,7 @@ export function createLedgerRepository(mongo: MongoDependencies) {
 
     const updated = await getBalanceWithSession(
       ledgerEntries,
+      ledgerAccounts,
       input.userId,
       input.currency,
       session
@@ -453,6 +464,7 @@ export function createLedgerRepository(mongo: MongoDependencies) {
 
     return insertLedgerEntry(
       ledgerEntries,
+      ledgerAccounts,
       {
         userId: input.userId,
         entryType: "withdrawal_broadcasted",
@@ -528,6 +540,7 @@ export function createLedgerRepository(mongo: MongoDependencies) {
         if (resolved.entryType === entryType && resolved.idempotencyKey === input.idempotencyKey) {
           const balance = await getBalanceWithSession(
             ledgerEntries,
+            ledgerAccounts,
             input.userId,
             input.currency,
             session
@@ -540,6 +553,7 @@ export function createLedgerRepository(mongo: MongoDependencies) {
 
       const balance = await getBalanceWithSession(
         ledgerEntries,
+        ledgerAccounts,
         input.userId,
         input.currency,
         session
@@ -551,6 +565,7 @@ export function createLedgerRepository(mongo: MongoDependencies) {
 
       const entry = await insertLedgerEntry(
         ledgerEntries,
+        ledgerAccounts,
         {
           userId: input.userId,
           entryType,
@@ -565,6 +580,7 @@ export function createLedgerRepository(mongo: MongoDependencies) {
 
       const updated = await getBalanceWithSession(
         ledgerEntries,
+        ledgerAccounts,
         input.userId,
         input.currency,
         session
@@ -611,6 +627,7 @@ export function createLedgerRepository(mongo: MongoDependencies) {
       if (resolved.entryType === entryType && resolved.idempotencyKey === input.idempotencyKey) {
         const balance = await getBalanceWithSession(
           ledgerEntries,
+          ledgerAccounts,
           input.userId,
           input.currency,
           session
@@ -623,6 +640,7 @@ export function createLedgerRepository(mongo: MongoDependencies) {
 
     const balance = await getBalanceWithSession(
       ledgerEntries,
+      ledgerAccounts,
       input.userId,
       input.currency,
       session
@@ -634,6 +652,7 @@ export function createLedgerRepository(mongo: MongoDependencies) {
 
     const entry = await insertLedgerEntry(
       ledgerEntries,
+      ledgerAccounts,
       {
         userId: input.userId,
         entryType,
@@ -648,6 +667,7 @@ export function createLedgerRepository(mongo: MongoDependencies) {
 
     const updated = await getBalanceWithSession(
       ledgerEntries,
+      ledgerAccounts,
       input.userId,
       input.currency,
       session
@@ -703,13 +723,44 @@ async function getLedgerTotals(
   return totals;
 }
 
+async function getAccountTotals(
+  ledgerEntries: Collection<LedgerEntryDocument>,
+  ledgerAccounts: Collection<LedgerAccountDocument>,
+  userId: string,
+  currency: string,
+  session?: ClientSession
+): Promise<LedgerTotals> {
+  const account = await ledgerAccounts.findOne({ userId, currency }, { session });
+  if (account?.totals) {
+    return normalizeTotals(account.totals);
+  }
+
+  const totals = await getLedgerTotals(ledgerEntries, userId, currency, session);
+  if (account && !account.totals) {
+    const now = new Date();
+    await ledgerAccounts.updateOne(
+      { userId, currency, totals: { $exists: false } },
+      { $set: { totals, updatedAt: now } },
+      { session }
+    );
+  }
+  return totals;
+}
+
 async function getBalanceWithSession(
   ledgerEntries: Collection<LedgerEntryDocument>,
+  ledgerAccounts: Collection<LedgerAccountDocument>,
   userId: string,
   currency: string,
   session: ClientSession
 ): Promise<LedgerBalance> {
-  const totals = await getLedgerTotals(ledgerEntries, userId, currency, session);
+  const totals = await getAccountTotals(
+    ledgerEntries,
+    ledgerAccounts,
+    userId,
+    currency,
+    session
+  );
   return buildBalance(userId, currency, totals);
 }
 
@@ -749,6 +800,15 @@ function createEmptyTotals(): LedgerTotals {
     acc[entryType] = 0;
     return acc;
   }, {} as LedgerTotals);
+}
+
+function normalizeTotals(totals: LedgerAccountTotals): LedgerTotals {
+  const normalized = createEmptyTotals();
+  for (const entryType of ledgerEntryTypes) {
+    const value = totals[entryType];
+    normalized[entryType] = Number.isFinite(value) ? value : 0;
+  }
+  return normalized;
 }
 
 function getTotal(totals: LedgerTotals, entryType: LedgerEntryType): number {
@@ -844,8 +904,26 @@ async function touchAccount(
   );
 }
 
+async function applyLedgerAccountDelta(
+  ledgerAccounts: Collection<LedgerAccountDocument>,
+  input: LedgerEntryInput,
+  createdAt: Date,
+  session: ClientSession
+): Promise<void> {
+  const totalsKey = `totals.${input.entryType}`;
+  await ledgerAccounts.updateOne(
+    { userId: input.userId, currency: input.currency },
+    {
+      $inc: { [totalsKey]: input.amount },
+      $set: { updatedAt: createdAt }
+    },
+    { session }
+  );
+}
+
 async function insertLedgerEntry(
   ledgerEntries: Collection<LedgerEntryDocument>,
+  ledgerAccounts: Collection<LedgerAccountDocument>,
   input: LedgerEntryInput,
   session: ClientSession
 ): Promise<WithId<LedgerEntryDocument>> {
@@ -868,14 +946,14 @@ async function insertLedgerEntry(
     document.audit = input.audit;
   }
 
-  const updated = await ledgerEntries.findOneAndUpdate(
+  const result = await ledgerEntries.findOneAndUpdate(
     { idempotencyKey: input.idempotencyKey },
     { $setOnInsert: document },
-    { session, upsert: true, returnDocument: "after" }
+    { session, upsert: true, returnDocument: "after", includeResultMetadata: true }
   );
 
   const existing =
-    updated ??
+    result.value ??
     (await ledgerEntries.findOne({ idempotencyKey: input.idempotencyKey }, { session }));
   if (!existing) {
     throw new LedgerError("idempotency_conflict", "Idempotency conflict.", 409);
@@ -883,6 +961,13 @@ async function insertLedgerEntry(
 
   if (!matchesIdempotentEntry(existing, document)) {
     throw new LedgerError("idempotency_conflict", "Idempotency mismatch.", 409);
+  }
+
+  const inserted =
+    result.lastErrorObject?.updatedExisting === false ||
+    Boolean(result.lastErrorObject?.upserted);
+  if (inserted) {
+    await applyLedgerAccountDelta(ledgerAccounts, input, createdAt, session);
   }
 
   return existing;

@@ -1,5 +1,6 @@
 // Bot simulation load test for auction bidding.
 import { randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import {
   buildForwardedIp,
   buildRunId,
@@ -32,7 +33,13 @@ async function main() {
   const maxIncrement = readNumber(args.maxIncrement, process.env.BOT_MAX_INCREMENT, 25);
   const concurrency = Math.max(
     1,
-    Math.floor(readNumber(args.concurrency, process.env.BOT_CONCURRENCY, 12))
+    Math.floor(
+      readNumber(
+        args.concurrency,
+        process.env.BOT_CONCURRENCY,
+        Math.min(userCount, 80)
+      )
+    )
   );
   const prefix = readText(args["user-prefix"], process.env.BOT_USER_PREFIX, "bot");
 
@@ -50,7 +57,7 @@ async function main() {
     currency: config.currency,
     rounds: 2,
     allocationSize: Math.max(1, Math.floor(userCount / 5)),
-    roundDurationSeconds: Math.max(8, bidsPerUser * 2),
+    roundDurationSeconds: Math.max(30, bidsPerUser * 2),
     startOffsetSeconds: 0,
     antiSniping: {
       triggerWindowSeconds: 10,
@@ -66,7 +73,7 @@ async function main() {
     auctionId,
     roundIndex: 0,
     status: "live",
-    timeoutMs: 8000,
+    timeoutMs: 30000,
     pollMs: 100
   });
 
@@ -102,13 +109,16 @@ async function main() {
     }
   });
 
+  const loadStart = performance.now();
   await runTasksWithLimit(tasks, concurrency);
+  const loadDurationMs = performance.now() - loadStart;
 
   const stats = computeStats(durations);
   console.log("bot simulation complete", {
     auctionId,
     stats: formatStats(stats),
-    status: formatStatusCounts(statusCounts)
+    status: formatStatusCounts(statusCounts),
+    loadDurationMs: Math.round(loadDurationMs)
   });
 }
 

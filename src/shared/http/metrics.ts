@@ -85,6 +85,6 @@ function getRouteLabel(request: FastifyRequest): string {
     return "not_found";
   }
 
-  const route = request.routeOptions?.url ?? request.routerPath ?? request.url;
+  const route = request.routeOptions?.url ?? request.url;
   return route ?? "unknown";
 }

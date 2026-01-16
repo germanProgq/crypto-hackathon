@@ -109,6 +109,12 @@ npm run load:anti-sniping
 npm run load:reconcile
 ```
 
+Interactive performance CLI (RPS + metrics):
+
+```bash
+npm run load:perf
+```
+
 Recommended for load testing:
 
 - Increase rate limits for local testing by setting `RATE_LIMIT_IP_PER_SECOND` and `RATE_LIMIT_USER_PER_SECOND` in `docker-compose.yml`.

@@ -38,6 +38,7 @@ import {
 } from "./auctionCache.js";
 import { createAuctionRepository } from "./auctionStore.js";
 import { buildRankingMember } from "./bidRanking.js";
+import { applyAntiSnipingExtension } from "./roundStateMachine.js";
 import { publishRealtimeEvent, toRealtimeSnapshot } from "../../shared/realtime/events.js";
 
 const bidLockTtlMs = 8000;
@@ -47,54 +48,74 @@ const idempotencyWaitMs = 750;
 const idempotencyPollMs = 50;
 const bidLockWaitMs = 1500;
 const bidLockPollMs = 25;
+const persistLastBidAt = readEnvBoolean("BID_PERSIST_LAST_BID_AT", true);
+const persistSnapshot = readEnvBoolean("BID_PERSIST_SNAPSHOT", true);
 
 const rateLimitScript = `
-local capacity = tonumber(ARGV[1])
-local refillRate = tonumber(ARGV[2])
-if not capacity or not refillRate or capacity <= 0 or refillRate <= 0 then
+local time = redis.call("TIME")
+local nowMs = (tonumber(time[1]) * 1000) + math.floor(tonumber(time[2]) / 1000)
+
+local function consume(key, capacity, refillRate)
+  if not capacity or not refillRate or capacity <= 0 or refillRate <= 0 then
+    return 0
+  end
+
+  local bucket = redis.call("HMGET", key, "tokens", "ts")
+  local tokens = tonumber(bucket[1])
+  local lastMs = tonumber(bucket[2])
+
+  if not tokens then
+    tokens = capacity
+  end
+
+  if not lastMs then
+    lastMs = nowMs
+  end
+
+  if tokens > capacity then
+    tokens = capacity
+  end
+
+  if tokens < capacity then
+    local deltaMs = nowMs - lastMs
+    if deltaMs > 0 then
+      local refill = (deltaMs / 1000) * refillRate
+      tokens = math.min(capacity, tokens + refill)
+    end
+  end
+
+  local allowed = tokens >= 1
+  if allowed then
+    tokens = tokens - 1
+  end
+
+  redis.call("HSET", key, "tokens", tokens, "ts", nowMs)
+
+  local ttlSeconds = math.ceil((capacity / refillRate) * 2)
+  if ttlSeconds < 1 then
+    ttlSeconds = 1
+  end
+  redis.call("EXPIRE", key, ttlSeconds)
+
+  return allowed and 1 or 0
+end
+
+local userAllowed = consume(KEYS[1], tonumber(ARGV[1]), tonumber(ARGV[2]))
+if userAllowed ~= 1 then
   return 0
 end
 
-local time = redis.call("TIME")
-local nowMs = (tonumber(time[1]) * 1000) + math.floor(tonumber(time[2]) / 1000)
-local bucket = redis.call("HMGET", KEYS[1], "tokens", "ts")
-local tokens = tonumber(bucket[1])
-local lastMs = tonumber(bucket[2])
-
-if not tokens then
-  tokens = capacity
+local auctionAllowed = consume(KEYS[2], tonumber(ARGV[3]), tonumber(ARGV[4]))
+if auctionAllowed ~= 1 then
+  return 0
 end
 
-if not lastMs then
-  lastMs = nowMs
+local ipAllowed = consume(KEYS[3], tonumber(ARGV[5]), tonumber(ARGV[6]))
+if ipAllowed ~= 1 then
+  return 0
 end
 
-if tokens > capacity then
-  tokens = capacity
-end
-
-if tokens < capacity then
-  local deltaMs = nowMs - lastMs
-  if deltaMs > 0 then
-    local refill = (deltaMs / 1000) * refillRate
-    tokens = math.min(capacity, tokens + refill)
-  end
-end
-
-local allowed = tokens >= 1
-if allowed then
-  tokens = tokens - 1
-end
-
-redis.call("HSET", KEYS[1], "tokens", tokens, "ts", nowMs)
-
-local ttlSeconds = math.ceil((capacity / refillRate) * 2)
-if ttlSeconds < 1 then
-  ttlSeconds = 1
-end
-redis.call("EXPIRE", KEYS[1], ttlSeconds)
-
-return allowed and 1 or 0
+return 1
 `;
 
 const bidCacheUpdateScript = `
@@ -246,7 +267,7 @@ export function createBidService(deps: ServiceDependencies) {
       return toPlacementResult(existing);
     }
 
-    const lockKey = buildBidLockKey(input.auctionId.toHexString());
+    const lockKey = buildBidLockKey(input.auctionId.toHexString(), input.userId);
     const lock = await acquireBidLock(deps.redis, lockKey, bidLockTtlMs, bidLockWaitMs);
     if (!lock) {
       const waited = await waitForIdempotentBid(input, idempotencyWaitMs);
@@ -382,35 +403,43 @@ export function createBidService(deps: ServiceDependencies) {
         };
 
         const holdResult = await ledger.createHoldInSession(holdInput, session);
-        const antiSniping = await auctionRepository.applyBidAntiSniping(
-          auction,
-          roundState.roundIndex,
-          now,
-          session
-        );
+        const antiSnipingPreview = applyAntiSnipingExtension(roundState, roundConfig, now);
+        let resolvedState = { ...roundState, ...antiSnipingPreview.state };
+        let extended = antiSnipingPreview.extended;
+        if (persistLastBidAt || antiSnipingPreview.extended) {
+          const persisted = await auctionRepository.applyBidAntiSniping(
+            auction,
+            roundState.roundIndex,
+            now,
+            session
+          );
+          resolvedState = persisted.state;
+          extended = persisted.extended;
+        }
 
-        const lastBidAt = antiSniping.state.lastBidAt ?? now;
+        const lastBidAt = resolvedState.lastBidAt ?? now;
         const bidIsLatest =
-          !antiSniping.state.lastBidAt ||
-          antiSniping.state.lastBidAt.getTime() === now.getTime();
-        await auctionRepository.updateAuctionSnapshot(
-          auction._id,
-          {
-            currentRoundIndex: antiSniping.state.roundIndex,
-            roundStatus: antiSniping.state.status,
-            roundEffectiveEndAt: antiSniping.state.effectiveEndAt,
-            roundLastBidAt: lastBidAt,
-            lastBidAmount: bidIsLatest ? bidDoc.amount : null
-          },
-          now,
-          session
-        );
+          !resolvedState.lastBidAt || resolvedState.lastBidAt.getTime() === now.getTime();
+        if (persistSnapshot || extended) {
+          await auctionRepository.updateAuctionSnapshot(
+            auction._id,
+            {
+              currentRoundIndex: resolvedState.roundIndex,
+              roundStatus: resolvedState.status,
+              roundEffectiveEndAt: resolvedState.effectiveEndAt,
+              roundLastBidAt: lastBidAt,
+              lastBidAmount: bidIsLatest ? bidDoc.amount : null
+            },
+            now,
+            session
+          );
+        }
 
         return {
           bid: bidDoc,
           balance: holdResult.balance,
-          roundState: antiSniping.state,
-          extended: antiSniping.extended,
+          roundState: resolvedState,
+          extended,
           idempotent: false,
           auction,
           roundConfig,
@@ -421,19 +450,21 @@ export function createBidService(deps: ServiceDependencies) {
 
       const { snapshot } = await updateRedisCaches(deps.redis, result);
       try {
-        await publishRealtimeEvent(deps.redis, {
-          type: "auction.snapshot.updated",
-          auctionId: snapshot.auctionId,
-          snapshot: toRealtimeSnapshot({ ...snapshot, serverTime: new Date() })
-        });
-        await publishRealtimeEvent(deps.redis, {
-          type: "auction.bids.updated",
-          auctionId: snapshot.auctionId
-        });
-        await publishRealtimeEvent(deps.redis, {
-          type: "bids.active.updated",
-          userIds: [result.bid.userId]
-        });
+        await Promise.all([
+          publishRealtimeEvent(deps.redis, {
+            type: "auction.snapshot.updated",
+            auctionId: snapshot.auctionId,
+            snapshot: toRealtimeSnapshot({ ...snapshot, serverTime: new Date() })
+          }),
+          publishRealtimeEvent(deps.redis, {
+            type: "auction.bids.updated",
+            auctionId: snapshot.auctionId
+          }),
+          publishRealtimeEvent(deps.redis, {
+            type: "bids.active.updated",
+            userIds: [result.bid.userId]
+          })
+        ]);
       } catch (error) {
         deps.logger.warn({ err: error }, "Failed to publish realtime bid updates");
       }
@@ -605,22 +636,20 @@ async function enforceRateLimits(
   limits: ServiceDependencies["config"]["rateLimits"],
   input: BidPlacementInput
 ): Promise<void> {
-  await consumeRateLimit(redis, buildUserRateLimitKey(input.userId), limits.userPerSecond);
-  await consumeRateLimit(
-    redis,
+  const result = await redis.eval(
+    rateLimitScript,
+    3,
+    buildUserRateLimitKey(input.userId),
     buildAuctionUserRateLimitKey(input.auctionId.toHexString(), input.userId),
-    limits.auctionUserPerSecond
+    buildIpRateLimitKey(input.ip),
+    limits.userPerSecond.toString(),
+    limits.userPerSecond.toString(),
+    limits.auctionUserPerSecond.toString(),
+    limits.auctionUserPerSecond.toString(),
+    limits.ipPerSecond.toString(),
+    limits.ipPerSecond.toString()
   );
-  await consumeRateLimit(redis, buildIpRateLimitKey(input.ip), limits.ipPerSecond);
-}
-
-async function consumeRateLimit(
-  redis: RedisClient,
-  key: string,
-  limit: number
-): Promise<void> {
-  const value = await redis.eval(rateLimitScript, 1, key, limit.toString(), limit.toString());
-  const allowed = Number(value);
+  const allowed = Number(result);
   if (!Number.isFinite(allowed)) {
     throw new BidError("rate_limited", "Rate limit unavailable.", 429);
   }
@@ -701,8 +730,8 @@ function buildHoldIdempotencyKey(idempotencyKey: string): string {
   return `hold:${idempotencyKey}`;
 }
 
-function buildBidLockKey(auctionId: string): string {
-  return `auction:${auctionId}:bid:lock`;
+function buildBidLockKey(auctionId: string, userId: string): string {
+  return `auction:${auctionId}:user:${userId}:bid:lock`;
 }
 
 function delay(timeoutMs: number): Promise<void> {
@@ -734,4 +763,19 @@ async function acquireBidLock(
     await delay(bidLockPollMs);
   }
   return null;
+}
+
+function readEnvBoolean(name: string, defaultValue: boolean): boolean {
+  const raw = process.env[name];
+  if (raw === undefined) {
+    return defaultValue;
+  }
+  const normalized = raw.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  return defaultValue;
 }

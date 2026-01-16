@@ -33,7 +33,7 @@ export async function connectMongo(config: AppConfig, logger: Logger): Promise<M
     );
   }
   const client = new MongoClient(mongoUri, {
-    maxPoolSize: 50,
+    maxPoolSize: config.mongo.poolMax,
     serverSelectionTimeoutMS: 5000,
     appName: config.serviceName
   });

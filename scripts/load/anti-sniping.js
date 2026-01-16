@@ -1,5 +1,6 @@
 // Anti-sniping edge case test for round extensions.
 import { randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import {
   buildForwardedIp,
   buildRunId,
@@ -21,8 +22,8 @@ async function main() {
   const config = resolveConfig(args);
   const runId = buildRunId(args);
   const roundDurationSeconds = Math.max(
-    4,
-    Math.floor(readNumber(args.roundDuration, process.env.ANTI_ROUND_DURATION, 6))
+    30,
+    Math.floor(readNumber(args.roundDuration, process.env.ANTI_ROUND_DURATION, 30))
   );
   const triggerWindowSeconds = Math.max(
     2,
@@ -63,7 +64,7 @@ async function main() {
     auctionId,
     roundIndex: 0,
     status: "live",
-    timeoutMs: 8000,
+    timeoutMs: 30000,
     pollMs: 100
   });
 
@@ -82,6 +83,7 @@ async function main() {
     roundIndex: 0
   });
 
+  const loadStart = performance.now();
   const response = await placeBid({
     auctionUrl: config.auctionUrl,
     auctionId,
@@ -89,8 +91,10 @@ async function main() {
     amount: baseBid,
     idempotencyKey: `anti-${userId}-${randomUUID()}`,
     ip: buildForwardedIp(1),
-    timeoutMs: config.timeoutMs
+    timeoutMs: config.timeoutMs,
+    parseJson: true
   });
+  const loadDurationMs = performance.now() - loadStart;
 
   if (!response.ok || !response.data) {
     throw new Error(`Bid failed: ${response.status}`);
@@ -110,7 +114,8 @@ async function main() {
     auctionId,
     extended: response.data.extended,
     extensionCount: stateAfter.extensionCount,
-    extensionMs: extensionApplied
+    extensionMs: extensionApplied,
+    loadDurationMs: Math.round(loadDurationMs)
   });
 
   const durations = [response.durationMs];
