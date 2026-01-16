@@ -9,13 +9,17 @@ import {
   createCryptoGatewayService,
   type WithdrawalRequestInput
 } from "./cryptoGatewayService.js";
+import {
+  requireCoreAuth,
+  resolveUserIdFromAuth
+} from "../../shared/auth/coreAuth.js";
 
 const currencyQuerySchema = z.object({
   currency: z.string().min(1)
 });
 
 const withdrawalRequestSchema = z.object({
-  userId: z.string().min(1),
+  userId: z.string().min(1).optional(),
   currency: z.string().min(1),
   amount: z.number().positive().finite(),
   destinationAddress: z.string().min(1),
@@ -41,6 +45,10 @@ export async function registerCryptoGatewayRoutes(
   const service = createCryptoGatewayService(deps);
 
   app.get("/crypto/:userId/deposit-address", async (request, reply) => {
+    const auth = requireCoreAuth(request, reply, deps);
+    if (!auth) {
+      return;
+    }
     const query = currencyQuerySchema.safeParse(request.query);
     if (!query.success) {
       return reply.code(400).send({ error: "invalid_request", message: "currency is required." });
@@ -48,7 +56,11 @@ export async function registerCryptoGatewayRoutes(
 
     try {
       const params = request.params as { userId: string };
-      const destination = await service.getDepositDestination(params.userId, query.data.currency);
+      const userId = resolveUserIdFromAuth(auth, params.userId, reply);
+      if (!userId) {
+        return;
+      }
+      const destination = await service.getDepositDestination(userId, query.data.currency);
       return destination;
     } catch (error) {
       return handleCryptoError(reply, error);
@@ -56,13 +68,24 @@ export async function registerCryptoGatewayRoutes(
   });
 
   app.post("/crypto/withdrawals/request", async (request, reply) => {
+    const auth = requireCoreAuth(request, reply, deps);
+    if (!auth) {
+      return;
+    }
     const body = withdrawalRequestSchema.safeParse(request.body);
     if (!body.success) {
       return reply.code(400).send({ error: "invalid_request", message: "Invalid withdrawal payload." });
     }
 
     try {
-      const result = await service.requestWithdrawal(body.data as WithdrawalRequestInput);
+      const userId = resolveUserIdFromAuth(auth, body.data.userId, reply);
+      if (!userId) {
+        return;
+      }
+      const result = await service.requestWithdrawal({
+        ...body.data,
+        userId
+      } as WithdrawalRequestInput);
       return {
         withdrawal: serializeWithdrawal(result.withdrawal),
         balance: result.balance,

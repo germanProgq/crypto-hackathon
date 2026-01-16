@@ -1,4 +1,5 @@
 // Observer client for deposit and withdrawal transaction data.
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { AppConfig } from "../../shared/config.js";
 import type { ObserverTransaction, ObserverTransactionsResponse, SignedPayload } from "./types.js";
@@ -30,6 +31,9 @@ export interface ObserverClientOptions {
 }
 
 export function createObserverClient(config: AppConfig["crypto"]) {
+  if (isMockObserverUrl(config.observerUrl)) {
+    return createMockObserverClient(config);
+  }
   const baseUrl = normalizeBaseUrl(config.observerUrl);
 
   async function listTransactions(options: {
@@ -94,6 +98,83 @@ export function createObserverClient(config: AppConfig["crypto"]) {
     getTransaction,
     broadcastTransaction
   };
+}
+
+type MockTransactionRecord = {
+  txId: string;
+  currency: string;
+  address: string;
+  memo?: string;
+  amount: number;
+  confirmations: number;
+  observedAt: Date;
+  blockHeight?: number;
+};
+
+function createMockObserverClient(config: AppConfig["crypto"]) {
+  const broadcasted = new Map<string, MockTransactionRecord>();
+  const confirmations = Math.max(1, config.withdrawal.confirmations);
+
+  async function listTransactions(_options: {
+    currency: string;
+    addresses: string[];
+    after?: string | null;
+    limit?: number;
+  }): Promise<ObserverTransactionsResponse> {
+    return { nextCursor: null, transactions: [] };
+  }
+
+  async function getTransaction(
+    currency: string,
+    txId: string
+  ): Promise<ObserverTransaction | null> {
+    const entry = broadcasted.get(txId);
+    if (!entry) {
+      return null;
+    }
+    if (entry.currency !== currency.trim().toUpperCase()) {
+      return null;
+    }
+    return { ...entry, confirmations };
+  }
+
+  async function broadcastTransaction(
+    currency: string,
+    signedPayload: SignedPayload,
+    clientReference?: string
+  ): Promise<{ txId: string }> {
+    const normalizedCurrency = currency.trim().toUpperCase();
+    const candidateId = clientReference ? `mock_${clientReference}` : "";
+    const existing = candidateId ? broadcasted.get(candidateId) : null;
+    if (existing) {
+      return { txId: existing.txId };
+    }
+
+    const txId = candidateId || `mock_${randomUUID()}`;
+    const payload = signedPayload.payload;
+    const now = new Date();
+    broadcasted.set(txId, {
+      txId,
+      currency: normalizedCurrency,
+      address: payload.toAddress,
+      memo: payload.memo,
+      amount: payload.amount,
+      confirmations,
+      observedAt: now
+    });
+    return { txId };
+  }
+
+  return {
+    listTransactions,
+    getTransaction,
+    broadcastTransaction
+  };
+}
+
+function isMockObserverUrl(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized.length === 0 || normalized === "mock";
 }
 
 function toObserverTransaction(raw: z.infer<typeof rawTransactionSchema>): ObserverTransaction {

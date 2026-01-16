@@ -83,6 +83,19 @@ export function createAuctionRepository(mongo: MongoDependencies) {
       .toArray();
   }
 
+  async function listDueRoundStatesForAuction(
+    auctionId: ObjectId,
+    now: Date,
+    limit = 50
+  ): Promise<Array<WithId<AuctionRoundStateDocument>>> {
+    return roundStates
+      .find(
+        { auctionId, status: { $in: ["scheduled", "live"] }, nextTransitionAt: { $lte: now } },
+        { sort: { nextTransitionAt: 1, roundIndex: 1 }, limit }
+      )
+      .toArray();
+  }
+
   async function getNextTransitionAt(): Promise<Date | null> {
     const nextState = await roundStates
       .find({ status: { $in: ["scheduled", "live"] } })
@@ -318,6 +331,7 @@ export function createAuctionRepository(mongo: MongoDependencies) {
     getLiveRoundState,
     listRoundStates,
     listDueRoundStates,
+    listDueRoundStatesForAuction,
     getNextTransitionAt,
     ensureRoundStates,
     backfillMissingNextTransitionAt,

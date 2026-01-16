@@ -36,7 +36,12 @@ async function main() {
   const issues = [];
   const tasks = users.map((userId) => async () => {
     const start = Date.now();
-    const result = await reconcileUser({ ledgerUrl: config.ledgerUrl, userId, currency });
+    const result = await reconcileUser({
+      ledgerUrl: config.ledgerUrl,
+      userId,
+      currency,
+      serviceToken: config.coreApiToken
+    });
     durations.push(Date.now() - start);
     if (Array.isArray(result.issues) && result.issues.length > 0) {
       issues.push({ userId, issues: result.issues });

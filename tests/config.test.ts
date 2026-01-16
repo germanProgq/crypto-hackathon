@@ -6,10 +6,13 @@ const baseOptions = {
   serviceName: "auction-engine",
   defaultPort: 4100
 };
+const baseEnv = {
+  CORE_API_TOKEN: "test-core-token"
+};
 
 describe("loadConfig", () => {
   it("applies defaults with minimal environment", () => {
-    const config = loadConfig({ ...baseOptions, env: {} });
+    const config = loadConfig({ ...baseOptions, env: { ...baseEnv } });
 
     expect(config.serviceName).toBe("auction-engine");
     expect(config.http.port).toBe(4100);
@@ -24,6 +27,7 @@ describe("loadConfig", () => {
       loadConfig({
         ...baseOptions,
         env: {
+          ...baseEnv,
           I18N_SUPPORTED_LOCALES: "en,es"
         }
       })
@@ -35,6 +39,7 @@ describe("loadConfig", () => {
       loadConfig({
         ...baseOptions,
         env: {
+          ...baseEnv,
           I18N_SUPPORTED_LOCALES: "ru",
           I18N_DEFAULT_LOCALE: "en"
         }
@@ -47,6 +52,7 @@ describe("loadConfig", () => {
       loadConfig({
         ...baseOptions,
         env: {
+          ...baseEnv,
           HTTP_PORT: "0"
         }
       })
@@ -57,6 +63,7 @@ describe("loadConfig", () => {
     const config = loadConfig({
       ...baseOptions,
       env: {
+        ...baseEnv,
         MONGO_URI: "mongodb://ignored:27017",
         MONGODB_URI: "mongodb://mongo:27017"
       }

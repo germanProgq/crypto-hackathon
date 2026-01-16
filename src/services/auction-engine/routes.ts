@@ -26,11 +26,16 @@ import {
 import { BidError, createBidService } from "./bidService.js";
 import { createAuctionRepository } from "./auctionStore.js";
 import { publishRealtimeEvent } from "../../shared/realtime/events.js";
+import {
+  requireCoreAuth,
+  requireServiceAuth,
+  resolveUserIdFromAuth
+} from "../../shared/auth/coreAuth.js";
 
 type BidAuditPayload = BidDocument["audit"];
 
 type BidBody = {
-  userId: string;
+  userId?: string;
   amount: number;
   idempotencyKey: string;
   metadata?: Record<string, unknown>;
@@ -79,7 +84,7 @@ const bidBodySchema = {
     metadata: { type: "object", additionalProperties: true },
     audit: auditSchema
   },
-  required: ["userId", "amount", "idempotencyKey"],
+  required: ["amount", "idempotencyKey"],
   additionalProperties: false
 } as const;
 
@@ -171,6 +176,9 @@ export async function registerAuctionRoutes(
   const bids = deps.mongo.db.collection<BidDocument>(mongoCollections.bids);
 
   app.post("/auctions", async (request, reply) => {
+    if (!requireServiceAuth(request, reply, deps)) {
+      return;
+    }
     let config: AuctionConfig;
     try {
       config = parseAuctionConfig(request.body);
@@ -209,6 +217,9 @@ export async function registerAuctionRoutes(
   });
 
   app.get("/auctions", { schema: { querystring: listQuerySchema } }, async (request, reply) => {
+    if (!requireCoreAuth(request, reply, deps)) {
+      return;
+    }
     const query = request.query as ListQuery;
     const limit = parseLimit(query.limit, defaultListLimit, maxListLimit);
     if (!limit) {
@@ -249,6 +260,9 @@ export async function registerAuctionRoutes(
     "/auctions/:auctionId",
     { schema: { params: auctionParamsSchema } },
     async (request, reply) => {
+      if (!requireCoreAuth(request, reply, deps)) {
+        return;
+      }
       const params = request.params as AuctionParams;
       const auctionId = new ObjectId(params.auctionId);
 
@@ -268,6 +282,9 @@ export async function registerAuctionRoutes(
     "/auctions/:auctionId/snapshot",
     { schema: { params: auctionParamsSchema } },
     async (request, reply) => {
+      if (!requireCoreAuth(request, reply, deps)) {
+        return;
+      }
       const params = request.params as AuctionParams;
       const auctionId = new ObjectId(params.auctionId);
 
@@ -290,6 +307,9 @@ export async function registerAuctionRoutes(
     "/auctions/:auctionId/rounds/:roundIndex/state",
     { schema: { params: roundParamsSchema } },
     async (request, reply) => {
+      if (!requireCoreAuth(request, reply, deps)) {
+        return;
+      }
       const params = request.params as RoundParams;
       const auctionId = new ObjectId(params.auctionId);
       const roundIndex = Number(params.roundIndex);
@@ -314,8 +334,16 @@ export async function registerAuctionRoutes(
     "/auctions/:auctionId/bids",
     { schema: { params: bidParamsSchema, body: bidBodySchema } },
     async (request, reply) => {
+      const auth = requireCoreAuth(request, reply, deps);
+      if (!auth) {
+        return;
+      }
       const params = request.params as BidParams;
       const body = request.body as BidBody;
+      const userId = resolveUserIdFromAuth(auth, body.userId, reply);
+      if (!userId) {
+        return;
+      }
 
       const userAgentHeader = request.headers["user-agent"];
       const userAgent = Array.isArray(userAgentHeader) ? userAgentHeader[0] : userAgentHeader;
@@ -329,7 +357,7 @@ export async function registerAuctionRoutes(
       try {
         const result = await bidService.placeBid({
           auctionId: new ObjectId(params.auctionId),
-          userId: body.userId,
+          userId,
           amount: body.amount,
           idempotencyKey: body.idempotencyKey,
           metadata: body.metadata,

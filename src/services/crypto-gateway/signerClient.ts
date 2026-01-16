@@ -1,4 +1,5 @@
 // Signer client for withdrawal payload signing.
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { AppConfig } from "../../shared/config.js";
 import type { SignedPayload, WithdrawalSigningPayload } from "./types.js";
@@ -37,6 +38,9 @@ const signerResponseSchema = z.object({
 });
 
 export function createSignerClient(config: AppConfig["crypto"]) {
+  if (isMockSignerUrl(config.signerUrl)) {
+    return createMockSignerClient();
+  }
   const baseUrl = normalizeBaseUrl(config.signerUrl);
   const token = config.signerToken;
 
@@ -54,6 +58,29 @@ export function createSignerClient(config: AppConfig["crypto"]) {
   }
 
   return { signWithdrawal };
+}
+
+function createMockSignerClient() {
+  async function signWithdrawal(payload: WithdrawalSigningPayload): Promise<SignedPayload> {
+    const canonical = JSON.stringify(payload);
+    const signature = createHash("sha256").update(canonical).digest("base64");
+    const publicKey = createHash("sha256").update("mock-signer").digest("base64");
+
+    return {
+      payload,
+      signature,
+      publicKey,
+      algorithm: "ed25519",
+      signedAt: new Date().toISOString()
+    };
+  }
+
+  return { signWithdrawal };
+}
+
+function isMockSignerUrl(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized.length === 0 || normalized === "mock";
 }
 
 function normalizeBaseUrl(value: string): string {

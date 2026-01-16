@@ -31,6 +31,8 @@ const execFileAsync = promisify(execFile);
 const redisDockerImage = "redis:7.2-alpine";
 const dockerTimeoutMs = 60000;
 const localHosts = new Set(["localhost", "127.0.0.1", "::1", "0.0.0.0"]);
+const coreApiToken = "test-core-token";
+const coreHeaders = { "x-service-token": coreApiToken };
 
 describe("bid placement", () => {
   const testDbName = `crypto_hack_test_${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -46,6 +48,7 @@ describe("bid placement", () => {
       RATE_LIMIT_USER_PER_SECOND: "25",
       RATE_LIMIT_AUCTION_USER_PER_SECOND: "25",
       RATE_LIMIT_IP_PER_SECOND: "100",
+      CORE_API_TOKEN: coreApiToken,
       LOG_LEVEL: "error"
     }
   });
@@ -125,7 +128,8 @@ describe("bid placement", () => {
             userId: "user-a",
             amount: 120,
             idempotencyKey
-          }
+          },
+          headers: coreHeaders
         })
       )
     );
@@ -160,7 +164,8 @@ describe("bid placement", () => {
             userId,
             amount: 200 + index * 10,
             idempotencyKey: `bid-${userId}-${Date.now()}`
-          }
+          },
+          headers: coreHeaders
         })
       )
     );
@@ -191,7 +196,8 @@ describe("bid placement", () => {
         userId: "user-redis",
         amount: 250,
         idempotencyKey: `bid-${Date.now()}`
-      }
+      },
+      headers: coreHeaders
     });
 
     expect(response.statusCode).toBe(200);
@@ -238,7 +244,8 @@ describe("bid placement", () => {
         userId: "user-upgrade",
         amount: 100,
         idempotencyKey: `bid-upgrade-1-${Date.now()}`
-      }
+      },
+      headers: coreHeaders
     });
     expect(firstBid.statusCode).toBe(200);
 
@@ -249,7 +256,8 @@ describe("bid placement", () => {
         userId: "user-upgrade",
         amount: 150,
         idempotencyKey: `bid-upgrade-2-${Date.now()}`
-      }
+      },
+      headers: coreHeaders
     });
     expect(secondBid.statusCode).toBe(200);
 

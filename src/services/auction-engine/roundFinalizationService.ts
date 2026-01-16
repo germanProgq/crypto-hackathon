@@ -15,6 +15,7 @@ import {
   type RoundResultDocument
 } from "../../shared/storage/mongoSchemas.js";
 import { publishRealtimeEvent } from "../../shared/realtime/events.js";
+import { computeExpiresAt, resolveRetentionMs } from "../../shared/storage/retention.js";
 import { buildRankingKey, buildTopKey } from "./auctionKeys.js";
 import { buildRankingMember, parseRankingMember } from "./bidRanking.js";
 
@@ -22,6 +23,7 @@ const holdLookupBatchSize = 500;
 const holdSettlementBatchSize = 250;
 const notificationBatchSize = 200;
 const topSetTtlSeconds = 10;
+const finalizationLockTtlMs = 120000;
 
 const rankingTopSetScript = `
 local rankingKey = KEYS[1]
@@ -125,6 +127,8 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
   const notificationQueue = deps.mongo.db.collection<NotificationQueueDocument>(
     mongoCollections.notificationQueue
   );
+  const ledgerRetentionMs = resolveRetentionMs(deps.config.dataRetention.ledgerDays);
+  const bidRetentionMs = resolveRetentionMs(deps.config.dataRetention.bidsDays);
 
   async function finalizeClosedRounds(limit = 25): Promise<number> {
     const closedRounds = await roundStates
@@ -157,6 +161,13 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
     const roundState = await roundStates.findOne({ auctionId, roundIndex });
     if (!roundState || roundState.status !== "closed") {
       return null;
+    }
+
+    if (!roundState.settlementCompletedAt) {
+      const locked = await acquireFinalizationLock(auctionId, roundIndex);
+      if (!locked) {
+        return null;
+      }
     }
 
     const existingResult = await roundResults.findOne({ auctionId, roundIndex });
@@ -277,6 +288,29 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
     );
   }
 
+  async function acquireFinalizationLock(
+    auctionId: ObjectId,
+    roundIndex: number
+  ): Promise<boolean> {
+    const now = new Date();
+    const staleBefore = new Date(now.getTime() - finalizationLockTtlMs);
+    const result = await roundStates.findOneAndUpdate(
+      {
+        auctionId,
+        roundIndex,
+        status: "closed",
+        settlementCompletedAt: { $exists: false },
+        $or: [
+          { finalizationLockedAt: { $exists: false } },
+          { finalizationLockedAt: { $lte: staleBefore } }
+        ]
+      },
+      { $set: { finalizationLockedAt: now, updatedAt: now } },
+      { returnDocument: "after" }
+    );
+    return Boolean(result);
+  }
+
   async function resolveRoundWinners(
     auction: WithId<AuctionDocument>,
     roundIndex: number
@@ -379,12 +413,18 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
     }
 
     const rankingKey = buildRankingKey(auctionId);
-    const entries = await serviceDeps.redis.zrevrange(
-      rankingKey,
-      0,
-      allocationSize - 1,
-      "WITHSCORES"
-    );
+    let entries: string[] = [];
+    try {
+      entries = await serviceDeps.redis.zrevrange(
+        rankingKey,
+        0,
+        allocationSize - 1,
+        "WITHSCORES"
+      );
+    } catch (error) {
+      serviceDeps.logger.warn({ err: error }, "Failed to read Redis ranking for winners");
+      return [];
+    }
     const results: Array<{ bidId: string; amount: number }> = [];
 
     for (let index = 0; index < entries.length; index += 2) {
@@ -608,6 +648,7 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
         }
       >();
 
+      const expiresAt = computeExpiresAt(now, ledgerRetentionMs);
       for (const settlement of operations) {
         const entryType = toHoldResolutionEntryType(settlement.action);
         const idempotencyKey = buildSettlementIdempotencyKey(
@@ -630,18 +671,25 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
           holdId: settlement.holdId
         };
 
+        const entryDocument: Record<string, unknown> = {
+          userId: settlement.userId,
+          entryType,
+          amount: settlement.amount,
+          currency: settlement.currency,
+          createdAt: now,
+          idempotencyKey,
+          metadata
+        };
+        if (expiresAt) {
+          entryDocument.expiresAt = expiresAt;
+        }
+
         entryOps.push({
           updateOne: {
             filter: { idempotencyKey },
             update: {
               $setOnInsert: {
-                userId: settlement.userId,
-                entryType,
-                amount: settlement.amount,
-                currency: settlement.currency,
-                createdAt: now,
-                idempotencyKey,
-                metadata
+                ...entryDocument
               }
             },
             upsert: true
@@ -773,24 +821,29 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
     isFinalRound: boolean
   ): Promise<void> {
     const now = new Date();
+    const expiresAt = computeExpiresAt(now, bidRetentionMs);
     if (isFinalRound) {
       const allUserIds = Array.from(new Set([...winnerUserIds, ...loserUserIds]));
       if (allUserIds.length === 0) {
         return;
       }
+      const updateFields: Record<string, unknown> = {
+        active: false,
+        inactiveAt: now,
+        settledAt: now,
+        settlementRoundIndex: roundIndex,
+        settlementAction: {
+          $cond: [{ $in: ["$userId", winnerUserIds] }, "captured", "released"]
+        }
+      };
+      if (expiresAt) {
+        updateFields.expiresAt = expiresAt;
+      }
       await bids.updateMany(
         { auctionId, userId: { $in: allUserIds }, settledAt: { $exists: false } },
         [
           {
-            $set: {
-              active: false,
-              inactiveAt: now,
-              settledAt: now,
-              settlementRoundIndex: roundIndex,
-              settlementAction: {
-                $cond: [{ $in: ["$userId", winnerUserIds] }, "captured", "released"]
-              }
-            }
+            $set: updateFields
           }
         ]
       );
@@ -798,15 +851,21 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
     }
 
     if (winnerUserIds.length > 0) {
+      const updateFields: Record<string, unknown> = {
+        active: false,
+        inactiveAt: now,
+        settledAt: now,
+        settlementAction: "captured",
+        settlementRoundIndex: roundIndex
+      };
+      if (expiresAt) {
+        updateFields.expiresAt = expiresAt;
+      }
       await bids.updateMany(
         { auctionId, userId: { $in: winnerUserIds }, settledAt: { $exists: false } },
         {
           $set: {
-            active: false,
-            inactiveAt: now,
-            settledAt: now,
-            settlementAction: "captured",
-            settlementRoundIndex: roundIndex
+            ...updateFields
           }
         }
       );
@@ -840,7 +899,11 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
       ...removeMembers
     ];
 
-    await deps.redis.eval(rankingTopSetScript, 2, rankingKey, topKey, ...args);
+    try {
+      await deps.redis.eval(rankingTopSetScript, 2, rankingKey, topKey, ...args);
+    } catch (error) {
+      deps.logger.warn({ err: error }, "Failed to update Redis ranking after settlement");
+    }
   }
 
   return {

@@ -61,7 +61,9 @@ export interface WithdrawalDecision {
 }
 
 export function createCryptoGatewayService(deps: ServiceDependencies) {
-  const ledger = createLedgerRepository(deps.mongo);
+  const ledger = createLedgerRepository(deps.mongo, {
+    retentionDays: deps.config.dataRetention.ledgerDays
+  });
   const walletStrategy = createWalletStrategy(deps.mongo, deps.config.crypto);
   const observer = createObserverClient(deps.config.crypto);
   const signer = createSignerClient(deps.config.crypto);

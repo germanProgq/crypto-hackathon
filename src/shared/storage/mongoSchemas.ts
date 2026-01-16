@@ -86,6 +86,7 @@ export interface AuctionRoundStateDocument {
   closedAt?: Date;
   finalizedAt?: Date;
   settlementCompletedAt?: Date;
+  finalizationLockedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -102,6 +103,7 @@ export interface BidDocument {
   settledAt?: Date;
   settlementAction?: "captured" | "released";
   settlementRoundIndex?: number;
+  expiresAt?: Date;
   audit?: {
     requestId?: string;
     source?: string;
@@ -118,6 +120,7 @@ export interface LedgerEntryDocument {
   currency: string;
   createdAt: Date;
   idempotencyKey: string;
+  expiresAt?: Date;
   metadata?: Record<string, unknown>;
   audit?: {
     requestId?: string;
@@ -181,6 +184,7 @@ export interface NotificationQueueDocument {
   lastError?: string;
   createdAt: Date;
   updatedAt: Date;
+  expiresAt?: Date;
 }
 
 export interface DepositAddressDocument {
@@ -387,6 +391,7 @@ const roundStateValidator: Document = {
       closedAt: { bsonType: "date" },
       finalizedAt: { bsonType: "date" },
       settlementCompletedAt: { bsonType: "date" },
+      finalizationLockedAt: { bsonType: "date" },
       createdAt: { bsonType: "date" },
       updatedAt: { bsonType: "date" }
     }
@@ -446,6 +451,7 @@ const bidValidator: Document = {
       settledAt: { bsonType: "date" },
       settlementAction: { bsonType: "string", enum: ["captured", "released"] },
       settlementRoundIndex: { bsonType: bsonNumber },
+      expiresAt: { bsonType: "date" },
       audit: {
         bsonType: "object",
         properties: {
@@ -483,6 +489,7 @@ const ledgerValidator: Document = {
       currency: { bsonType: "string" },
       createdAt: { bsonType: "date" },
       idempotencyKey: { bsonType: "string" },
+      expiresAt: { bsonType: "date" },
       metadata: { bsonType: "object" },
       audit: {
         bsonType: "object",
@@ -590,7 +597,8 @@ const notificationQueueValidator: Document = {
       nextAttemptAt: { bsonType: "date" },
       lastError: { bsonType: "string" },
       createdAt: { bsonType: "date" },
-      updatedAt: { bsonType: "date" }
+      updatedAt: { bsonType: "date" },
+      expiresAt: { bsonType: "date" }
     }
   }
 };
@@ -926,7 +934,8 @@ export const mongoIndexSpecs: Array<{ collection: string; indexes: IndexDescript
         key: { auctionId: 1, userId: 1, settledAt: 1 },
         name: "bids_settlement_lookup"
       },
-      { key: { idempotencyKey: 1 }, name: "bids_idempotency", unique: true }
+      { key: { idempotencyKey: 1 }, name: "bids_idempotency", unique: true },
+      { key: { expiresAt: 1 }, name: "bids_expires_at_ttl", expireAfterSeconds: 0 }
     ]
   },
   {
@@ -944,7 +953,8 @@ export const mongoIndexSpecs: Array<{ collection: string; indexes: IndexDescript
         key: { "metadata.withdrawalId": 1 },
         name: "ledger_withdrawal_id",
         partialFilterExpression: { "metadata.withdrawalId": { $exists: true } }
-      }
+      },
+      { key: { expiresAt: 1 }, name: "ledger_expires_at_ttl", expireAfterSeconds: 0 }
     ]
   },
   {
@@ -973,7 +983,12 @@ export const mongoIndexSpecs: Array<{ collection: string; indexes: IndexDescript
     indexes: [
       { key: { idempotencyKey: 1 }, name: "notification_idempotency", unique: true },
       { key: { status: 1, nextAttemptAt: 1 }, name: "notification_status_next" },
-      { key: { userId: 1, createdAt: -1 }, name: "notification_user_createdAt" }
+      { key: { userId: 1, createdAt: -1 }, name: "notification_user_createdAt" },
+      {
+        key: { expiresAt: 1 },
+        name: "notification_expires_at_ttl",
+        expireAfterSeconds: 0
+      }
     ]
   },
   {

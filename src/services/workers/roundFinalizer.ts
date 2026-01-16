@@ -77,15 +77,24 @@ async function runFinalizerTick(
 
   for (const state of roundStates) {
     const lockKey = buildFinalizerLockKey(state.auctionId.toHexString(), state.roundIndex);
-    const lock = await acquireRedisLock(deps.redis, lockKey, finalizerLockTtlMs);
-    if (!lock) {
+    let lock: Awaited<ReturnType<typeof acquireRedisLock>> | null = null;
+    let proceedWithoutLock = false;
+    try {
+      lock = await acquireRedisLock(deps.redis, lockKey, finalizerLockTtlMs);
+    } catch (error) {
+      proceedWithoutLock = true;
+      deps.logger.warn({ err: error, lockKey }, "Finalizer lock unavailable");
+    }
+    if (!lock && !proceedWithoutLock) {
       continue;
     }
 
     try {
       await service.finalizeRound(state.auctionId, state.roundIndex);
     } finally {
-      await releaseRedisLock(deps.redis, lock);
+      if (lock) {
+        await releaseRedisLock(deps.redis, lock);
+      }
     }
   }
 

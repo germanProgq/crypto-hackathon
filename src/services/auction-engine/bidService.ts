@@ -1,9 +1,11 @@
 // Bid placement workflow with locking, ledger holds, and Redis caching.
+import { randomUUID } from "node:crypto";
 import { ObjectId, type WithId } from "mongodb";
 import type { ServiceDependencies } from "../../shared/service.js";
 import { runMongoTransaction } from "../../shared/storage/mongoTransaction.js";
-import { acquireRedisLock, releaseRedisLock } from "../../shared/storage/redisLock.js";
+import { acquireRedisLock, releaseRedisLock, type RedisLock } from "../../shared/storage/redisLock.js";
 import type { RedisClient } from "../../shared/storage/redis.js";
+import { computeExpiresAt, resolveRetentionMs } from "../../shared/storage/retention.js";
 import {
   mongoCollections,
   type AuctionDocument,
@@ -36,8 +38,10 @@ import {
   type AuctionSnapshotCache,
   type RoundStateCache
 } from "./auctionCache.js";
+import { ensureAuctionRoundProgress } from "./auctionProgress.js";
 import { createAuctionRepository } from "./auctionStore.js";
 import { buildRankingMember } from "./bidRanking.js";
+import { createRoundFinalizationService } from "./roundFinalizationService.js";
 import { applyAntiSnipingExtension } from "./roundStateMachine.js";
 import { publishRealtimeEvent, toRealtimeSnapshot } from "../../shared/realtime/events.js";
 
@@ -48,6 +52,8 @@ const idempotencyWaitMs = 750;
 const idempotencyPollMs = 50;
 const bidLockWaitMs = 1500;
 const bidLockPollMs = 25;
+const localRateLimitMaxEntries = 10000;
+const localBidLockMaxEntries = 5000;
 const persistLastBidAt = readEnvBoolean("BID_PERSIST_LAST_BID_AT", true);
 const persistSnapshot = readEnvBoolean("BID_PERSIST_SNAPSHOT", true);
 
@@ -254,13 +260,100 @@ type BidTransactionResult = BidPlacementResult & {
   updateRanking: boolean;
 };
 
+type LocalRateLimitState = {
+  tokens: number;
+  lastMs: number;
+  expiresAt: number;
+};
+
+type LocalLockState = {
+  key: string;
+  token: string;
+  expiresAt: number;
+};
+
+type BidLock = { type: "redis"; lock: RedisLock } | { type: "local"; lock: LocalLockState };
+
 export function createBidService(deps: ServiceDependencies) {
   const auctionRepository = createAuctionRepository(deps.mongo);
-  const ledger = createLedgerRepository(deps.mongo);
+  const ledger = createLedgerRepository(deps.mongo, {
+    retentionDays: deps.config.dataRetention.ledgerDays
+  });
   const bids = deps.mongo.db.collection<BidDocument>(mongoCollections.bids);
+  const roundStates = deps.mongo.db.collection<AuctionRoundStateDocument>(
+    mongoCollections.auctionRoundStates
+  );
+  const finalizationService = createRoundFinalizationService(deps);
+  const bidRetentionMs = resolveRetentionMs(deps.config.dataRetention.bidsDays);
+  const localRateLimits = new Map<string, LocalRateLimitState>();
+  const localBidLocks = new Map<string, LocalLockState>();
+  let rateLimitFallbackLogged = false;
+  let lockFallbackLogged = false;
+  const finalizationThrottle = new Map<string, number>();
+  const finalizationThrottleMs = 5000;
+
+  const warnRateLimitFallback = (error: unknown) => {
+    if (rateLimitFallbackLogged) {
+      return;
+    }
+    rateLimitFallbackLogged = true;
+    deps.logger.warn({ err: error }, "Redis rate limits unavailable; using local fallback");
+  };
+
+  const warnLockFallback = (error: unknown) => {
+    if (lockFallbackLogged) {
+      return;
+    }
+    lockFallbackLogged = true;
+    deps.logger.warn({ err: error }, "Redis lock unavailable; using local fallback");
+  };
+
+  const kickFinalizationIfNeeded = async (auctionId: ObjectId): Promise<void> => {
+    const auctionIdText = auctionId.toHexString();
+    const nowMs = Date.now();
+    const nextAllowed = finalizationThrottle.get(auctionIdText) ?? 0;
+    if (nowMs < nextAllowed) {
+      return;
+    }
+    finalizationThrottle.set(auctionIdText, nowMs + finalizationThrottleMs);
+
+    try {
+      const pending = await roundStates
+        .find({ auctionId, status: "closed", settlementCompletedAt: { $exists: false } })
+        .sort({ closedAt: 1, effectiveEndAt: 1 })
+        .limit(1)
+        .toArray();
+      const target = pending[0];
+      if (!target) {
+        return;
+      }
+      await finalizationService.finalizeRound(auctionId, target.roundIndex);
+    } catch (error) {
+      deps.logger.warn(
+        { err: error, auctionId: auctionIdText },
+        "Failed to kick round finalization"
+      );
+    }
+  };
 
   async function placeBid(input: BidPlacementInput): Promise<BidPlacementResult> {
-    await enforceRateLimits(deps.redis, deps.config.rateLimits, input);
+    await enforceRateLimits(
+      deps.redis,
+      deps.config.rateLimits,
+      input,
+      localRateLimits,
+      warnRateLimitFallback
+    );
+
+    try {
+      await ensureAuctionRoundProgress(deps, auctionRepository, input.auctionId);
+    } catch (error) {
+      deps.logger.warn(
+        { err: error, auctionId: input.auctionId.toHexString() },
+        "Failed to catch up auction rounds before bid"
+      );
+    }
+    void kickFinalizationIfNeeded(input.auctionId);
 
     const existing = await resolveIdempotentBid(input);
     if (existing) {
@@ -268,7 +361,14 @@ export function createBidService(deps: ServiceDependencies) {
     }
 
     const lockKey = buildBidLockKey(input.auctionId.toHexString(), input.userId);
-    const lock = await acquireBidLock(deps.redis, lockKey, bidLockTtlMs, bidLockWaitMs);
+    const lock = await acquireBidLock(
+      deps.redis,
+      localBidLocks,
+      lockKey,
+      bidLockTtlMs,
+      bidLockWaitMs,
+      warnLockFallback
+    );
     if (!lock) {
       const waited = await waitForIdempotentBid(input, idempotencyWaitMs);
       if (waited) {
@@ -362,9 +462,14 @@ export function createBidService(deps: ServiceDependencies) {
 
         const bidId = new ObjectId();
         if (previousBid) {
+          const inactiveUpdate: Record<string, unknown> = { active: false, inactiveAt: now };
+          const expiresAt = computeExpiresAt(now, bidRetentionMs);
+          if (expiresAt) {
+            inactiveUpdate.expiresAt = expiresAt;
+          }
           await bids.updateOne(
             { _id: previousBid._id, active: true },
-            { $set: { active: false, inactiveAt: now } },
+            { $set: inactiveUpdate },
             { session }
           );
         }
@@ -448,7 +553,7 @@ export function createBidService(deps: ServiceDependencies) {
         };
       });
 
-      const { snapshot } = await updateRedisCaches(deps.redis, result);
+      const { snapshot } = await updateRedisCaches(deps.redis, result, deps.logger);
       try {
         await Promise.all([
           publishRealtimeEvent(deps.redis, {
@@ -470,7 +575,7 @@ export function createBidService(deps: ServiceDependencies) {
       }
       return toPlacementResult(result);
     } finally {
-      await releaseRedisLock(deps.redis, lock);
+      await releaseBidLock(deps.redis, localBidLocks, lock);
     }
   }
 
@@ -548,7 +653,8 @@ function toPlacementResult(result: BidTransactionResult): BidPlacementResult {
 
 async function updateRedisCaches(
   redis: RedisClient,
-  result: BidTransactionResult
+  result: BidTransactionResult,
+  logger: ServiceDependencies["logger"]
 ): Promise<{ snapshot: AuctionSnapshotCache }> {
   const auctionIdText = result.auction._id.toHexString();
   const rankingKey = buildRankingKey(auctionIdText);
@@ -616,16 +722,20 @@ async function updateRedisCaches(
     result.bid._id.toHexString()
   ];
 
-  await redis.eval(
-    bidCacheUpdateScript,
-    5,
-    rankingKey,
-    roundStateKey,
-    auctionSnapshotKey,
-    topKey,
-    idempotencyKey,
-    ...scriptArgs
-  );
+  try {
+    await redis.eval(
+      bidCacheUpdateScript,
+      5,
+      rankingKey,
+      roundStateKey,
+      auctionSnapshotKey,
+      topKey,
+      idempotencyKey,
+      ...scriptArgs
+    );
+  } catch (error) {
+    logger.warn({ err: error }, "Failed to update bid caches in Redis");
+  }
   primeRoundStateCache(auctionIdText, roundStateCache);
   primeAuctionSnapshotCache(snapshot);
   return { snapshot };
@@ -634,28 +744,43 @@ async function updateRedisCaches(
 async function enforceRateLimits(
   redis: RedisClient,
   limits: ServiceDependencies["config"]["rateLimits"],
-  input: BidPlacementInput
+  input: BidPlacementInput,
+  localLimits: Map<string, LocalRateLimitState>,
+  onRedisFallback: (error: unknown) => void
 ): Promise<void> {
-  const result = await redis.eval(
-    rateLimitScript,
-    3,
-    buildUserRateLimitKey(input.userId),
-    buildAuctionUserRateLimitKey(input.auctionId.toHexString(), input.userId),
-    buildIpRateLimitKey(input.ip),
-    limits.userPerSecond.toString(),
-    limits.userPerSecond.toString(),
-    limits.auctionUserPerSecond.toString(),
-    limits.auctionUserPerSecond.toString(),
-    limits.ipPerSecond.toString(),
-    limits.ipPerSecond.toString()
-  );
-  const allowed = Number(result);
-  if (!Number.isFinite(allowed)) {
-    throw new BidError("rate_limited", "Rate limit unavailable.", 429);
+  let allowed: number | null = null;
+  try {
+    const result = await redis.eval(
+      rateLimitScript,
+      3,
+      buildUserRateLimitKey(input.userId),
+      buildAuctionUserRateLimitKey(input.auctionId.toHexString(), input.userId),
+      buildIpRateLimitKey(input.ip),
+      limits.userPerSecond.toString(),
+      limits.userPerSecond.toString(),
+      limits.auctionUserPerSecond.toString(),
+      limits.auctionUserPerSecond.toString(),
+      limits.ipPerSecond.toString(),
+      limits.ipPerSecond.toString()
+    );
+    allowed = Number(result);
+  } catch (error) {
+    onRedisFallback(error);
   }
-  if (allowed !== 1) {
-    throw new BidError("rate_limited", "Rate limit exceeded.", 429);
+
+  if (allowed === 1) {
+    return;
   }
+
+  if (allowed === null || !Number.isFinite(allowed)) {
+    const fallbackAllowed = consumeLocalRateLimits(localLimits, limits, input);
+    if (!fallbackAllowed) {
+      throw new BidError("rate_limited", "Rate limit exceeded.", 429);
+    }
+    return;
+  }
+
+  throw new BidError("rate_limited", "Rate limit exceeded.", 429);
 }
 
 function assertAuctionLive(auction: WithId<AuctionDocument>, now: Date): void {
@@ -750,19 +875,197 @@ function flattenRedisHashFields(fields: Record<string, string>): string[] {
 
 async function acquireBidLock(
   redis: RedisClient,
+  localLocks: Map<string, LocalLockState>,
   key: string,
   ttlMs: number,
-  timeoutMs: number
-) {
+  timeoutMs: number,
+  onRedisFallback: (error: unknown) => void
+): Promise<BidLock | null> {
   const start = Date.now();
+  let redisUnavailable = false;
   while (Date.now() - start < timeoutMs) {
-    const lock = await acquireRedisLock(redis, key, ttlMs);
-    if (lock) {
-      return lock;
+    if (!redisUnavailable) {
+      try {
+        const lock = await acquireRedisLock(redis, key, ttlMs);
+        if (lock) {
+          return { type: "redis", lock };
+        }
+      } catch (error) {
+        redisUnavailable = true;
+        onRedisFallback(error);
+      }
+    }
+    if (redisUnavailable) {
+      const localLock = acquireLocalLock(localLocks, key, ttlMs);
+      if (localLock) {
+        return { type: "local", lock: localLock };
+      }
     }
     await delay(bidLockPollMs);
   }
   return null;
+}
+
+async function releaseBidLock(
+  redis: RedisClient,
+  localLocks: Map<string, LocalLockState>,
+  lock: BidLock | null
+): Promise<void> {
+  if (!lock) {
+    return;
+  }
+  if (lock.type === "local") {
+    releaseLocalLock(localLocks, lock.lock);
+    return;
+  }
+  try {
+    await releaseRedisLock(redis, lock.lock);
+  } catch {
+    // Ignore Redis release errors for best-effort cleanup.
+  }
+}
+
+function acquireLocalLock(
+  localLocks: Map<string, LocalLockState>,
+  key: string,
+  ttlMs: number
+): LocalLockState | null {
+  const now = Date.now();
+  const existing = localLocks.get(key);
+  if (existing && existing.expiresAt > now) {
+    return null;
+  }
+  const lock: LocalLockState = {
+    key,
+    token: randomUUID(),
+    expiresAt: now + ttlMs
+  };
+  localLocks.delete(key);
+  localLocks.set(key, lock);
+  if (localLocks.size > localBidLockMaxEntries) {
+    const oldestKey = localLocks.keys().next().value;
+    if (oldestKey) {
+      localLocks.delete(oldestKey);
+    }
+  }
+  return lock;
+}
+
+function releaseLocalLock(
+  localLocks: Map<string, LocalLockState>,
+  lock: LocalLockState
+): void {
+  const existing = localLocks.get(lock.key);
+  if (!existing) {
+    return;
+  }
+  if (existing.token === lock.token) {
+    localLocks.delete(lock.key);
+  }
+}
+
+function consumeLocalRateLimits(
+  localLimits: Map<string, LocalRateLimitState>,
+  limits: ServiceDependencies["config"]["rateLimits"],
+  input: BidPlacementInput
+): boolean {
+  const nowMs = Date.now();
+  const userKey = buildUserRateLimitKey(input.userId);
+  const auctionUserKey = buildAuctionUserRateLimitKey(
+    input.auctionId.toHexString(),
+    input.userId
+  );
+  const ipKey = buildIpRateLimitKey(input.ip);
+
+  if (
+    !consumeLocalRateLimit(localLimits, userKey, limits.userPerSecond, nowMs) ||
+    !consumeLocalRateLimit(
+      localLimits,
+      auctionUserKey,
+      limits.auctionUserPerSecond,
+      nowMs
+    ) ||
+    !consumeLocalRateLimit(localLimits, ipKey, limits.ipPerSecond, nowMs)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function consumeLocalRateLimit(
+  localLimits: Map<string, LocalRateLimitState>,
+  key: string,
+  perSecond: number,
+  nowMs: number
+): boolean {
+  if (!Number.isFinite(perSecond) || perSecond <= 0) {
+    return true;
+  }
+  const capacity = perSecond;
+  const refillRate = perSecond;
+  const existing = getLocalRateLimitEntry(localLimits, key, nowMs);
+  let tokens = existing?.tokens ?? capacity;
+  let lastMs = existing?.lastMs ?? nowMs;
+
+  if (tokens > capacity) {
+    tokens = capacity;
+  }
+
+  if (tokens < capacity) {
+    const deltaMs = nowMs - lastMs;
+    if (deltaMs > 0) {
+      const refill = (deltaMs / 1000) * refillRate;
+      tokens = Math.min(capacity, tokens + refill);
+    }
+  }
+
+  const allowed = tokens >= 1;
+  if (allowed) {
+    tokens -= 1;
+  }
+
+  const ttlSeconds = Math.max(1, Math.ceil((capacity / refillRate) * 2));
+  const expiresAt = nowMs + ttlSeconds * 1000;
+  setLocalRateLimitEntry(localLimits, key, {
+    tokens,
+    lastMs: nowMs,
+    expiresAt
+  });
+
+  return allowed;
+}
+
+function getLocalRateLimitEntry(
+  localLimits: Map<string, LocalRateLimitState>,
+  key: string,
+  nowMs: number
+): LocalRateLimitState | null {
+  const entry = localLimits.get(key);
+  if (!entry) {
+    return null;
+  }
+  if (entry.expiresAt <= nowMs) {
+    localLimits.delete(key);
+    return null;
+  }
+  localLimits.delete(key);
+  localLimits.set(key, entry);
+  return entry;
+}
+
+function setLocalRateLimitEntry(
+  localLimits: Map<string, LocalRateLimitState>,
+  key: string,
+  entry: LocalRateLimitState
+): void {
+  localLimits.delete(key);
+  localLimits.set(key, entry);
+  if (localLimits.size > localRateLimitMaxEntries) {
+    const oldestKey = localLimits.keys().next().value;
+    if (oldestKey) {
+      localLimits.delete(oldestKey);
+    }
+  }
 }
 
 function readEnvBoolean(name: string, defaultValue: boolean): boolean {

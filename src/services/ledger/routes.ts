@@ -10,6 +10,11 @@ import {
   type HoldOperationInput,
   type WithdrawalOperationInput
 } from "./ledgerStore.js";
+import {
+  requireCoreAuth,
+  requireServiceAuth,
+  resolveUserIdFromAuth
+} from "../../shared/auth/coreAuth.js";
 
 const auditSchema = z
   .object({
@@ -63,9 +68,15 @@ export async function registerLedgerRoutes(
   app: FastifyInstance,
   deps: ServiceDependencies
 ): Promise<void> {
-  const ledger = createLedgerRepository(deps.mongo);
+  const ledger = createLedgerRepository(deps.mongo, {
+    retentionDays: deps.config.dataRetention.ledgerDays
+  });
 
   app.get("/ledger/:userId/balance", async (request, reply) => {
+    const auth = requireCoreAuth(request, reply, deps);
+    if (!auth) {
+      return;
+    }
     const query = balanceQuerySchema.safeParse(request.query);
     if (!query.success) {
       return reply.code(400).send({ error: "invalid_request", message: "currency is required." });
@@ -73,7 +84,11 @@ export async function registerLedgerRoutes(
 
     try {
       const params = request.params as { userId: string };
-      const balance = await ledger.getBalance(params.userId, query.data.currency);
+      const userId = resolveUserIdFromAuth(auth, params.userId, reply);
+      if (!userId) {
+        return;
+      }
+      const balance = await ledger.getBalance(userId, query.data.currency);
       return balance;
     } catch (error) {
       return handleLedgerError(reply, error);
@@ -81,6 +96,10 @@ export async function registerLedgerRoutes(
   });
 
   app.get("/ledger/:userId/history", async (request, reply) => {
+    const auth = requireCoreAuth(request, reply, deps);
+    if (!auth) {
+      return;
+    }
     const query = historyQuerySchema.safeParse(request.query);
     if (!query.success) {
       return reply.code(400).send({ error: "invalid_request", message: "Invalid history query." });
@@ -97,8 +116,12 @@ export async function registerLedgerRoutes(
 
     try {
       const params = request.params as { userId: string };
+      const userId = resolveUserIdFromAuth(auth, params.userId, reply);
+      if (!userId) {
+        return;
+      }
       const entries = await ledger.getHistory(
-        params.userId,
+        userId,
         query.data.currency,
         options
       );
@@ -112,6 +135,10 @@ export async function registerLedgerRoutes(
   });
 
   app.get("/ledger/:userId/reconcile", async (request, reply) => {
+    const auth = requireCoreAuth(request, reply, deps);
+    if (!auth) {
+      return;
+    }
     const query = balanceQuerySchema.safeParse(request.query);
     if (!query.success) {
       return reply.code(400).send({ error: "invalid_request", message: "currency is required." });
@@ -119,13 +146,20 @@ export async function registerLedgerRoutes(
 
     try {
       const params = request.params as { userId: string };
-      return await ledger.reconcile(params.userId, query.data.currency);
+      const userId = resolveUserIdFromAuth(auth, params.userId, reply);
+      if (!userId) {
+        return;
+      }
+      return await ledger.reconcile(userId, query.data.currency);
     } catch (error) {
       return handleLedgerError(reply, error);
     }
   });
 
   app.post("/ledger/entries", async (request, reply) => {
+    if (!requireServiceAuth(request, reply, deps)) {
+      return;
+    }
     const body = entryBodySchema.safeParse(request.body);
     if (!body.success) {
       return reply.code(400).send({ error: "invalid_request", message: "Invalid entry payload." });
@@ -150,6 +184,9 @@ export async function registerLedgerRoutes(
   });
 
   app.post("/ledger/holds", async (request, reply) => {
+    if (!requireServiceAuth(request, reply, deps)) {
+      return;
+    }
     const body = holdBodySchema.safeParse(request.body);
     if (!body.success) {
       return reply.code(400).send({ error: "invalid_request", message: "Invalid hold payload." });
@@ -164,6 +201,9 @@ export async function registerLedgerRoutes(
   });
 
   app.post("/ledger/holds/release", async (request, reply) => {
+    if (!requireServiceAuth(request, reply, deps)) {
+      return;
+    }
     const body = holdBodySchema.safeParse(request.body);
     if (!body.success) {
       return reply.code(400).send({ error: "invalid_request", message: "Invalid hold payload." });
@@ -178,6 +218,9 @@ export async function registerLedgerRoutes(
   });
 
   app.post("/ledger/holds/capture", async (request, reply) => {
+    if (!requireServiceAuth(request, reply, deps)) {
+      return;
+    }
     const body = holdBodySchema.safeParse(request.body);
     if (!body.success) {
       return reply.code(400).send({ error: "invalid_request", message: "Invalid hold payload." });
@@ -192,6 +235,9 @@ export async function registerLedgerRoutes(
   });
 
   app.post("/ledger/withdrawals/request", async (request, reply) => {
+    if (!requireServiceAuth(request, reply, deps)) {
+      return;
+    }
     const body = withdrawalBodySchema.safeParse(request.body);
     if (!body.success) {
       return reply.code(400).send({ error: "invalid_request", message: "Invalid withdrawal payload." });
@@ -206,6 +252,9 @@ export async function registerLedgerRoutes(
   });
 
   app.post("/ledger/withdrawals/broadcast", async (request, reply) => {
+    if (!requireServiceAuth(request, reply, deps)) {
+      return;
+    }
     const body = withdrawalBodySchema.safeParse(request.body);
     if (!body.success) {
       return reply.code(400).send({ error: "invalid_request", message: "Invalid withdrawal payload." });
@@ -220,6 +269,9 @@ export async function registerLedgerRoutes(
   });
 
   app.post("/ledger/withdrawals/confirm", async (request, reply) => {
+    if (!requireServiceAuth(request, reply, deps)) {
+      return;
+    }
     const body = withdrawalBodySchema.safeParse(request.body);
     if (!body.success) {
       return reply.code(400).send({ error: "invalid_request", message: "Invalid withdrawal payload." });
@@ -234,6 +286,9 @@ export async function registerLedgerRoutes(
   });
 
   app.post("/ledger/withdrawals/fail", async (request, reply) => {
+    if (!requireServiceAuth(request, reply, deps)) {
+      return;
+    }
     const body = withdrawalBodySchema.safeParse(request.body);
     if (!body.success) {
       return reply.code(400).send({ error: "invalid_request", message: "Invalid withdrawal payload." });

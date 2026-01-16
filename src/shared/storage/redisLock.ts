@@ -34,6 +34,10 @@ export async function acquireRedisLock(
 }
 
 export async function releaseRedisLock(client: RedisClient, lock: RedisLock): Promise<boolean> {
-  const result = await client.eval(releaseScript, 1, lock.key, lock.value);
-  return Number(result) > 0;
+  try {
+    const result = await client.eval(releaseScript, 1, lock.key, lock.value);
+    return Number(result) > 0;
+  } catch {
+    return false;
+  }
 }

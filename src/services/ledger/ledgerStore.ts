@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { type ClientSession, type Collection, type Document, type WithId } from "mongodb";
 import type { MongoDependencies } from "../../shared/storage/mongo.js";
 import { runMongoTransaction } from "../../shared/storage/mongoTransaction.js";
+import { computeExpiresAt, resolveRetentionMs } from "../../shared/storage/retention.js";
 import {
   mongoCollections,
   type LedgerAccountDocument,
@@ -115,9 +116,13 @@ const mutationEntryTypes = new Set<LedgerEntryType>([
   "withdrawal_failed"
 ]);
 
-export function createLedgerRepository(mongo: MongoDependencies) {
+export function createLedgerRepository(
+  mongo: MongoDependencies,
+  options: { retentionDays?: number } = {}
+) {
   const ledgerEntries = mongo.db.collection<LedgerEntryDocument>(mongoCollections.ledgerEntries);
   const ledgerAccounts = mongo.db.collection<LedgerAccountDocument>(mongoCollections.ledgerAccounts);
+  const retentionMs = resolveRetentionMs(options.retentionDays ?? 0);
 
   async function getBalance(userId: string, currency: string): Promise<LedgerBalance> {
     const totals = await getAccountTotals(ledgerEntries, ledgerAccounts, userId, currency);
@@ -234,7 +239,13 @@ export function createLedgerRepository(mongo: MongoDependencies) {
     validateEntryInput(input);
 
     await touchAccount(ledgerAccounts, input.userId, input.currency, session);
-    const entry = await insertLedgerEntry(ledgerEntries, ledgerAccounts, input, session);
+    const entry = await insertLedgerEntry(
+      ledgerEntries,
+      ledgerAccounts,
+      input,
+      session,
+      retentionMs
+    );
     const balance = await getBalanceWithSession(
       ledgerEntries,
       ledgerAccounts,
@@ -310,7 +321,8 @@ export function createLedgerRepository(mongo: MongoDependencies) {
         metadata: mergeReferenceMetadata("holdId", input.holdId, input.metadata),
         audit: input.audit
       },
-      session
+      session,
+      retentionMs
     );
 
     const updated = await getBalanceWithSession(
@@ -398,7 +410,8 @@ export function createLedgerRepository(mongo: MongoDependencies) {
         metadata: mergeReferenceMetadata("withdrawalId", input.withdrawalId, input.metadata),
         audit: input.audit
       },
-      session
+      session,
+      retentionMs
     );
 
     const updated = await getBalanceWithSession(
@@ -474,7 +487,8 @@ export function createLedgerRepository(mongo: MongoDependencies) {
         metadata: mergeReferenceMetadata("withdrawalId", input.withdrawalId, input.metadata),
         audit: input.audit
       },
-      session
+      session,
+      retentionMs
     );
   }
 
@@ -575,7 +589,8 @@ export function createLedgerRepository(mongo: MongoDependencies) {
           metadata: mergeReferenceMetadata("holdId", input.holdId, input.metadata),
           audit: input.audit
         },
-        session
+        session,
+        retentionMs
       );
 
       const updated = await getBalanceWithSession(
@@ -662,7 +677,8 @@ export function createLedgerRepository(mongo: MongoDependencies) {
         metadata: mergeReferenceMetadata("withdrawalId", input.withdrawalId, input.metadata),
         audit: input.audit
       },
-      session
+      session,
+      retentionMs
     );
 
     const updated = await getBalanceWithSession(
@@ -806,7 +822,8 @@ function normalizeTotals(totals: LedgerAccountTotals): LedgerTotals {
   const normalized = createEmptyTotals();
   for (const entryType of ledgerEntryTypes) {
     const value = totals[entryType];
-    normalized[entryType] = Number.isFinite(value) ? value : 0;
+    normalized[entryType] =
+      typeof value === "number" && Number.isFinite(value) ? value : 0;
   }
   return normalized;
 }
@@ -925,10 +942,12 @@ async function insertLedgerEntry(
   ledgerEntries: Collection<LedgerEntryDocument>,
   ledgerAccounts: Collection<LedgerAccountDocument>,
   input: LedgerEntryInput,
-  session: ClientSession
+  session: ClientSession,
+  retentionMs: number
 ): Promise<WithId<LedgerEntryDocument>> {
   validateEntryInput(input);
   const createdAt = new Date();
+  const expiresAt = computeExpiresAt(createdAt, retentionMs);
   const document: LedgerEntryDocument = {
     userId: input.userId,
     entryType: input.entryType,
@@ -937,6 +956,10 @@ async function insertLedgerEntry(
     createdAt,
     idempotencyKey: input.idempotencyKey
   };
+
+  if (expiresAt) {
+    document.expiresAt = expiresAt;
+  }
 
   if (input.metadata !== undefined) {
     document.metadata = input.metadata;

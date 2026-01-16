@@ -7,6 +7,7 @@ import { stdin as input, stdout as output } from "node:process";
 import {
   buildForwardedIp,
   buildRunId,
+  buildServiceHeaders,
   buildUserList,
   createAuction,
   formatStatusCounts,
@@ -307,7 +308,8 @@ function buildBidRpsScenario(args) {
         roundIndex: 0,
         status: "live",
         timeoutMs: 30000,
-        pollMs: 100
+        pollMs: 100,
+        serviceToken: config.coreApiToken
       });
 
       const users = buildUserList({ prefix: userPrefix, runId, count: userCount });
@@ -317,7 +319,8 @@ function buildBidRpsScenario(args) {
         amount: depositAmount,
         currency: config.currency,
         concurrency: seedConcurrency,
-        timeoutMs: config.timeoutMs
+        timeoutMs: config.timeoutMs,
+        serviceToken: config.coreApiToken
       });
 
       const result = await runLoadTest({
@@ -339,7 +342,8 @@ function buildBidRpsScenario(args) {
             amount,
             idempotencyKey: `perf-${runId}-${userId}-${index}-${randomUUID()}`,
             ip: buildForwardedIp(index),
-            timeoutMs: config.timeoutMs
+            timeoutMs: config.timeoutMs,
+            serviceToken: config.coreApiToken
           });
         }
       });
@@ -404,7 +408,8 @@ function buildAuctionReadScenario(args) {
         roundIndex: 0,
         status: "live",
         timeoutMs: 30000,
-        pollMs: 100
+        pollMs: 100,
+        serviceToken: config.coreApiToken
       });
 
       const result = await runLoadTest({
@@ -414,7 +419,8 @@ function buildAuctionReadScenario(args) {
         maxSamples: profile.maxSamples,
         requestFactory: async () =>
           timedJson(`${config.auctionUrl}/auctions/${auctionId}/rounds/0/state`, {
-            timeoutMs: config.timeoutMs
+            timeoutMs: config.timeoutMs,
+            headers: buildServiceHeaders(config.coreApiToken)
           })
       });
 
@@ -480,7 +486,8 @@ function buildLedgerDepositScenario(args) {
           return timedJson(`${config.ledgerUrl}/ledger/entries`, {
             method: "POST",
             body: payload,
-            timeoutMs: config.timeoutMs
+            timeoutMs: config.timeoutMs,
+            headers: buildServiceHeaders(config.coreApiToken)
           });
         }
       });

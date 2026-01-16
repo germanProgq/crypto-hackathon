@@ -66,7 +66,8 @@ async function main() {
     roundIndex: 0,
     status: "live",
     timeoutMs: 30000,
-    pollMs: 100
+    pollMs: 100,
+    serviceToken: config.coreApiToken
   });
 
   const users = buildUserList({ prefix, runId, count: userCount });
@@ -76,7 +77,8 @@ async function main() {
     amount: depositAmount,
     currency: config.currency,
     concurrency,
-    timeoutMs: config.timeoutMs
+    timeoutMs: config.timeoutMs,
+    serviceToken: config.coreApiToken
   });
 
   const statusCounts = buildStatusCounts();
@@ -92,7 +94,8 @@ async function main() {
       amount: Math.round(amount * 100) / 100,
       idempotencyKey: `stress-${userId}-${index}-${randomUUID()}`,
       ip,
-      timeoutMs: config.timeoutMs
+      timeoutMs: config.timeoutMs,
+      serviceToken: config.coreApiToken
     }).catch((error) => ({ ok: false, status: "error", error }));
 
     if (typeof response.durationMs === "number") {

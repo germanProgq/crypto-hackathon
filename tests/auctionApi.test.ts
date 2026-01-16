@@ -29,6 +29,8 @@ const execFileAsync = promisify(execFile);
 const redisDockerImage = "redis:7.2-alpine";
 const dockerTimeoutMs = 60000;
 const localHosts = new Set(["localhost", "127.0.0.1", "::1", "0.0.0.0"]);
+const coreApiToken = "test-core-token";
+const coreHeaders = { "x-service-token": coreApiToken };
 
 describe("auction api", () => {
   const testDbName = `crypto_hack_test_${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -44,6 +46,7 @@ describe("auction api", () => {
       RATE_LIMIT_USER_PER_SECOND: "50",
       RATE_LIMIT_AUCTION_USER_PER_SECOND: "50",
       RATE_LIMIT_IP_PER_SECOND: "200",
+      CORE_API_TOKEN: coreApiToken,
       LOG_LEVEL: "error"
     }
   });
@@ -121,7 +124,8 @@ describe("auction api", () => {
     const response = await app.inject({
       method: "POST",
       url: "/auctions",
-      payload
+      payload,
+      headers: coreHeaders
     });
 
     expect(response.statusCode).toBe(400);
@@ -169,7 +173,8 @@ describe("auction api", () => {
     const createResponse = await app.inject({
       method: "POST",
       url: "/auctions",
-      payload
+      payload,
+      headers: coreHeaders
     });
 
     expect(createResponse.statusCode).toBe(201);
@@ -178,7 +183,8 @@ describe("auction api", () => {
 
     const detailResponse = await app.inject({
       method: "GET",
-      url: `/auctions/${created.auction._id}`
+      url: `/auctions/${created.auction._id}`,
+      headers: coreHeaders
     });
 
     expect(detailResponse.statusCode).toBe(200);
@@ -206,7 +212,8 @@ describe("auction api", () => {
 
     const upcomingResponse = await app.inject({
       method: "GET",
-      url: "/auctions?status=upcoming&limit=1"
+      url: "/auctions?status=upcoming&limit=1",
+      headers: coreHeaders
     });
 
     expect(upcomingResponse.statusCode).toBe(200);
@@ -222,7 +229,8 @@ describe("auction api", () => {
       method: "GET",
       url: `/auctions?status=upcoming&limit=1&cursor=${encodeURIComponent(
         upcomingBody.nextCursor ?? ""
-      )}`
+      )}`,
+      headers: coreHeaders
     });
     const upcomingNextBody = upcomingNext.json() as {
       items: Array<{ _id: string; title: string }>;
@@ -234,7 +242,8 @@ describe("auction api", () => {
 
     const activeResponse = await app.inject({
       method: "GET",
-      url: "/auctions?status=active"
+      url: "/auctions?status=active",
+      headers: coreHeaders
     });
     const activeBody = activeResponse.json() as {
       items: Array<{ _id: string; title: string }>;
@@ -243,7 +252,8 @@ describe("auction api", () => {
 
     const closedResponse = await app.inject({
       method: "GET",
-      url: "/auctions?status=closed"
+      url: "/auctions?status=closed",
+      headers: coreHeaders
     });
     const closedBody = closedResponse.json() as {
       items: Array<{ _id: string; title: string }>;
@@ -296,13 +306,15 @@ describe("auction api", () => {
         userId: "user-redis",
         amount: 120,
         idempotencyKey: `bid-${Date.now()}`
-      }
+      },
+      headers: coreHeaders
     });
     expect(bidResponse.statusCode).toBe(200);
 
     const snapshotResponse = await app.inject({
       method: "GET",
-      url: `/auctions/${auctionId}/snapshot`
+      url: `/auctions/${auctionId}/snapshot`,
+      headers: coreHeaders
     });
     const snapshotRedis = snapshotResponse.json() as {
       snapshot: {
@@ -316,7 +328,8 @@ describe("auction api", () => {
 
     const roundStateResponse = await app.inject({
       method: "GET",
-      url: `/auctions/${auctionId}/rounds/0/state`
+      url: `/auctions/${auctionId}/rounds/0/state`,
+      headers: coreHeaders
     });
     const roundRedis = roundStateResponse.json() as {
       state: {
@@ -334,7 +347,8 @@ describe("auction api", () => {
 
     const snapshotFallbackResponse = await app.inject({
       method: "GET",
-      url: `/auctions/${auctionId}/snapshot`
+      url: `/auctions/${auctionId}/snapshot`,
+      headers: coreHeaders
     });
     const snapshotFallback = snapshotFallbackResponse.json() as {
       snapshot: {
@@ -348,7 +362,8 @@ describe("auction api", () => {
 
     const roundFallbackResponse = await app.inject({
       method: "GET",
-      url: `/auctions/${auctionId}/rounds/0/state`
+      url: `/auctions/${auctionId}/rounds/0/state`,
+      headers: coreHeaders
     });
     const roundFallback = roundFallbackResponse.json() as {
       state: {
@@ -410,7 +425,8 @@ async function createAuction(
   const response = await app.inject({
     method: "POST",
     url: "/auctions",
-    payload
+    payload,
+    headers: coreHeaders
   });
   if (response.statusCode !== 201) {
     throw new Error(`Auction creation failed: ${response.statusCode}`);

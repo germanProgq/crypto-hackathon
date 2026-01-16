@@ -27,10 +27,18 @@ export interface AppConfig {
     url: string;
     prefix: string;
   };
+  coreApi: {
+    token: string;
+  };
   rateLimits: {
     userPerSecond: number;
     auctionUserPerSecond: number;
     ipPerSecond: number;
+  };
+  dataRetention: {
+    bidsDays: number;
+    ledgerDays: number;
+    notificationsDays: number;
   };
   i18n: {
     defaultLocale: Locale;
@@ -52,6 +60,7 @@ export interface AppConfig {
     signerUrl: string;
     signerToken: string;
     adminToken: string;
+    usdRates: Record<string, number>;
     deposit: {
       confirmations: number;
       pollIntervalMs: number;
@@ -109,6 +118,15 @@ function isHttpUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isOptionalHttpUrl(value: string): boolean {
+  const trimmed = value.trim();
+  const normalized = trimmed.toLowerCase();
+  if (normalized.length === 0 || normalized === "mock") {
+    return true;
+  }
+  return isHttpUrl(trimmed);
 }
 
 function parseLocales(value: string): Locale[] {
@@ -175,6 +193,28 @@ function parseCurrencies(value: string): string[] {
   return Array.from(unique);
 }
 
+function parseUsdRates(value: string): Record<string, number> {
+  const entries = parseCsv(value);
+  const result: Record<string, number> = {};
+  for (const entry of entries) {
+    const [currencyRaw, rateRaw] = entry.split(":", 2);
+    const currency = (currencyRaw ?? "").trim().toUpperCase();
+    const rateText = (rateRaw ?? "").trim();
+    if (!currency || !rateText) {
+      throw new Error(`Invalid CRYPTO_USD_RATES entry: ${entry}`);
+    }
+    if (!/^[A-Z0-9]{2,10}$/.test(currency)) {
+      throw new Error(`Unsupported currency in CRYPTO_USD_RATES: ${currency}`);
+    }
+    const rate = Number(rateText);
+    if (!Number.isFinite(rate) || rate <= 0) {
+      throw new Error(`Invalid USD rate for ${currency}.`);
+    }
+    result[currency] = rate;
+  }
+  return result;
+}
+
 function parseAddressPool(value: string, defaultCurrency: string): Record<string, string[]> {
   const entries = parseCsv(value);
   const result: Record<string, string[]> = {};
@@ -235,9 +275,13 @@ function createEnvSchema(defaultPort: number) {
       .refine(isRedisUrl, "REDIS_URL must start with redis:// or rediss://")
       .default("redis://127.0.0.1:6379"),
     REDIS_PREFIX: z.string().min(1).default("crypto-hack"),
+    CORE_API_TOKEN: z.string().default(""),
     RATE_LIMIT_USER_PER_SECOND: z.coerce.number().int().min(1).default(5),
     RATE_LIMIT_AUCTION_USER_PER_SECOND: z.coerce.number().int().min(1).default(3),
     RATE_LIMIT_IP_PER_SECOND: z.coerce.number().int().min(1).default(20),
+    RETENTION_BIDS_DAYS: z.coerce.number().int().min(0).default(90),
+    RETENTION_LEDGER_DAYS: z.coerce.number().int().min(0).default(365),
+    RETENTION_NOTIFICATIONS_DAYS: z.coerce.number().int().min(0).default(30),
     I18N_DEFAULT_LOCALE: z.enum(localeValues).default("en"),
     I18N_SUPPORTED_LOCALES: z.string().default("en,ru"),
     TELEGRAM_BOT_TOKEN: z.string().default(""),
@@ -247,10 +291,25 @@ function createEnvSchema(defaultPort: number) {
     WEB_ALLOW_DEMO_USER: z.string().optional(),
     CRYPTO_SUPPORTED_CURRENCIES: z.string().default("USDT"),
     CRYPTO_WALLET_STRATEGY: z.enum(walletStrategyValues).default("address_pool"),
-    CRYPTO_OBSERVER_URL: z.string().url().default("http://127.0.0.1:9000"),
-    CRYPTO_SIGNER_URL: z.string().url().default("http://127.0.0.1:4007"),
+    CRYPTO_OBSERVER_URL: z
+      .string()
+      .default("")
+      .transform((value) => value.trim())
+      .refine(
+        (value) => isOptionalHttpUrl(value),
+        "CRYPTO_OBSERVER_URL must be http(s), empty, or 'mock'"
+      ),
+    CRYPTO_SIGNER_URL: z
+      .string()
+      .default("")
+      .transform((value) => value.trim())
+      .refine(
+        (value) => isOptionalHttpUrl(value),
+        "CRYPTO_SIGNER_URL must be http(s), empty, or 'mock'"
+      ),
     CRYPTO_SIGNER_TOKEN: z.string().default(""),
     CRYPTO_ADMIN_TOKEN: z.string().default(""),
+    CRYPTO_USD_RATES: z.string().default(""),
     CRYPTO_DEPOSIT_CONFIRMATIONS: z.coerce.number().int().min(1).default(6),
     CRYPTO_WITHDRAWAL_CONFIRMATIONS: z.coerce.number().int().min(1).default(6),
     CRYPTO_DEPOSIT_POLL_INTERVAL_MS: z.coerce.number().int().min(1000).default(5000),
@@ -299,6 +358,8 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
   const supportedLocales = parseLocales(parsed.I18N_SUPPORTED_LOCALES);
   const supportedCurrencies = parseCurrencies(parsed.CRYPTO_SUPPORTED_CURRENCIES);
   const defaultCurrency = supportedCurrencies[0] ?? "USDT";
+  const coreApiToken = parsed.CORE_API_TOKEN.trim();
+  const usdRates = parseUsdRates(parsed.CRYPTO_USD_RATES);
   const addressPool = parseAddressPool(parsed.CRYPTO_DEPOSIT_ADDRESS_POOL, defaultCurrency);
   const memoDepositAddresses = parseCurrencyValueMap(
     parsed.CRYPTO_MEMO_DEPOSIT_ADDRESS,
@@ -321,10 +382,25 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
   const signerKmsToken = parsed.SIGNER_KMS_TOKEN.trim();
   const webAllowedOrigins = parseOrigins(parsed.WEB_ALLOWED_ORIGINS);
   const allowDemoUser =
-    parseOptionalBoolean(parsed.WEB_ALLOW_DEMO_USER) ?? (parsed.NODE_ENV !== "production");
+    parsed.NODE_ENV !== "production" &&
+    (parseOptionalBoolean(parsed.WEB_ALLOW_DEMO_USER) ?? true);
 
   if (!supportedLocales.includes(parsed.I18N_DEFAULT_LOCALE)) {
     throw new Error("I18N_DEFAULT_LOCALE must be included in I18N_SUPPORTED_LOCALES.");
+  }
+
+  if (
+    ["auction-engine", "ledger", "crypto-gateway"].includes(serviceName) &&
+    coreApiToken.length === 0
+  ) {
+    throw new Error("CORE_API_TOKEN must be set for core services.");
+  }
+
+  if (serviceName === "crypto-gateway") {
+    const missingRates = supportedCurrencies.filter((currency) => usdRates[currency] === undefined);
+    if (missingRates.length > 0) {
+      throw new Error(`CRYPTO_USD_RATES must include rates for: ${missingRates.join(", ")}`);
+    }
   }
 
   if (
@@ -404,10 +480,18 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
       url: parsed.REDIS_URL,
       prefix: parsed.REDIS_PREFIX
     },
+    coreApi: {
+      token: coreApiToken
+    },
     rateLimits: {
       userPerSecond: parsed.RATE_LIMIT_USER_PER_SECOND,
       auctionUserPerSecond: parsed.RATE_LIMIT_AUCTION_USER_PER_SECOND,
       ipPerSecond: parsed.RATE_LIMIT_IP_PER_SECOND
+    },
+    dataRetention: {
+      bidsDays: parsed.RETENTION_BIDS_DAYS,
+      ledgerDays: parsed.RETENTION_LEDGER_DAYS,
+      notificationsDays: parsed.RETENTION_NOTIFICATIONS_DAYS
     },
     i18n: {
       defaultLocale: parsed.I18N_DEFAULT_LOCALE,
@@ -429,6 +513,7 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
       signerUrl: parsed.CRYPTO_SIGNER_URL,
       signerToken: parsed.CRYPTO_SIGNER_TOKEN,
       adminToken: parsed.CRYPTO_ADMIN_TOKEN,
+      usdRates,
       deposit: {
         confirmations: parsed.CRYPTO_DEPOSIT_CONFIRMATIONS,
         pollIntervalMs: parsed.CRYPTO_DEPOSIT_POLL_INTERVAL_MS,

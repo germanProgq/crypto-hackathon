@@ -1,33 +1,15 @@
 // Auction round scheduling worker with distributed locking.
 import type { FastifyInstance } from "fastify";
-import type { ObjectId, WithId } from "mongodb";
+import type { ObjectId } from "mongodb";
 import type { ServiceDependencies } from "../../shared/service.js";
 import { acquireRedisLock, releaseRedisLock } from "../../shared/storage/redisLock.js";
-import type { RedisClient } from "../../shared/storage/redis.js";
-import {
-  buildAuctionSnapshotKey,
-  buildRoundLockKey,
-  buildRoundStateKey
-} from "../auction-engine/auctionKeys.js";
-import {
-  buildAuctionSnapshotFields,
-  buildRoundStateFields,
-  invalidateActiveAuctionListCache,
-  primeAuctionSnapshotCache,
-  primeRoundStateCache,
-  roundStateTtlSeconds,
-  snapshotTtlSeconds,
-  type AuctionSnapshotCache,
-  type RoundStateCache
-} from "../auction-engine/auctionCache.js";
+import { buildRoundLockKey } from "../auction-engine/auctionKeys.js";
+import { invalidateActiveAuctionListCache } from "../auction-engine/auctionCache.js";
+import { updateAuctionCaches } from "../auction-engine/auctionCacheUpdater.js";
 import { createAuctionRepository } from "../auction-engine/auctionStore.js";
 import { deriveAuctionStatus, evaluateRoundTransition } from "../auction-engine/roundStateMachine.js";
 import { publishRealtimeEvent, toRealtimeSnapshot } from "../../shared/realtime/events.js";
-import type {
-  AuctionDocument,
-  AuctionRoundConfig,
-  AuctionRoundStateDocument
-} from "../../shared/storage/mongoSchemas.js";
+import type { AuctionRoundStateDocument } from "../../shared/storage/mongoSchemas.js";
 
 const minSchedulerDelayMs = 25;
 const maxSchedulerDelayMs = 10000;
@@ -101,8 +83,15 @@ async function runSchedulerTick(
 
     const auctionIdText = state.auctionId.toHexString();
     const lockKey = buildRoundLockKey(auctionIdText, state.roundIndex);
-    const lock = await acquireRedisLock(deps.redis, lockKey, roundLockTtlMs);
-    if (!lock) {
+    let lock: Awaited<ReturnType<typeof acquireRedisLock>> | null = null;
+    let proceedWithoutLock = false;
+    try {
+      lock = await acquireRedisLock(deps.redis, lockKey, roundLockTtlMs);
+    } catch (error) {
+      proceedWithoutLock = true;
+      deps.logger.warn({ err: error, lockKey }, "Round scheduler lock unavailable");
+    }
+    if (!lock && !proceedWithoutLock) {
       continue;
     }
 
@@ -120,7 +109,9 @@ async function runSchedulerTick(
         }
       }
     } finally {
-      await releaseRedisLock(deps.redis, lock);
+      if (lock) {
+        await releaseRedisLock(deps.redis, lock);
+      }
     }
   }
 
@@ -154,6 +145,7 @@ async function runSchedulerTick(
 
     const cacheAuction = statusUpdated ? { ...auction, status: nextStatus } : auction;
     const snapshot = await updateAuctionCaches(
+      deps.logger,
       deps.redis,
       repository,
       cacheAuction,
@@ -190,105 +182,4 @@ async function runSchedulerTick(
     return idleSchedulerDelayMs;
   }
   return Math.max(minSchedulerDelayMs, Math.min(maxSchedulerDelayMs, nextTransitionAt.getTime() - now.getTime()));
-}
-
-async function updateAuctionCaches(
-  redis: RedisClient,
-  repository: ReturnType<typeof createAuctionRepository>,
-  auction: WithId<AuctionDocument>,
-  roundStates: AuctionRoundStateDocument[],
-  updatedStates: AuctionRoundStateDocument[],
-  now: Date
-): Promise<AuctionSnapshotCache | null> {
-  if (updatedStates.length === 0) {
-    return null;
-  }
-
-  const roundConfigMap = new Map<number, AuctionRoundConfig>(
-    auction.rounds.map((round) => [round.index, round])
-  );
-  const pipeline = redis.multi();
-  const auctionIdText = auction._id.toHexString();
-  const roundStatesToPrime: RoundStateCache[] = [];
-  let snapshotToPrime: AuctionSnapshotCache | null = null;
-  let hasOps = false;
-
-  for (const state of updatedStates) {
-    const roundConfig = roundConfigMap.get(state.roundIndex);
-    if (!roundConfig) {
-      continue;
-    }
-    const roundCache: RoundStateCache = {
-      status: state.status,
-      roundIndex: state.roundIndex,
-      scheduledStartAt: state.scheduledStartAt,
-      scheduledEndAt: state.scheduledEndAt,
-      effectiveEndAt: state.effectiveEndAt,
-      extensionCount: state.extensionCount,
-      lastBidAt: state.lastBidAt ?? null,
-      startedAt: state.startedAt ?? null,
-      closedAt: state.closedAt ?? null,
-      allocationSize: roundConfig.allocationSize
-    };
-    roundStatesToPrime.push(roundCache);
-    const roundStateKey = buildRoundStateKey(auctionIdText, state.roundIndex);
-    pipeline.hset(roundStateKey, buildRoundStateFields(roundCache, now));
-    pipeline.expire(roundStateKey, roundStateTtlSeconds);
-    hasOps = true;
-  }
-
-  const ordered = [...roundStates].sort((left, right) => left.roundIndex - right.roundIndex);
-  const current =
-    ordered.find((state) => state.status === "live") ??
-    ordered.find((state) => state.status === "scheduled") ??
-    ordered[ordered.length - 1] ??
-    null;
-
-  const snapshotRoundIndex = current?.roundIndex ?? null;
-  const snapshotRoundStatus = current?.status ?? null;
-  const snapshotRoundEffectiveEndAt = current?.effectiveEndAt ?? null;
-  const snapshotRoundLastBidAt = current?.lastBidAt ?? null;
-
-  if (current) {
-    const snapshot: AuctionSnapshotCache = {
-      auctionId: auctionIdText,
-      status: auction.status,
-      title: auction.title,
-      currency: auction.currency,
-      currentRoundIndex: current.roundIndex,
-      roundStatus: current.status,
-      roundEffectiveEndAt: current.effectiveEndAt,
-      roundLastBidAt: current.lastBidAt ?? null,
-      updatedAt: now,
-      lastBidAmount: null
-    };
-    snapshotToPrime = snapshot;
-    const snapshotKey = buildAuctionSnapshotKey(auctionIdText);
-    pipeline.hset(snapshotKey, buildAuctionSnapshotFields(snapshot));
-    pipeline.expire(snapshotKey, snapshotTtlSeconds);
-    hasOps = true;
-  }
-
-  await repository.updateAuctionSnapshot(
-    auction._id,
-    {
-      currentRoundIndex: snapshotRoundIndex,
-      roundStatus: snapshotRoundStatus,
-      roundEffectiveEndAt: snapshotRoundEffectiveEndAt,
-      roundLastBidAt: snapshotRoundLastBidAt,
-      lastBidAmount: null
-    },
-    now
-  );
-
-  if (hasOps) {
-    await pipeline.exec();
-    for (const state of roundStatesToPrime) {
-      primeRoundStateCache(auctionIdText, state);
-    }
-    if (snapshotToPrime) {
-      primeAuctionSnapshotCache(snapshotToPrime);
-    }
-  }
-  return snapshotToPrime;
 }

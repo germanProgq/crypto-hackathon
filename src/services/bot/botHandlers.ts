@@ -354,7 +354,9 @@ async function handleStartCommand(deps: ServiceDependencies, context: BotContext
 async function handleBalanceCommand(deps: ServiceDependencies, context: BotContext): Promise<void> {
   await clearConversationState(deps, context.userId);
 
-  const ledger = createLedgerRepository(deps.mongo);
+  const ledger = createLedgerRepository(deps.mongo, {
+    retentionDays: deps.config.dataRetention.ledgerDays
+  });
   const currency = resolveDefaultCurrency(deps);
   const balance = await ledger.getBalance(context.userId, currency);
   const available = balance.available;
@@ -503,7 +505,9 @@ async function handleCreateCommand(
 }
 
 async function handleWithdrawCommand(deps: ServiceDependencies, context: BotContext): Promise<void> {
-  const ledger = createLedgerRepository(deps.mongo);
+  const ledger = createLedgerRepository(deps.mongo, {
+    retentionDays: deps.config.dataRetention.ledgerDays
+  });
   const currency = resolveDefaultCurrency(deps);
   const balance = await ledger.getBalance(context.userId, currency);
   const available = balance.available;

@@ -15,6 +15,7 @@ export interface SafetyValidatorConfig {
   cooldownSeconds: number;
   dailyLimitUSD: number;
   minAmount: Record<string, number>;
+  usdRates: Record<string, number>;
   addressAllowlist?: Map<string, Set<string>>;
   anomalyThresholds: {
     maxWithdrawalsPerHour: number;
@@ -126,12 +127,19 @@ async function validateDailyLimit(
     })
     .toArray();
 
-  const totalUSD = recentWithdrawals.reduce((sum, w) => {
-    const usdValue = estimateUSDValue(w.amount, w.currency);
-    return sum + usdValue;
-  }, 0);
+  let totalUSD = 0;
+  for (const withdrawal of recentWithdrawals) {
+    const usdValue = estimateUSDValue(withdrawal.amount, withdrawal.currency, config.usdRates);
+    if (usdValue === null) {
+      return false;
+    }
+    totalUSD += usdValue;
+  }
 
-  const requestUSD = estimateUSDValue(request.amount, request.currency);
+  const requestUSD = estimateUSDValue(request.amount, request.currency, config.usdRates);
+  if (requestUSD === null) {
+    return false;
+  }
   const projectedTotal = totalUSD + requestUSD;
 
   return projectedTotal <= config.dailyLimitUSD;
@@ -196,13 +204,14 @@ async function detectAnomalies(
   };
 }
 
-function estimateUSDValue(amount: number, currency: string): number {
-  const rates: Record<string, number> = {
-    BTC: 50000,
-    ETH: 3000,
-    USDT: 1,
-    USDC: 1
-  };
-
-  return amount * (rates[currency] ?? 0);
+function estimateUSDValue(
+  amount: number,
+  currency: string,
+  usdRates: Record<string, number>
+): number | null {
+  const rate = usdRates[currency];
+  if (typeof rate !== "number" || !Number.isFinite(rate) || rate <= 0) {
+    return null;
+  }
+  return amount * rate;
 }

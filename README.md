@@ -53,12 +53,14 @@ Auction engine:
 
 ```bash
 curl -s -X POST http://localhost:4001/auctions \
+  -H 'x-service-token: <CORE_API_TOKEN>' \
   -H 'content-type: application/json' \
   -d '{"title":"Demo","currency":"USDT","startsAt":"2025-01-01T00:00:00Z","endsAt":"2025-01-01T00:10:00Z","rounds":[{"index":0,"allocationSize":3,"startAt":"2025-01-01T00:00:00Z","endAt":"2025-01-01T00:05:00Z","antiSniping":{"triggerWindowSeconds":10,"extensionSeconds":30,"maxExtensions":2}}]}'
 ```
 
 ```bash
 curl -s -X POST http://localhost:4001/auctions/<auctionId>/bids \
+  -H 'x-service-token: <CORE_API_TOKEN>' \
   -H 'content-type: application/json' \
   -d '{"userId":"user-1","amount":120,"idempotencyKey":"bid-1"}'
 ```
@@ -67,18 +69,21 @@ Ledger:
 
 ```bash
 curl -s -X POST http://localhost:4002/ledger/entries \
+  -H 'x-service-token: <CORE_API_TOKEN>' \
   -H 'content-type: application/json' \
   -d '{"userId":"user-1","amount":500,"currency":"USDT","idempotencyKey":"dep-1","entryType":"deposit_confirmed"}'
 ```
 
 ```bash
-curl -s http://localhost:4002/ledger/user-1/balance?currency=USDT
+curl -s http://localhost:4002/ledger/user-1/balance?currency=USDT \
+  -H 'x-service-token: <CORE_API_TOKEN>'
 ```
 
 Crypto gateway (admin token required for authorize/allowlist):
 
 ```bash
 curl -s -X POST http://localhost:4003/crypto/withdrawals/request \
+  -H 'x-service-token: <CORE_API_TOKEN>' \
   -H 'content-type: application/json' \
   -d '{"userId":"user-1","currency":"USDT","amount":10,"destinationAddress":"DEMO","idempotencyKey":"wd-1"}'
 ```
@@ -137,9 +142,12 @@ Summary (local run 2026-01-12):
 - Non-winners carry forward; winners are removed from the active set.
 - Ranking tie-breakers: amount desc, createdAt asc, bid id asc.
 - Auction and round state transitions are handled by workers.
+- Hackathon mode: auction creation is open to any authenticated user; no moderation.
+- If `CRYPTO_OBSERVER_URL` or `CRYPTO_SIGNER_URL` is empty or set to `mock`, the crypto gateway uses in-process mocks (withdrawals auto-confirm; deposits are disabled without a real observer).
 
 ## Notes
 
 - Web UI: `http://localhost:4005`
-- Signer default token: `dev-signer-token`
-- Crypto admin token: `dev-admin-token`
+- Auth: Telegram WebApp init data; in dev, `x-demo-user-id` is allowed when `WEB_ALLOW_DEMO_USER` is enabled.
+- Set `CRYPTO_USD_RATES` (for example `USDT:1,BTC:65000`) to enable USD-based safety checks.
+- Set `CORE_API_TOKEN`, `SIGNER_API_TOKEN`, and `CRYPTO_ADMIN_TOKEN` in your environment or `.env`.

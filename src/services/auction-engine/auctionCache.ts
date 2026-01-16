@@ -9,6 +9,7 @@ import {
 
 export const snapshotTtlSeconds = 5;
 export const roundStateTtlSeconds = 5;
+const activeAuctionListTtlSeconds = 10;
 const activeAuctionListKey = buildActiveAuctionListKey();
 const inProcessCacheTtlMs = 2000;
 const inProcessCacheMaxEntries = 512;
@@ -98,28 +99,37 @@ export function primeRoundStateCache(auctionId: string, state: RoundStateCache):
 export async function readActiveAuctionListFromRedis(
   redis: RedisClient
 ): Promise<unknown[] | null> {
-  const data = await redis.get(activeAuctionListKey);
-  if (!data) {
+  try {
+    const data = await redis.get(activeAuctionListKey);
+    if (!data) {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(data);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch {
+    }
+
+    await redis.del(activeAuctionListKey);
+    return null;
+  } catch {
     return null;
   }
-
-  try {
-    const parsed = JSON.parse(data);
-    if (Array.isArray(parsed)) {
-      return parsed;
-    }
-  } catch {
-  }
-
-  await redis.del(activeAuctionListKey);
-  return null;
 }
 
 export async function writeActiveAuctionListToRedis(
   redis: RedisClient,
   auctions: unknown[]
 ): Promise<void> {
-  await redis.set(activeAuctionListKey, JSON.stringify(auctions));
+  await redis.set(
+    activeAuctionListKey,
+    JSON.stringify(auctions),
+    "EX",
+    activeAuctionListTtlSeconds
+  );
 }
 
 export async function invalidateActiveAuctionListCache(redis: RedisClient): Promise<void> {
@@ -141,48 +151,52 @@ export async function readAuctionSnapshotFromRedis(
   }
 
   const fetchPromise = (async () => {
-    const data = await redis.hgetall(key);
-    if (Object.keys(data).length === 0) {
+    try {
+      const data = await redis.hgetall(key);
+      if (Object.keys(data).length === 0) {
+        return null;
+      }
+
+      const status = parseAuctionStatus(data.status);
+      const roundStatus = parseRoundStatus(data.roundStatus);
+      const currentRoundIndex = parseRedisInt(data.currentRoundIndex);
+      const roundEffectiveEndAt = parseRedisDate(data.roundEffectiveEndAt);
+      const updatedAt = parseRedisDate(data.updatedAt);
+      const title = parseRedisText(data.title);
+      const currency = parseRedisText(data.currency);
+      if (
+        !status ||
+        !roundStatus ||
+        currentRoundIndex === null ||
+        !roundEffectiveEndAt ||
+        !updatedAt ||
+        !title ||
+        !currency
+      ) {
+        return null;
+      }
+      if (data.auctionId && data.auctionId !== auctionId) {
+        return null;
+      }
+
+      const roundLastBidAt = parseRedisDate(data.roundLastBidAt);
+      const lastBidAmount = parseRedisNumber(data.lastBidAmount);
+
+      return {
+        auctionId,
+        status,
+        title,
+        currency,
+        currentRoundIndex,
+        roundStatus,
+        roundEffectiveEndAt,
+        roundLastBidAt,
+        updatedAt,
+        lastBidAmount
+      };
+    } catch {
       return null;
     }
-
-    const status = parseAuctionStatus(data.status);
-    const roundStatus = parseRoundStatus(data.roundStatus);
-    const currentRoundIndex = parseRedisInt(data.currentRoundIndex);
-    const roundEffectiveEndAt = parseRedisDate(data.roundEffectiveEndAt);
-    const updatedAt = parseRedisDate(data.updatedAt);
-    const title = parseRedisText(data.title);
-    const currency = parseRedisText(data.currency);
-    if (
-      !status ||
-      !roundStatus ||
-      currentRoundIndex === null ||
-      !roundEffectiveEndAt ||
-      !updatedAt ||
-      !title ||
-      !currency
-    ) {
-      return null;
-    }
-    if (data.auctionId && data.auctionId !== auctionId) {
-      return null;
-    }
-
-    const roundLastBidAt = parseRedisDate(data.roundLastBidAt);
-    const lastBidAmount = parseRedisNumber(data.lastBidAmount);
-
-    return {
-      auctionId,
-      status,
-      title,
-      currency,
-      currentRoundIndex,
-      roundStatus,
-      roundEffectiveEndAt,
-      roundLastBidAt,
-      updatedAt,
-      lastBidAmount
-    };
   })();
 
   snapshotReadsInFlight.set(key, fetchPromise);
@@ -213,44 +227,48 @@ export async function readRoundStateFromRedis(
   }
 
   const fetchPromise = (async () => {
-    const data = await redis.hgetall(key);
-    if (Object.keys(data).length === 0) {
+    try {
+      const data = await redis.hgetall(key);
+      if (Object.keys(data).length === 0) {
+        return null;
+      }
+
+      const status = parseRoundStatus(data.status);
+      const storedIndex = parseRedisInt(data.roundIndex);
+      const scheduledStartAt = parseRedisDate(data.scheduledStartAt);
+      const scheduledEndAt = parseRedisDate(data.scheduledEndAt);
+      const effectiveEndAt = parseRedisDate(data.effectiveEndAt);
+      const extensionCount = parseRedisInt(data.extensionCount);
+      const allocationSize = parseRedisInt(data.allocationSize);
+
+      if (
+        !status ||
+        storedIndex === null ||
+        storedIndex !== roundIndex ||
+        !scheduledStartAt ||
+        !scheduledEndAt ||
+        !effectiveEndAt ||
+        extensionCount === null ||
+        allocationSize === null
+      ) {
+        return null;
+      }
+
+      return {
+        status,
+        roundIndex: storedIndex,
+        scheduledStartAt,
+        scheduledEndAt,
+        effectiveEndAt,
+        extensionCount,
+        lastBidAt: parseRedisDate(data.lastBidAt),
+        startedAt: null,
+        closedAt: null,
+        allocationSize
+      };
+    } catch {
       return null;
     }
-
-    const status = parseRoundStatus(data.status);
-    const storedIndex = parseRedisInt(data.roundIndex);
-    const scheduledStartAt = parseRedisDate(data.scheduledStartAt);
-    const scheduledEndAt = parseRedisDate(data.scheduledEndAt);
-    const effectiveEndAt = parseRedisDate(data.effectiveEndAt);
-    const extensionCount = parseRedisInt(data.extensionCount);
-    const allocationSize = parseRedisInt(data.allocationSize);
-
-    if (
-      !status ||
-      storedIndex === null ||
-      storedIndex !== roundIndex ||
-      !scheduledStartAt ||
-      !scheduledEndAt ||
-      !effectiveEndAt ||
-      extensionCount === null ||
-      allocationSize === null
-    ) {
-      return null;
-    }
-
-    return {
-      status,
-      roundIndex: storedIndex,
-      scheduledStartAt,
-      scheduledEndAt,
-      effectiveEndAt,
-      extensionCount,
-      lastBidAt: parseRedisDate(data.lastBidAt),
-      startedAt: null,
-      closedAt: null,
-      allocationSize
-    };
   })();
 
   roundStateReadsInFlight.set(key, fetchPromise);

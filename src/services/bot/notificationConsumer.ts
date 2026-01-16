@@ -8,6 +8,7 @@ import {
   type NotificationQueueDocument
 } from "../../shared/storage/mongoSchemas.js";
 import { acquireRedisLock, releaseRedisLock } from "../../shared/storage/redisLock.js";
+import { computeExpiresAt, resolveRetentionMs } from "../../shared/storage/retention.js";
 
 const lockTtlMs = 15000;
 const batchSize = 50;
@@ -113,6 +114,7 @@ function createNotificationConsumer(deps: ServiceDependencies) {
   const notifications = deps.mongo.db.collection<NotificationQueueDocument>(
     mongoCollections.notificationQueue
   );
+  const retentionMs = resolveRetentionMs(deps.config.dataRetention.notificationsDays);
 
   async function processPending(): Promise<number> {
     const now = new Date();
@@ -137,10 +139,16 @@ function createNotificationConsumer(deps: ServiceDependencies) {
 
       try {
         await deliverNotification(deps, notification);
-        await markSent(notifications, notification._id);
+        await markSent(notifications, notification._id, retentionMs);
         processed += 1;
       } catch (error) {
-        await markFailed(notifications, notification._id, notification.attempts, error);
+        await markFailed(
+          notifications,
+          notification._id,
+          notification.attempts,
+          retentionMs,
+          error
+        );
       } finally {
         await releaseRedisLock(deps.redis, lock);
       }
@@ -245,13 +253,23 @@ async function sendTelegramMessage(
 
 async function markSent(
   notifications: ReturnType<typeof createNotificationCollection>,
-  id: ObjectId
+  id: ObjectId,
+  retentionMs: number
 ): Promise<void> {
   const now = new Date();
+  const expiresAt = computeExpiresAt(now, retentionMs);
+  const setFields: Record<string, unknown> = {
+    status: "sent",
+    updatedAt: now,
+    nextAttemptAt: now
+  };
+  if (expiresAt) {
+    setFields.expiresAt = expiresAt;
+  }
   await notifications.updateOne(
     { _id: id },
     {
-      $set: { status: "sent", updatedAt: now, nextAttemptAt: now },
+      $set: setFields,
       $unset: { lastError: "" },
       $inc: { attempts: 1 }
     }
@@ -262,21 +280,27 @@ async function markFailed(
   notifications: ReturnType<typeof createNotificationCollection>,
   id: ObjectId,
   attempts: number,
+  retentionMs: number,
   error: unknown
 ): Promise<void> {
   const now = new Date();
   const nextAttempt = Math.min(attempts, retryDelaysMs.length - 1);
   const delayMs = retryDelaysMs[nextAttempt] ?? retryDelaysMs[retryDelaysMs.length - 1] ?? 60000;
   const nextAttemptAt = new Date(now.getTime() + delayMs);
+  const expiresAt = computeExpiresAt(now, retentionMs);
+  const setFields: Record<string, unknown> = {
+    status: "failed",
+    nextAttemptAt,
+    lastError: getErrorMessage(error),
+    updatedAt: now
+  };
+  if (expiresAt) {
+    setFields.expiresAt = expiresAt;
+  }
   await notifications.updateOne(
     { _id: id },
     {
-      $set: {
-        status: "failed",
-        nextAttemptAt,
-        lastError: getErrorMessage(error),
-        updatedAt: now
-      },
+      $set: setFields,
       $inc: { attempts: 1 }
     }
   );

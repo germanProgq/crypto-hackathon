@@ -27,6 +27,11 @@ export function resolveConfig(args) {
     auctionUrl: readText(args["auction-url"], process.env.AUCTION_URL, "http://localhost:4001"),
     ledgerUrl: readText(args["ledger-url"], process.env.LEDGER_URL, "http://localhost:4002"),
     webUrl: readText(args["web-url"], process.env.WEB_URL, "http://localhost:4005"),
+    coreApiToken: readText(
+      args["core-api-token"],
+      process.env.CORE_API_TOKEN,
+      ""
+    ),
     currency: readText(args.currency, process.env.CURRENCY, "USDT"),
     timeoutMs: readNumber(args.timeoutMs ?? args.timeout, process.env.LOAD_TIMEOUT_MS, 10000)
   };
@@ -73,6 +78,14 @@ export function readText(value, fallback, defaultValue) {
   }
   const trimmed = String(candidate).trim();
   return trimmed.length > 0 ? trimmed : defaultValue;
+}
+
+export function buildServiceHeaders(serviceToken, extraHeaders) {
+  const headers = { ...(extraHeaders ?? {}) };
+  if (serviceToken) {
+    headers["x-service-token"] = serviceToken;
+  }
+  return headers;
 }
 
 export async function fetchRequest(url, options = {}) {
@@ -198,12 +211,14 @@ export async function waitForRoundStatus({
   roundIndex,
   status,
   timeoutMs,
-  pollMs
+  pollMs,
+  serviceToken
 }) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const response = await fetchJson(
-      `${auctionUrl}/auctions/${auctionId}/rounds/${roundIndex}/state`
+      `${auctionUrl}/auctions/${auctionId}/rounds/${roundIndex}/state`,
+      { headers: buildServiceHeaders(serviceToken) }
     );
     if (response.ok && response.data && response.data.state) {
       const current = response.data.state.status;
@@ -216,9 +231,10 @@ export async function waitForRoundStatus({
   throw new Error(`Round ${roundIndex} did not reach status ${status} in time.`);
 }
 
-export async function getRoundState({ auctionUrl, auctionId, roundIndex }) {
+export async function getRoundState({ auctionUrl, auctionId, roundIndex, serviceToken }) {
   const response = await fetchJson(
-    `${auctionUrl}/auctions/${auctionId}/rounds/${roundIndex}/state`
+    `${auctionUrl}/auctions/${auctionId}/rounds/${roundIndex}/state`,
+    { headers: buildServiceHeaders(serviceToken) }
   );
   if (!response.ok || !response.data || !response.data.state) {
     throw new Error(`Round state fetch failed: ${response.status}`);
@@ -232,7 +248,8 @@ export async function seedDeposits({
   amount,
   currency,
   concurrency,
-  timeoutMs
+  timeoutMs,
+  serviceToken
 }) {
   const tasks = users.map((userId) => async () => {
     const payload = {
@@ -245,6 +262,7 @@ export async function seedDeposits({
     const response = await fetchRequest(`${ledgerUrl}/ledger/entries`, {
       method: "POST",
       body: payload,
+      headers: buildServiceHeaders(serviceToken),
       timeoutMs
     });
     if (!response.ok) {
@@ -263,9 +281,13 @@ export async function placeBid({
   idempotencyKey,
   ip,
   timeoutMs,
-  parseJson = false
+  parseJson = false,
+  serviceToken
 }) {
-  const headers = ip ? { "x-forwarded-for": ip } : undefined;
+  const headers = buildServiceHeaders(
+    serviceToken,
+    ip ? { "x-forwarded-for": ip } : undefined
+  );
   return timedRequest(`${auctionUrl}/auctions/${auctionId}/bids`, {
     method: "POST",
     body: { userId, amount, idempotencyKey },
@@ -275,11 +297,12 @@ export async function placeBid({
   });
 }
 
-export async function reconcileUser({ ledgerUrl, userId, currency }) {
+export async function reconcileUser({ ledgerUrl, userId, currency, serviceToken }) {
   const response = await fetchJson(
     `${ledgerUrl}/ledger/${encodeURIComponent(userId)}/reconcile?currency=${encodeURIComponent(
       currency
-    )}`
+    )}`,
+    { headers: buildServiceHeaders(serviceToken) }
   );
   if (!response.ok) {
     throw new Error(`Reconcile failed for ${userId}: ${response.status}`);

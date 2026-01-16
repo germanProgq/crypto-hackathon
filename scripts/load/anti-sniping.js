@@ -65,7 +65,8 @@ async function main() {
     roundIndex: 0,
     status: "live",
     timeoutMs: 30000,
-    pollMs: 100
+    pollMs: 100,
+    serviceToken: config.coreApiToken
   });
 
   await seedDeposits({
@@ -74,13 +75,15 @@ async function main() {
     amount: depositAmount,
     currency: config.currency,
     concurrency: 1,
-    timeoutMs: config.timeoutMs
+    timeoutMs: config.timeoutMs,
+    serviceToken: config.coreApiToken
   });
 
   const stateBefore = await getRoundState({
     auctionUrl: config.auctionUrl,
     auctionId,
-    roundIndex: 0
+    roundIndex: 0,
+    serviceToken: config.coreApiToken
   });
 
   const loadStart = performance.now();
@@ -92,7 +95,8 @@ async function main() {
     idempotencyKey: `anti-${userId}-${randomUUID()}`,
     ip: buildForwardedIp(1),
     timeoutMs: config.timeoutMs,
-    parseJson: true
+    parseJson: true,
+    serviceToken: config.coreApiToken
   });
   const loadDurationMs = performance.now() - loadStart;
 
@@ -103,7 +107,8 @@ async function main() {
   const stateAfter = await getRoundState({
     auctionUrl: config.auctionUrl,
     auctionId,
-    roundIndex: 0
+    roundIndex: 0,
+    serviceToken: config.coreApiToken
   });
 
   const beforeEnd = new Date(stateBefore.effectiveEndAt).getTime();

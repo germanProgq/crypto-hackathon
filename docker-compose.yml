@@ -57,6 +57,7 @@ services:
       MONGO_URI: mongodb://mongo:27017/crypto_hack?replicaSet=rs0&directConnection=true
       MONGO_DB: crypto_hack
       REDIS_URL: redis://redis:6379
+      CORE_API_TOKEN: ${CORE_API_TOKEN:-dev-core-token}
       RATE_LIMIT_USER_PER_SECOND: ${RATE_LIMIT_USER_PER_SECOND:-5}
       RATE_LIMIT_AUCTION_USER_PER_SECOND: ${RATE_LIMIT_AUCTION_USER_PER_SECOND:-3}
       RATE_LIMIT_IP_PER_SECOND: ${RATE_LIMIT_IP_PER_SECOND:-20}
@@ -82,6 +83,7 @@ services:
       MONGO_URI: mongodb://mongo:27017/crypto_hack?replicaSet=rs0&directConnection=true
       MONGO_DB: crypto_hack
       REDIS_URL: redis://redis:6379
+      CORE_API_TOKEN: ${CORE_API_TOKEN:-dev-core-token}
     command: ["npm", "run", "dev:ledger"]
     ports:
       - "4002:4002"
@@ -104,14 +106,16 @@ services:
       MONGO_URI: mongodb://mongo:27017/crypto_hack?replicaSet=rs0&directConnection=true
       MONGO_DB: crypto_hack
       REDIS_URL: redis://redis:6379
+      CORE_API_TOKEN: ${CORE_API_TOKEN:-dev-core-token}
       CRYPTO_SUPPORTED_CURRENCIES: USDT
       CRYPTO_WALLET_STRATEGY: memo_tag
       CRYPTO_MEMO_DEPOSIT_ADDRESS: USDT:DEMO_DEPOSIT_ADDRESS
       CRYPTO_HOT_WALLET_ADDRESS: USDT:DEMO_HOT_WALLET
       CRYPTO_SIGNER_URL: http://signer:4007
-      CRYPTO_SIGNER_TOKEN: ${SIGNER_API_TOKEN:-dev-signer-token}
-      CRYPTO_ADMIN_TOKEN: ${CRYPTO_ADMIN_TOKEN:-dev-admin-token}
-      CRYPTO_OBSERVER_URL: ${CRYPTO_OBSERVER_URL:-http://observer:9000}
+      CRYPTO_SIGNER_TOKEN: ${CRYPTO_SIGNER_TOKEN}
+      CRYPTO_ADMIN_TOKEN: ${CRYPTO_ADMIN_TOKEN}
+      CRYPTO_USD_RATES: ${CRYPTO_USD_RATES}
+      CRYPTO_OBSERVER_URL: ${CRYPTO_OBSERVER_URL:-}
     command: ["npm", "run", "dev:crypto-gateway"]
     ports:
       - "4003:4003"
@@ -127,7 +131,7 @@ services:
       SERVICE_NAME: signer
       HTTP_HOST: 0.0.0.0
       HTTP_PORT: "4007"
-      SIGNER_API_TOKEN: ${SIGNER_API_TOKEN:-dev-signer-token}
+      SIGNER_API_TOKEN: ${SIGNER_API_TOKEN}
       SIGNER_PRIVATE_KEY: ${SIGNER_PRIVATE_KEY:-MC4CAQAwBQYDK2VwBCIEIBpCwcU7fI9wO+CCxvkLK9SQCW9uWpNVVAvEWP56s0SX}
       SIGNER_ALLOWED_IPS: ${SIGNER_ALLOWED_IPS:-}
     command: ["npm", "run", "dev:signer"]
@@ -152,7 +156,7 @@ services:
       MONGO_URI: mongodb://mongo:27017/crypto_hack?replicaSet=rs0&directConnection=true
       MONGO_DB: crypto_hack
       REDIS_URL: redis://redis:6379
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-dev-telegram-token}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_API_BASE: ${TELEGRAM_API_BASE:-https://api.telegram.org}
     command: ["npm", "run", "dev:bot"]
     ports:
@@ -176,14 +180,13 @@ services:
       MONGO_URI: mongodb://mongo:27017/crypto_hack?replicaSet=rs0&directConnection=true
       MONGO_DB: crypto_hack
       REDIS_URL: redis://redis:6379
-      WEB_ALLOW_DEMO_USER: ${WEB_ALLOW_DEMO_USER:-true}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-dev-telegram-token}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_API_BASE: ${TELEGRAM_API_BASE:-https://api.telegram.org}
       CRYPTO_SUPPORTED_CURRENCIES: USDT
       CRYPTO_WALLET_STRATEGY: memo_tag
       CRYPTO_MEMO_DEPOSIT_ADDRESS: USDT:DEMO_DEPOSIT_ADDRESS
       CRYPTO_SIGNER_URL: ${CRYPTO_SIGNER_URL:-http://signer:4007}
-      CRYPTO_SIGNER_TOKEN: ${SIGNER_API_TOKEN:-dev-signer-token}
+      CRYPTO_SIGNER_TOKEN: ${CRYPTO_SIGNER_TOKEN}
     command: ["npm", "run", "dev:web"]
     ports:
       - "4005:4005"

@@ -27,6 +27,7 @@ import {
 } from "../auction-engine/auctionCache.js";
 import { parseRankingMember } from "../auction-engine/bidRanking.js";
 import { BidError, createBidService } from "../auction-engine/bidService.js";
+import { ensureAuctionRoundProgress } from "../auction-engine/auctionProgress.js";
 import { createAuctionRepository } from "../auction-engine/auctionStore.js";
 import { CryptoGatewayError, createCryptoGatewayService } from "../crypto-gateway/cryptoGatewayService.js";
 import { createLedgerRepository, LedgerError } from "../ledger/ledgerStore.js";
@@ -41,7 +42,7 @@ import {
   extractTelegramInitData,
   type TelegramWebUser,
   verifyTelegramInitData
-} from "./telegramAuth.js";
+} from "../../shared/auth/telegram.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const webCatalogs: Record<Locale, Catalog> = {
@@ -187,7 +188,9 @@ export async function registerWebRoutes(
   deps: ServiceDependencies
 ): Promise<void> {
   const auctionRepository = createAuctionRepository(deps.mongo);
-  const ledgerRepository = createLedgerRepository(deps.mongo);
+  const ledgerRepository = createLedgerRepository(deps.mongo, {
+    retentionDays: deps.config.dataRetention.ledgerDays
+  });
   const cryptoGatewayService = createCryptoGatewayService(deps);
   const bidService = createBidService(deps);
   const bids = deps.mongo.db.collection<BidDocument>(mongoCollections.bids);
@@ -203,28 +206,73 @@ export async function registerWebRoutes(
   const pendingAuctionBids = new Map<string, NodeJS.Timeout>();
   const pendingActiveBids = new Map<string, NodeJS.Timeout>();
   let pendingAuctionsTimer: NodeJS.Timeout | null = null;
+  const auctionsResyncIntervalMs = 15000;
+  const snapshotResyncIntervalMs = 5000;
+  const bidsResyncIntervalMs = 8000;
+  const activeBidsResyncIntervalMs = 20000;
+  let auctionsResyncTimer: NodeJS.Timeout | null = null;
+  let snapshotResyncTimer: NodeJS.Timeout | null = null;
+  let bidsResyncTimer: NodeJS.Timeout | null = null;
+  let activeBidsResyncTimer: NodeJS.Timeout | null = null;
+  let snapshotResyncInFlight = false;
+  let bidsResyncInFlight = false;
+  let activeBidsResyncInFlight = false;
 
-  const realtimeSubscriber = deps.redis.duplicate();
-  realtimeSubscriber.on("error", (error) => {
-    deps.logger.warn({ err: error }, "Realtime Redis error");
-  });
-  await realtimeSubscriber.connect();
-  await realtimeSubscriber.subscribe(realtimeEventChannel);
-  realtimeSubscriber.on("message", (channel, payload) => {
-    if (channel !== realtimeEventChannel) {
-      return;
+  let realtimeSubscriber: ReturnType<typeof deps.redis.duplicate> | null = null;
+  try {
+    realtimeSubscriber = deps.redis.duplicate();
+    realtimeSubscriber.on("error", (error) => {
+      deps.logger.warn({ err: error }, "Realtime Redis error");
+    });
+    await realtimeSubscriber.connect();
+    await realtimeSubscriber.subscribe(realtimeEventChannel);
+    realtimeSubscriber.on("message", (channel, payload) => {
+      if (channel !== realtimeEventChannel) {
+        return;
+      }
+      const event = parseRealtimeEvent(payload);
+      if (!event) {
+        return;
+      }
+      handleRealtimeEvent(event);
+    });
+  } catch (error) {
+    deps.logger.warn(
+      { err: error },
+      "Realtime Redis subscription unavailable; falling back to polling"
+    );
+    if (realtimeSubscriber) {
+      try {
+        await realtimeSubscriber.quit();
+      } catch {
+        // ignore cleanup errors
+      }
     }
-    const event = parseRealtimeEvent(payload);
-    if (!event) {
-      return;
-    }
-    handleRealtimeEvent(event);
-  });
+    realtimeSubscriber = null;
+  }
+
+  startRealtimeResyncTimers();
 
   app.addHook("onClose", async () => {
     if (pendingAuctionsTimer) {
       clearTimeout(pendingAuctionsTimer);
       pendingAuctionsTimer = null;
+    }
+    if (auctionsResyncTimer) {
+      clearInterval(auctionsResyncTimer);
+      auctionsResyncTimer = null;
+    }
+    if (snapshotResyncTimer) {
+      clearInterval(snapshotResyncTimer);
+      snapshotResyncTimer = null;
+    }
+    if (bidsResyncTimer) {
+      clearInterval(bidsResyncTimer);
+      bidsResyncTimer = null;
+    }
+    if (activeBidsResyncTimer) {
+      clearInterval(activeBidsResyncTimer);
+      activeBidsResyncTimer = null;
     }
     for (const timer of pendingAuctionBids.values()) {
       clearTimeout(timer);
@@ -244,7 +292,9 @@ export async function registerWebRoutes(
     realtimeClients.clear();
     userSubscriptions.clear();
     auctionSubscriptions.clear();
-    await realtimeSubscriber.quit();
+    if (realtimeSubscriber) {
+      await realtimeSubscriber.quit();
+    }
   });
 
   app.get("/ws", { websocket: true }, (connection, request) => {
@@ -505,6 +555,18 @@ export async function registerWebRoutes(
     sendRealtimePayloadToClients(clientIds, { type: "auction_snapshot", data: snapshot });
   }
 
+  async function broadcastAuctionSnapshotFromSource(auctionId: string): Promise<void> {
+    try {
+      const snapshot = await loadAuctionSnapshotPayload(deps, auctionRepository, auctionId);
+      if (!snapshot) {
+        return;
+      }
+      broadcastAuctionSnapshot(auctionId, snapshot);
+    } catch (error) {
+      deps.logger.warn({ err: error }, "Failed to resync auction snapshot");
+    }
+  }
+
   async function broadcastAuctionBids(auctionId: string): Promise<void> {
     const clientIds = auctionSubscriptions.get(auctionId);
     if (!clientIds || clientIds.size === 0) {
@@ -519,6 +581,77 @@ export async function registerWebRoutes(
       });
     } catch (error) {
       deps.logger.warn({ err: error }, "Failed to broadcast auction bids");
+    }
+  }
+
+  async function resyncAuctionSnapshots(): Promise<void> {
+    if (auctionSubscriptions.size === 0) {
+      return;
+    }
+    for (const auctionId of auctionSubscriptions.keys()) {
+      await broadcastAuctionSnapshotFromSource(auctionId);
+    }
+  }
+
+  async function resyncAuctionBids(): Promise<void> {
+    if (auctionSubscriptions.size === 0) {
+      return;
+    }
+    for (const auctionId of auctionSubscriptions.keys()) {
+      await broadcastAuctionBids(auctionId);
+    }
+  }
+
+  async function resyncActiveBids(): Promise<void> {
+    if (userSubscriptions.size === 0) {
+      return;
+    }
+    for (const userId of userSubscriptions.keys()) {
+      await sendActiveBidsToUser(userId);
+    }
+  }
+
+  function startRealtimeResyncTimers(): void {
+    if (!auctionsResyncTimer) {
+      auctionsResyncTimer = setInterval(() => {
+        void broadcastActiveAuctions();
+      }, auctionsResyncIntervalMs);
+    }
+
+    if (!snapshotResyncTimer) {
+      snapshotResyncTimer = setInterval(() => {
+        if (snapshotResyncInFlight) {
+          return;
+        }
+        snapshotResyncInFlight = true;
+        void resyncAuctionSnapshots().finally(() => {
+          snapshotResyncInFlight = false;
+        });
+      }, snapshotResyncIntervalMs);
+    }
+
+    if (!bidsResyncTimer) {
+      bidsResyncTimer = setInterval(() => {
+        if (bidsResyncInFlight) {
+          return;
+        }
+        bidsResyncInFlight = true;
+        void resyncAuctionBids().finally(() => {
+          bidsResyncInFlight = false;
+        });
+      }, bidsResyncIntervalMs);
+    }
+
+    if (!activeBidsResyncTimer) {
+      activeBidsResyncTimer = setInterval(() => {
+        if (activeBidsResyncInFlight) {
+          return;
+        }
+        activeBidsResyncInFlight = true;
+        void resyncActiveBids().finally(() => {
+          activeBidsResyncInFlight = false;
+        });
+      }, activeBidsResyncIntervalMs);
     }
   }
 
@@ -1246,7 +1379,8 @@ function resolveAuth(request: FastifyRequest, deps: ServiceDependencies): AuthRe
     };
   }
 
-  if (deps.config.web.allowDemoUser) {
+  const allowDemoUser = deps.config.web.allowDemoUser && deps.config.env !== "production";
+  if (allowDemoUser) {
     const demoUserId = normalizeDemoUserId(getHeaderValue(request.headers, "x-demo-user-id"));
     if (demoUserId) {
       return {
@@ -1304,7 +1438,8 @@ function resolveAuthFromRealtimePayload(
     };
   }
 
-  if (deps.config.web.allowDemoUser) {
+  const allowDemoUser = deps.config.web.allowDemoUser && deps.config.env !== "production";
+  if (allowDemoUser) {
     const demoUserId = normalizeDemoUserId(
       typeof payload.demoUserId === "string" ? payload.demoUserId : null
     );
@@ -1516,12 +1651,19 @@ async function loadAuctionSnapshotPayload(
   auctionId: string
 ): Promise<RealtimeAuctionSnapshot | null> {
   const now = new Date();
+  const auctionObjectId = new ObjectId(auctionId);
+  try {
+    await ensureAuctionRoundProgress(deps, auctionRepository, auctionObjectId, now);
+  } catch (error) {
+    deps.logger.warn({ err: error, auctionId }, "Failed to catch up auction snapshot");
+  }
+
   const cached = await readAuctionSnapshotFromRedis(deps.redis, auctionId);
   if (cached) {
     return toRealtimeSnapshot({ ...cached, serverTime: now });
   }
 
-  const auction = await auctionRepository.getAuctionById(new ObjectId(auctionId));
+  const auction = await auctionRepository.getAuctionById(auctionObjectId);
   if (!auction) {
     return null;
   }
@@ -1546,7 +1688,7 @@ async function loadAuctionSnapshotPayload(
     });
   }
 
-  const roundState = await auctionRepository.getLiveRoundState(new ObjectId(auctionId));
+  const roundState = await auctionRepository.getLiveRoundState(auctionObjectId);
   if (roundState) {
     await auctionRepository.updateAuctionSnapshot(
       auction._id,
@@ -1583,7 +1725,13 @@ async function loadAuctionBidsPayload(
   limit: number
 ): Promise<Array<{ _id: string; userId: string; amount: number; createdAt: Date }>> {
   const rankingKey = `auction:${auctionId}:ranking`;
-  const members = await deps.redis.zrevrange(rankingKey, 0, limit - 1);
+  let members: string[] = [];
+  try {
+    members = await deps.redis.zrevrange(rankingKey, 0, limit - 1);
+  } catch (error) {
+    deps.logger.warn({ err: error }, "Failed to read auction bids from Redis");
+    members = [];
+  }
   let orderedBidIds = members
     .map((member) => parseRankingMember(member).bidId)
     .filter((bidId) => bidId.length > 0);
