@@ -11,6 +11,7 @@
     "dev:bot": "SERVICE_NAME=bot HTTP_PORT=4004 tsx watch src/services/bot/index.ts",
     "dev:web": "SERVICE_NAME=web HTTP_PORT=4005 tsx watch src/services/web/index.ts",
     "dev:workers": "SERVICE_NAME=workers HTTP_PORT=4006 tsx watch src/services/workers/index.ts",
+    "dev:observer": "SERVICE_NAME=observer HTTP_PORT=9000 tsx watch src/services/observer/index.ts",
     "build": "tsc -p tsconfig.json",
     "start:auction-engine": "node dist/src/services/auction-engine/index.js",
     "start:ledger": "node dist/src/services/ledger/index.js",
@@ -19,6 +20,7 @@
     "start:bot": "node dist/src/services/bot/index.js",
     "start:web": "node dist/src/services/web/index.js",
     "start:workers": "node dist/src/services/workers/index.js",
+    "start:observer": "node dist/src/services/observer/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "load:bot": "node scripts/load/bot-sim.js",
@@ -26,7 +28,9 @@
     "load:anti-sniping": "node scripts/load/anti-sniping.js",
     "load:reconcile": "node scripts/load/reconcile.js",
     "load:all": "node scripts/load/suite.js",
-    "load:perf": "node scripts/load/perf-cli.js"
+    "load:perf": "node scripts/load/perf-cli.js",
+    "test:rpc": "tsx scripts/test-rpc.ts",
+    "test:ton-rpc": "tsx scripts/test-ton-rpc.ts"
   },
   "dependencies": {
     "@fastify/websocket": "^11.2.0",
