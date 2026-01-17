@@ -360,5 +360,4 @@ npm run load:perf
   - Verify `CRYPTO_OBSERVER_URL` or switch to `mock`/`mock-rpc`.
 
 ## Reference docs
-- Full API and WebSocket request reference: `requests.md`
-- Load testing notes: `docs/load-testing.md`
+- Full API and WebSocket request reference: `docs/requests.md`
