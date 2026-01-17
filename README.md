@@ -144,6 +144,7 @@ Summary (local run 2026-01-12):
 - Auction and round state transitions are handled by workers.
 - Hackathon mode: auction creation is open to any authenticated user; no moderation.
 - If `CRYPTO_OBSERVER_URL` or `CRYPTO_SIGNER_URL` is empty or set to `mock`, the crypto gateway uses in-process mocks (withdrawals auto-confirm; deposits are disabled without a real observer).
+- For networked mocks, run `mock-rpc` and set `CRYPTO_OBSERVER_URL=http://mock-rpc:9000` and `CRYPTO_SIGNER_URL=http://mock-rpc:9000`. Seed deposits via `POST /mock/observer/mint` and advance confirmations via `POST /mock/observer/mine`.
 
 ## Notes
 

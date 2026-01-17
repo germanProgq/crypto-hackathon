@@ -111,7 +111,7 @@ services:
       CRYPTO_WALLET_STRATEGY: memo_tag
       CRYPTO_MEMO_DEPOSIT_ADDRESS: USDT:DEMO_DEPOSIT_ADDRESS
       CRYPTO_HOT_WALLET_ADDRESS: USDT:DEMO_HOT_WALLET
-      CRYPTO_SIGNER_URL: http://signer:4007
+      CRYPTO_SIGNER_URL: ${CRYPTO_SIGNER_URL:-http://signer:4007}
       CRYPTO_SIGNER_TOKEN: ${CRYPTO_SIGNER_TOKEN}
       CRYPTO_ADMIN_TOKEN: ${CRYPTO_ADMIN_TOKEN}
       CRYPTO_USD_RATES: ${CRYPTO_USD_RATES}
@@ -119,6 +119,20 @@ services:
     command: ["npm", "run", "dev:crypto-gateway"]
     ports:
       - "4003:4003"
+    volumes:
+      - ./src:/app/src
+  mock-rpc:
+    image: crypto-hack-mock-rpc:local
+    build:
+      context: .
+      target: build
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: mock-rpc
+      HTTP_PORT: "9000"
+    command: ["npm", "run", "dev:mock-rpc"]
+    ports:
+      - "9000:9000"
     volumes:
       - ./src:/app/src
   signer:

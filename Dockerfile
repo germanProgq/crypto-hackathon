@@ -14,5 +14,5 @@ ENV NODE_ENV=production
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
-EXPOSE 4001 4002 4003 4004 4005 4006
+EXPOSE 4001 4002 4003 4004 4005 4006 9000
 CMD ["node", "dist/src/services/auction-engine/index.js"]
