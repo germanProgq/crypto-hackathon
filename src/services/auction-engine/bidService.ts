@@ -11,7 +11,9 @@ import {
   type AuctionDocument,
   type AuctionRoundConfig,
   type AuctionRoundStateDocument,
-  type BidDocument
+  type AuctionWatchlistDocument,
+  type BidDocument,
+  type NotificationQueueDocument
 } from "../../shared/storage/mongoSchemas.js";
 import {
   createLedgerRepository,
@@ -239,10 +241,12 @@ export interface BidPlacementInput {
   auctionId: ObjectId;
   userId: string;
   amount: number;
+  maxAmount?: number;
   idempotencyKey: string;
   audit?: BidDocument["audit"];
   metadata?: Record<string, unknown>;
   ip: string;
+  origin?: "manual" | "proxy" | "auto";
 }
 
 export interface BidPlacementResult {
@@ -259,6 +263,13 @@ type BidTransactionResult = BidPlacementResult & {
   previousBid?: WithId<BidDocument> | null;
   updateRanking: boolean;
 };
+
+type TopBidSnapshot = Pick<
+  WithId<BidDocument>,
+  "_id" | "userId" | "amount" | "maxAmount" | "createdAt"
+>;
+
+type ProxyCandidate = TopBidSnapshot & { maxValue: number };
 
 type LocalRateLimitState = {
   tokens: number;
@@ -280,11 +291,18 @@ export function createBidService(deps: ServiceDependencies) {
     retentionDays: deps.config.dataRetention.ledgerDays
   });
   const bids = deps.mongo.db.collection<BidDocument>(mongoCollections.bids);
+  const watchlist = deps.mongo.db.collection<AuctionWatchlistDocument>(
+    mongoCollections.auctionWatchlist
+  );
+  const notificationQueue = deps.mongo.db.collection<NotificationQueueDocument>(
+    mongoCollections.notificationQueue
+  );
   const roundStates = deps.mongo.db.collection<AuctionRoundStateDocument>(
     mongoCollections.auctionRoundStates
   );
   const finalizationService = createRoundFinalizationService(deps);
   const bidRetentionMs = resolveRetentionMs(deps.config.dataRetention.bidsDays);
+  const notificationRetentionMs = resolveRetentionMs(deps.config.dataRetention.notificationsDays);
   const localRateLimits = new Map<string, LocalRateLimitState>();
   const localBidLocks = new Map<string, LocalLockState>();
   let rateLimitFallbackLogged = false;
@@ -337,13 +355,15 @@ export function createBidService(deps: ServiceDependencies) {
   };
 
   async function placeBid(input: BidPlacementInput): Promise<BidPlacementResult> {
-    await enforceRateLimits(
-      deps.redis,
-      deps.config.rateLimits,
-      input,
-      localRateLimits,
-      warnRateLimitFallback
-    );
+    if (input.origin !== "auto") {
+      await enforceRateLimits(
+        deps.redis,
+        deps.config.rateLimits,
+        input,
+        localRateLimits,
+        warnRateLimitFallback
+      );
+    }
 
     try {
       await ensureAuctionRoundProgress(deps, auctionRepository, input.auctionId);
@@ -354,6 +374,13 @@ export function createBidService(deps: ServiceDependencies) {
       );
     }
     void kickFinalizationIfNeeded(input.auctionId);
+
+    let previousTop: TopBidSnapshot | null = null;
+    try {
+      previousTop = await loadTopBid(input.auctionId);
+    } catch (error) {
+      deps.logger.warn({ err: error }, "Failed to load previous top bid");
+    }
 
     const existing = await resolveIdempotentBid(input);
     if (existing) {
@@ -451,14 +478,23 @@ export function createBidService(deps: ServiceDependencies) {
           }
         );
 
+        const origin = input.origin ?? (input.maxAmount !== undefined ? "proxy" : "manual");
+        const resolvedMaxAmount = resolveMaxAmount(input);
+
         if (previousBid && input.amount <= previousBid.amount) {
           throw new BidError("bid_too_low", "Bid must exceed the current amount.", 409);
         }
 
-        const delta = input.amount - (previousBid?.amount ?? 0);
-        if (delta <= 0) {
-          throw new BidError("bid_too_low", "Bid must exceed the current amount.", 409);
+        if (resolvedMaxAmount < input.amount) {
+          throw new BidError("invalid_request", "Max amount must be >= bid amount.", 409);
         }
+
+        const previousEscrow = previousBid?.maxAmount ?? previousBid?.amount ?? 0;
+        if (resolvedMaxAmount < previousEscrow) {
+          throw new BidError("bid_too_low", "Max amount cannot decrease.", 409);
+        }
+
+        const delta = resolvedMaxAmount - previousEscrow;
 
         const bidId = new ObjectId();
         if (previousBid) {
@@ -488,26 +524,49 @@ export function createBidService(deps: ServiceDependencies) {
         if (input.audit) {
           bidDoc.audit = input.audit;
         }
+        if (input.maxAmount !== undefined) {
+          bidDoc.maxAmount = resolvedMaxAmount;
+        }
+        if (origin) {
+          bidDoc.origin = origin;
+        }
 
         await bids.insertOne(bidDoc, { session });
+        const watchNow = now;
+        await watchlist.updateOne(
+          { userId: input.userId, auctionId: input.auctionId },
+          {
+            $setOnInsert: { userId: input.userId, auctionId: input.auctionId, createdAt: watchNow },
+            $set: { updatedAt: watchNow, notifyOutbid: true }
+          },
+          { upsert: true, session }
+        );
 
-        const holdInput: HoldOperationInput = {
-          userId: input.userId,
-          amount: delta,
-          currency: auction.currency,
-          holdId: buildHoldId(bidId),
-          idempotencyKey: buildHoldIdempotencyKey(input.idempotencyKey),
-          metadata: buildHoldMetadata(
-            input.metadata,
-            auction._id.toHexString(),
-            roundState.roundIndex,
-            bidId.toHexString(),
-            input.amount
-          ),
-          audit: input.audit
-        };
+        let balance: LedgerBalance;
+        if (delta > 0) {
+          const holdInput: HoldOperationInput = {
+            userId: input.userId,
+            amount: delta,
+            currency: auction.currency,
+            holdId: buildHoldId(bidId),
+            idempotencyKey: buildHoldIdempotencyKey(input.idempotencyKey),
+            metadata: buildHoldMetadata(
+              input.metadata,
+              auction._id.toHexString(),
+              roundState.roundIndex,
+              bidId.toHexString(),
+              input.amount,
+              resolvedMaxAmount,
+              origin
+            ),
+            audit: input.audit
+          };
 
-        const holdResult = await ledger.createHoldInSession(holdInput, session);
+          const holdResult = await ledger.createHoldInSession(holdInput, session);
+          balance = holdResult.balance;
+        } else {
+          balance = await ledger.getBalanceInSession(input.userId, auction.currency, session);
+        }
         const antiSnipingPreview = applyAntiSnipingExtension(roundState, roundConfig, now);
         let resolvedState = { ...roundState, ...antiSnipingPreview.state };
         let extended = antiSnipingPreview.extended;
@@ -542,7 +601,7 @@ export function createBidService(deps: ServiceDependencies) {
 
         return {
           bid: bidDoc,
-          balance: holdResult.balance,
+          balance,
           roundState: resolvedState,
           extended,
           idempotent: false,
@@ -572,6 +631,18 @@ export function createBidService(deps: ServiceDependencies) {
         ]);
       } catch (error) {
         deps.logger.warn({ err: error }, "Failed to publish realtime bid updates");
+      }
+      let autoRaised = false;
+      if (deps.config.bids.proxyAutoRaise && input.origin !== "auto") {
+        autoRaised = await maybeApplyAutoRaise(result, input);
+      }
+      if (!autoRaised) {
+        try {
+          const currentTop = await loadTopBid(result.auction._id);
+          await maybeQueueOutbidNotification(previousTop, currentTop, result);
+        } catch (error) {
+          deps.logger.warn({ err: error }, "Failed to process outbid notifications");
+        }
       }
       return toPlacementResult(result);
     } finally {
@@ -636,6 +707,154 @@ export function createBidService(deps: ServiceDependencies) {
       await delay(idempotencyPollMs);
     }
     return null;
+  }
+
+  async function maybeApplyAutoRaise(
+    result: BidTransactionResult,
+    input: BidPlacementInput
+  ): Promise<boolean> {
+    const candidates = await loadTopProxyCandidates(result.auction._id);
+    const target = resolveAutoRaiseTarget(candidates, deps.config.bids.minIncrement, input.userId);
+    if (!target) {
+      return false;
+    }
+    try {
+      await placeBid({
+        auctionId: result.auction._id,
+        userId: target.userId,
+        amount: target.amount,
+        maxAmount: target.maxAmount,
+        idempotencyKey: buildAutoBidIdempotencyKey(
+          result.auction._id.toHexString(),
+          target.userId,
+          result.bid._id.toHexString()
+        ),
+        audit: { source: "auto", actorId: "system" },
+        metadata: { autoFromBidId: result.bid._id.toHexString() },
+        ip: `auto:${target.userId}`,
+        origin: "auto"
+      });
+      return true;
+    } catch (error) {
+      deps.logger.warn({ err: error }, "Auto-raise bid failed");
+      return false;
+    }
+  }
+
+  async function maybeQueueOutbidNotification(
+    previousTop: TopBidSnapshot | null,
+    currentTop: TopBidSnapshot | null,
+    result: BidTransactionResult
+  ): Promise<void> {
+    if (!previousTop || !currentTop) {
+      return;
+    }
+    if (previousTop.userId === currentTop.userId) {
+      return;
+    }
+    const watching = await watchlist.findOne({
+      userId: previousTop.userId,
+      auctionId: result.auction._id,
+      notifyOutbid: { $ne: false }
+    });
+    if (!watching) {
+      return;
+    }
+
+    const now = new Date();
+    const auctionId = result.auction._id.toHexString();
+    const roundIndex = result.roundState.roundIndex;
+    const rebidAmount = normalizeBidAmount(
+      currentTop.amount + Math.max(0, deps.config.bids.minIncrement)
+    );
+    const payload: Record<string, unknown> = {
+      auctionId,
+      roundIndex,
+      auctionTitle: result.auction.title,
+      currency: result.auction.currency,
+      previousAmount: previousTop.amount,
+      currentAmount: currentTop.amount,
+      rebidAmount,
+      currentLeader: currentTop.userId,
+      bidId: currentTop._id.toHexString()
+    };
+    const replayUrl = buildReplayUrl(deps.config.web.publicUrl, auctionId, roundIndex);
+    if (replayUrl) {
+      payload.replayUrl = replayUrl;
+    }
+
+    const idempotencyKey = buildOutbidIdempotencyKey(
+      auctionId,
+      roundIndex,
+      previousTop.userId,
+      currentTop._id.toHexString()
+    );
+    const expiresAt = computeExpiresAt(now, notificationRetentionMs);
+    const update: Record<string, unknown> = {
+      type: "outbid_alert",
+      userId: previousTop.userId,
+      auctionId: result.auction._id,
+      roundIndex,
+      status: "pending",
+      payload,
+      idempotencyKey,
+      attempts: 0,
+      nextAttemptAt: now,
+      createdAt: now,
+      updatedAt: now
+    };
+    if (expiresAt) {
+      update.expiresAt = expiresAt;
+    }
+
+    await notificationQueue.updateOne(
+      { idempotencyKey },
+      { $setOnInsert: update },
+      { upsert: true }
+    );
+  }
+
+  async function loadTopBid(auctionId: ObjectId): Promise<TopBidSnapshot | null> {
+    return bids
+      .find({ auctionId, active: true })
+      .sort({ amount: -1, createdAt: 1, _id: 1 })
+      .project<TopBidSnapshot>({
+        _id: 1,
+        userId: 1,
+        amount: 1,
+        maxAmount: 1,
+        createdAt: 1
+      })
+      .limit(1)
+      .next();
+  }
+
+  async function loadTopProxyCandidates(
+    auctionId: ObjectId
+  ): Promise<ProxyCandidate[]> {
+    const results = await bids
+      .aggregate<ProxyCandidate>([
+        { $match: { auctionId, active: true } },
+        {
+          $addFields: {
+            maxValue: { $ifNull: ["$maxAmount", "$amount"] }
+          }
+        },
+        { $sort: { maxValue: -1, createdAt: 1, _id: 1 } },
+        { $limit: 2 },
+        {
+          $project: {
+            _id: 1,
+            userId: 1,
+            amount: 1,
+            maxAmount: 1,
+            createdAt: 1,
+            maxValue: 1
+          }
+        }
+      ])
+      .toArray();
+    return results;
   }
 
   return { placeBid };
@@ -818,8 +1037,84 @@ function matchesIdempotentBid(bid: BidDocument, input: BidPlacementInput): boole
   return (
     bid.userId === input.userId &&
     bid.amount === input.amount &&
-    bid.auctionId.equals(input.auctionId)
+    bid.auctionId.equals(input.auctionId) &&
+    (bid.maxAmount ?? null) === (input.maxAmount ?? null)
   );
+}
+
+function resolveMaxAmount(input: BidPlacementInput): number {
+  if (input.maxAmount === undefined) {
+    return input.amount;
+  }
+  return input.maxAmount;
+}
+
+function resolveAutoRaiseTarget(
+  candidates: ProxyCandidate[],
+  minIncrement: number,
+  triggerUserId: string
+): { userId: string; amount: number; maxAmount: number } | null {
+  if (candidates.length < 2) {
+    return null;
+  }
+  const [top, second] = candidates;
+  if (!top || !second) {
+    return null;
+  }
+  if (top.userId === triggerUserId) {
+    return null;
+  }
+  const topMax = top.maxValue;
+  if (!Number.isFinite(topMax) || topMax <= top.amount) {
+    return null;
+  }
+  const secondMax = second.maxValue;
+  if (!Number.isFinite(secondMax)) {
+    return null;
+  }
+  const target = Math.min(topMax, secondMax + Math.max(0, minIncrement));
+  if (target <= top.amount + 1e-9) {
+    return null;
+  }
+  return {
+    userId: top.userId,
+    amount: normalizeBidAmount(target),
+    maxAmount: topMax
+  };
+}
+
+function normalizeBidAmount(value: number): number {
+  const scaled = Math.round(value * 1e8);
+  return scaled / 1e8;
+}
+
+function buildOutbidIdempotencyKey(
+  auctionId: string,
+  roundIndex: number,
+  userId: string,
+  bidId: string
+): string {
+  return `outbid:${auctionId}:${roundIndex}:${userId}:${bidId}`;
+}
+
+function buildAutoBidIdempotencyKey(
+  auctionId: string,
+  userId: string,
+  triggerBidId: string
+): string {
+  return `auto:${auctionId}:${userId}:${triggerBidId}`;
+}
+
+function buildReplayUrl(
+  baseUrl: string | undefined,
+  auctionId: string,
+  roundIndex: number
+): string | null {
+  if (!baseUrl) {
+    return null;
+  }
+  const normalized = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
+  return `${normalized}/?replay=${auctionId}:${roundIndex}`;
 }
 
 function buildHoldMetadata(
@@ -827,14 +1122,18 @@ function buildHoldMetadata(
   auctionId: string,
   roundIndex: number,
   bidId: string,
-  bidAmount: number
+  bidAmount: number,
+  maxAmount: number,
+  origin: BidDocument["origin"] | undefined
 ): Record<string, unknown> {
   const merged = metadata ? { ...metadata } : {};
   const entries: Array<[string, unknown]> = [
     ["auctionId", auctionId],
     ["roundIndex", roundIndex],
     ["bidId", bidId],
-    ["bidAmount", bidAmount]
+    ["bidAmount", bidAmount],
+    ["maxAmount", maxAmount],
+    ["bidOrigin", origin ?? "manual"]
   ];
 
   for (const [key, value] of entries) {

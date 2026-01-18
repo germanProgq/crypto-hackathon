@@ -1,7 +1,10 @@
 // Purpose: finalize closed auction rounds with verified winners and ledger settlement.
+import { randomUUID } from "node:crypto";
 import { ObjectId, type AnyBulkWriteOperation, type WithId } from "mongodb";
 import type { ServiceDependencies } from "../../shared/service.js";
 import { runMongoTransaction } from "../../shared/storage/mongoTransaction.js";
+import { buildMerkleRootFromPayloads } from "../../shared/crypto/merkle.js";
+import type { RoundProofPayload, SignedRoundProof } from "../../shared/auctionProof.js";
 import {
   mongoCollections,
   type AuctionDocument,
@@ -80,6 +83,12 @@ type RoundFinalizationSummary = {
   roundIndex: number;
   winnerCount: number;
   settlementCompleted: boolean;
+};
+
+type DeliveryReceipt = {
+  deliveryRef: string;
+  deliveryType?: DeliveryRecordDocument["deliveryType"];
+  deliveryPayload?: Record<string, unknown> | null;
 };
 
 type HoldSettlementAction = "capture" | "release";
@@ -189,6 +198,7 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
     if (!existingResult) {
       winners = await resolveRoundWinners(auction, roundIndex);
       const now = new Date();
+      const proof = await buildRoundProof(auction, roundState, roundIndex, winners, now);
       await roundResults.updateOne(
         { auctionId, roundIndex },
         {
@@ -196,6 +206,9 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
             auctionId,
             roundIndex,
             winners,
+            merkleRoot: proof.merkleRoot,
+            merkleCount: proof.merkleCount,
+            proof: proof.signedProof ?? undefined,
             finalizedAt: now,
             createdAt: now
           }
@@ -203,11 +216,30 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
         { upsert: true }
       );
       await markRoundFinalized(auctionId, roundIndex, now);
+    } else if (!existingResult.merkleRoot || !existingResult.proof) {
+      const finalizedAt = existingResult.finalizedAt ?? new Date();
+      const proof = await buildRoundProof(
+        auction,
+        roundState,
+        roundIndex,
+        winners,
+        finalizedAt
+      );
+      await roundResults.updateOne(
+        { auctionId, roundIndex },
+        {
+          $set: {
+            merkleRoot: proof.merkleRoot,
+            merkleCount: proof.merkleCount,
+            proof: proof.signedProof ?? undefined
+          }
+        }
+      );
     }
 
     if (!settlementCompleted) {
       const activeBids = await loadActiveBids(auctionId);
-      const deliveryRefs = await ensureDeliveryRecords(auctionId, roundIndex, winners);
+      const deliveryRefs = await ensureDeliveryRecords(auction, roundIndex, winners);
       const winnerUsers = new Set(winners.map((winner) => winner.userId));
       const winnerUserIds = Array.from(winnerUsers);
       const loserUserIds = Array.from(
@@ -345,6 +377,105 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
     }));
   }
 
+  async function buildRoundProof(
+    auction: WithId<AuctionDocument>,
+    roundState: WithId<AuctionRoundStateDocument>,
+    roundIndex: number,
+    winners: RoundResultDocument["winners"],
+    finalizedAt: Date
+  ): Promise<{ merkleRoot: string; merkleCount: number; signedProof: SignedRoundProof | null }> {
+    const roundConfig = findRoundConfig(auction.rounds, roundIndex);
+    const bidPayloads = await loadRoundBidsForProof(auction._id, roundIndex);
+    const { root } = buildMerkleRootFromPayloads(bidPayloads);
+    const payload: RoundProofPayload = {
+      auctionId: auction._id.toHexString(),
+      roundIndex,
+      allocationSize: roundConfig.allocationSize,
+      roundStartAt: roundConfig.startAt.toISOString(),
+      roundEndAt: roundConfig.endAt.toISOString(),
+      effectiveEndAt: roundState.effectiveEndAt?.toISOString() ?? null,
+      extensionCount: roundState.extensionCount ?? null,
+      antiSniping: {
+        triggerWindowSeconds: roundConfig.antiSniping.triggerWindowSeconds,
+        extensionSeconds: roundConfig.antiSniping.extensionSeconds,
+        maxExtensions: roundConfig.antiSniping.maxExtensions
+      },
+      bidsRoot: root,
+      bidsCount: bidPayloads.length,
+      winners: winners.map((winner) => ({
+        userId: winner.userId,
+        bidId: winner.bidId.toHexString(),
+        amount: winner.amount,
+        rank: winner.rank
+      })),
+      finalizedAt: finalizedAt.toISOString()
+    };
+
+    let signedProof: SignedRoundProof | null = null;
+    try {
+      signedProof = await signRoundProof(payload);
+    } catch (error) {
+      deps.logger.warn({ err: error }, "Failed to sign round proof");
+    }
+
+    return { merkleRoot: root, merkleCount: bidPayloads.length, signedProof };
+  }
+
+  async function loadRoundBidsForProof(
+    auctionId: ObjectId,
+    roundIndex: number
+  ): Promise<Array<Record<string, unknown>>> {
+    const docs = await bids
+      .find({ auctionId, roundIndex })
+      .sort({ createdAt: 1, _id: 1 })
+      .project<Pick<WithId<BidDocument>, "_id" | "userId" | "amount" | "maxAmount" | "createdAt" | "origin">>({
+        _id: 1,
+        userId: 1,
+        amount: 1,
+        maxAmount: 1,
+        createdAt: 1,
+        origin: 1
+      })
+      .toArray();
+
+    return docs.map((bid) => ({
+      bidId: bid._id.toHexString(),
+      userId: bid.userId,
+      amount: bid.amount,
+      maxAmount: bid.maxAmount ?? null,
+      createdAt: bid.createdAt.toISOString(),
+      origin: bid.origin ?? "manual"
+    }));
+  }
+
+  async function signRoundProof(payload: RoundProofPayload): Promise<SignedRoundProof | null> {
+    const signerUrl = deps.config.crypto.signerUrl.trim();
+    const signerToken = deps.config.crypto.signerToken.trim();
+    if (!signerUrl || signerUrl.toLowerCase() === "mock") {
+      return null;
+    }
+    if (!signerToken) {
+      throw new Error("Signer token is required to sign round proofs.");
+    }
+    const url = `${normalizeBaseUrl(signerUrl)}/signer/sign-round-result`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-signer-token": signerToken
+      },
+      body: JSON.stringify({ payload })
+    });
+    if (!response.ok) {
+      throw new Error(`Round proof signer failed with ${response.status}.`);
+    }
+    const json = (await response.json()) as { signedPayload?: SignedRoundProof };
+    if (!json?.signedPayload) {
+      throw new Error("Round proof signer returned an invalid payload.");
+    }
+    return json.signedPayload;
+  }
+
   async function loadActiveBids(
     auctionId: ObjectId
   ): Promise<Array<Pick<WithId<BidDocument>, "_id" | "userId" | "amount" | "createdAt">>> {
@@ -451,33 +582,39 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
   }
 
   async function ensureDeliveryRecords(
-    auctionId: ObjectId,
+    auction: WithId<AuctionDocument>,
     roundIndex: number,
     winners: RoundResultDocument["winners"]
-  ): Promise<Map<string, string>> {
-    const deliveryRefByUser = new Map<string, string>();
+  ): Promise<Map<string, DeliveryReceipt>> {
+    const deliveryRefByUser = new Map<string, DeliveryReceipt>();
     if (winners.length === 0) {
       return deliveryRefByUser;
     }
 
     const now = new Date();
+    const deliveryType = resolveDeliveryType(auction);
     const operations = winners.map((winner) => {
-      const deliveryRef = buildDeliveryRef(
-        auctionId.toHexString(),
+      const receipt = buildDeliveryReceipt(
+        deliveryType,
+        auction._id.toHexString(),
         roundIndex,
         winner.userId,
         winner.rank
       );
-      deliveryRefByUser.set(winner.userId, deliveryRef);
+      deliveryRefByUser.set(winner.userId, receipt);
       return {
         updateOne: {
-          filter: { auctionId, roundIndex, userId: winner.userId },
+          filter: { auctionId: auction._id, roundIndex, userId: winner.userId },
           update: {
             $setOnInsert: {
-              auctionId,
+              auctionId: auction._id,
               roundIndex,
               userId: winner.userId,
-              deliveryRef,
+              deliveryRef: receipt.deliveryRef,
+              deliveryType: receipt.deliveryType,
+              deliveryPayload: receipt.deliveryPayload ?? undefined,
+              status: "delivered" as const,
+              deliveredAt: now,
               createdAt: now
             }
           },
@@ -752,7 +889,7 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
     roundIndex: number,
     activeBids: Array<Pick<WithId<BidDocument>, "_id" | "userId" | "amount" | "createdAt">>,
     winners: RoundResultDocument["winners"],
-    deliveryRefs: Map<string, string>
+    deliveryRefs: Map<string, DeliveryReceipt>
   ): Promise<void> {
     const winnerByUser = new Map(
       winners.map((winner) => [winner.userId, winner] as const)
@@ -766,7 +903,12 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
       const operations: Array<AnyBulkWriteOperation<NotificationQueueDocument>> = batch.map(
         ([userId, bid]) => {
         const winner = winnerByUser.get(userId);
-        const deliveryRef = winner ? deliveryRefs.get(userId) ?? null : null;
+        const delivery = winner ? deliveryRefs.get(userId) ?? null : null;
+        const replayUrl = buildReplayUrl(
+          deps.config.web.publicUrl,
+          auction._id.toHexString(),
+          roundIndex
+        );
         const payload: Record<string, unknown> = {
           auctionId: auction._id.toHexString(),
           roundIndex,
@@ -775,7 +917,10 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
           amount: bid.amount,
           bidId: bid._id.toHexString(),
           rank: winner?.rank ?? null,
-          deliveryRef
+          deliveryRef: delivery?.deliveryRef ?? null,
+          deliveryType: delivery?.deliveryType ?? null,
+          deliveryPayload: delivery?.deliveryPayload ?? null,
+          replayUrl
         };
         const idempotencyKey = buildNotificationIdempotencyKey(
           auction._id.toHexString(),
@@ -1000,6 +1145,68 @@ function buildDeliveryRef(
   rank: number
 ): string {
   return `delivery:${auctionId}:${roundIndex}:${userId}:${rank}`;
+}
+
+function resolveDeliveryType(
+  auction: WithId<AuctionDocument>
+): DeliveryRecordDocument["deliveryType"] {
+  return auction.deliveryType ?? "access_code";
+}
+
+function buildDeliveryReceipt(
+  deliveryType: DeliveryRecordDocument["deliveryType"],
+  auctionId: string,
+  roundIndex: number,
+  userId: string,
+  rank: number
+): DeliveryReceipt {
+  const reference = buildDeliveryRef(auctionId, roundIndex, userId, rank);
+  switch (deliveryType) {
+    case "telegram_role": {
+      const token = `ROLE-${buildShortToken()}`;
+      return {
+        deliveryRef: token,
+        deliveryType,
+        deliveryPayload: { token, role: "VIP", reference }
+      };
+    }
+    case "nft_mint": {
+      const mintId = `NFT-${buildShortToken()}`;
+      return {
+        deliveryRef: mintId,
+        deliveryType,
+        deliveryPayload: { mintId, reference }
+      };
+    }
+    default: {
+      const code = `CODE-${buildShortToken()}`;
+      return {
+        deliveryRef: code,
+        deliveryType: "access_code",
+        deliveryPayload: { code, reference }
+      };
+    }
+  }
+}
+
+function buildShortToken(): string {
+  return randomUUID().replace(/-/g, "").slice(0, 10).toUpperCase();
+}
+
+function buildReplayUrl(
+  baseUrl: string | undefined,
+  auctionId: string,
+  roundIndex: number
+): string | null {
+  if (!baseUrl) {
+    return null;
+  }
+  const base = normalizeBaseUrl(baseUrl);
+  return `${base}/?replay=${auctionId}:${roundIndex}`;
+}
+
+function normalizeBaseUrl(value: string): string {
+  return value.endsWith("/") ? value.slice(0, -1) : value;
 }
 
 function rankingsMatch(

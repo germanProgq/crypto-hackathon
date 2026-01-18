@@ -52,6 +52,11 @@ export interface AppConfig {
   web: {
     allowedOrigins: string[];
     allowDemoUser: boolean;
+    publicUrl?: string;
+  };
+  bids: {
+    minIncrement: number;
+    proxyAutoRaise: boolean;
   };
   crypto: {
     supportedCurrencies: string[];
@@ -289,6 +294,13 @@ function createEnvSchema(defaultPort: number) {
     TELEGRAM_WEBAPP_MAX_AGE_SECONDS: z.coerce.number().int().min(0).default(86400),
     WEB_ALLOWED_ORIGINS: z.string().default(""),
     WEB_ALLOW_DEMO_USER: z.string().optional(),
+    WEB_PUBLIC_URL: z
+      .string()
+      .default("")
+      .transform((value) => value.trim())
+      .refine((value) => isOptionalHttpUrl(value), "WEB_PUBLIC_URL must be http(s) or empty"),
+    BID_MIN_INCREMENT: z.coerce.number().min(0).default(0.01),
+    BID_PROXY_AUTO_RAISE: z.string().optional(),
     CRYPTO_SUPPORTED_CURRENCIES: z.string().default("USDT"),
     CRYPTO_WALLET_STRATEGY: z.enum(walletStrategyValues).default("address_pool"),
     CRYPTO_OBSERVER_URL: z
@@ -384,6 +396,8 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
   const allowDemoUser =
     parsed.NODE_ENV !== "production" &&
     (parseOptionalBoolean(parsed.WEB_ALLOW_DEMO_USER) ?? true);
+  const webPublicUrl = parsed.WEB_PUBLIC_URL.trim();
+  const proxyAutoRaise = parseOptionalBoolean(parsed.BID_PROXY_AUTO_RAISE) ?? true;
 
   if (!supportedLocales.includes(parsed.I18N_DEFAULT_LOCALE)) {
     throw new Error("I18N_DEFAULT_LOCALE must be included in I18N_SUPPORTED_LOCALES.");
@@ -504,7 +518,12 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
     },
     web: {
       allowedOrigins: webAllowedOrigins,
-      allowDemoUser
+      allowDemoUser,
+      publicUrl: webPublicUrl.length > 0 ? webPublicUrl : undefined
+    },
+    bids: {
+      minIncrement: parsed.BID_MIN_INCREMENT,
+      proxyAutoRaise
     },
     crypto: {
       supportedCurrencies,

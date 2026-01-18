@@ -3,10 +3,10 @@ import { createPrivateKey, createPublicKey, sign, timingSafeEqual } from "node:c
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { loadConfig, type AppConfig } from "../../shared/config.js";
+import { canonicalize } from "../../shared/crypto/canonicalize.js";
 import { registerHealthRoutes } from "../../shared/http/health.js";
 import { createServer } from "../../shared/http/server.js";
 import { createLogger } from "../../shared/logger.js";
-import type { WithdrawalSigningPayload } from "../crypto-gateway/types.js";
 
 const payloadSchema = z.object({
   withdrawalId: z.string().min(1),
@@ -16,6 +16,34 @@ const payloadSchema = z.object({
   toAddress: z.string().min(1),
   requestedAt: z.string().min(1),
   memo: z.string().min(1).optional()
+});
+
+const roundProofSchema = z.object({
+  payload: z.object({
+    auctionId: z.string().min(1),
+    roundIndex: z.number().int().nonnegative(),
+    allocationSize: z.number().int().nonnegative(),
+    roundStartAt: z.string().min(1),
+    roundEndAt: z.string().min(1),
+    effectiveEndAt: z.string().min(1).nullable().optional(),
+    extensionCount: z.number().int().nonnegative().nullable().optional(),
+    antiSniping: z.object({
+      triggerWindowSeconds: z.number().int().nonnegative(),
+      extensionSeconds: z.number().int().nonnegative(),
+      maxExtensions: z.number().int().nonnegative()
+    }),
+    bidsRoot: z.string().min(1),
+    bidsCount: z.number().int().nonnegative(),
+    winners: z.array(
+      z.object({
+        userId: z.string().min(1),
+        bidId: z.string().min(1),
+        amount: z.number().positive().finite(),
+        rank: z.number().int().positive()
+      })
+    ),
+    finalizedAt: z.string().min(1)
+  })
 });
 
 const kmsResponseSchema = z.object({
@@ -85,6 +113,21 @@ app.post("/signer/sign", async (request, reply) => {
   }
 });
 
+app.post("/signer/sign-round-result", async (request, reply) => {
+  const body = roundProofSchema.safeParse(request.body);
+  if (!body.success) {
+    return reply.code(400).send({ error: "invalid_request", message: "Invalid payload." });
+  }
+
+  const payload = body.data.payload;
+  try {
+    const signedPayload = await signPayload(payload, keyring);
+    return reply.send({ signedPayload });
+  } catch (error) {
+    return handleSignerError(reply, error);
+  }
+});
+
 void start();
 
 async function start(): Promise<void> {
@@ -114,7 +157,7 @@ async function start(): Promise<void> {
   }
 }
 
-async function signPayload(payload: WithdrawalSigningPayload, ring: SigningKeyring) {
+async function signPayload(payload: unknown, ring: SigningKeyring) {
   const canonical = canonicalize(payload);
   const signatures = await Promise.all(
     ring.signers.map((signer) => signer.sign(canonical))
@@ -135,21 +178,6 @@ async function signPayload(payload: WithdrawalSigningPayload, ring: SigningKeyri
     signedAt: new Date().toISOString(),
     cosignatures: cosignatures.length > 0 ? cosignatures : undefined
   };
-}
-
-function canonicalize(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
-  }
-
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => canonicalize(entry)).join(",")}]`;
-  }
-
-  const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).sort();
-  const entries = keys.map((key) => `${JSON.stringify(key)}:${canonicalize(record[key])}`);
-  return `{${entries.join(",")}}`;
 }
 
 function loadPrivateKey(value: string) {

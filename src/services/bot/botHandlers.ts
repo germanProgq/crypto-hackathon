@@ -8,6 +8,7 @@ import {
   mongoCollections,
   type AuctionDocument,
   type AuctionStatus,
+  type AuctionWatchlistDocument,
   type BidDocument
 } from "../../shared/storage/mongoSchemas.js";
 import {
@@ -1085,6 +1086,37 @@ function parseOptionalInteger(text: string, fallback: number): number | null {
   return value;
 }
 
+function parseOptionalNumber(text: string): number | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const value = Number(trimmed);
+  if (!Number.isFinite(value)) {
+    return undefined;
+  }
+  return value;
+}
+
+function parseBidInput(text: string): { amount: number; maxAmount?: number } | null {
+  const parts = text.trim().split(/[\\/\\s]+/).filter(Boolean);
+  if (parts.length === 0) {
+    return null;
+  }
+  const amount = Number(parts[0]);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return null;
+  }
+  if (parts.length === 1) {
+    return { amount };
+  }
+  const maxAmount = Number(parts[1]);
+  if (!Number.isFinite(maxAmount) || maxAmount < amount) {
+    return null;
+  }
+  return { amount, maxAmount };
+}
+
 function parseOptionalToken(text: string): string | null {
   const trimmed = text.trim();
   const normalized = trimmed.toLowerCase();
@@ -1343,11 +1375,11 @@ async function handleBidAmountInput(
   context: BotContext,
   text: string
 ): Promise<void> {
-  const amount = parseFloat(text);
+  const parsed = parseBidInput(text);
   const auctionId = context.state?.data.auctionId as string;
   const currency = context.state?.data.currency as string;
 
-  if (!Number.isFinite(amount) || amount <= 0) {
+  if (!parsed || !Number.isFinite(parsed.amount) || parsed.amount <= 0) {
     await sendMessage(deps, context.chatId, t("bot.bid.invalidAmount", context.locale));
     return;
   }
@@ -1355,15 +1387,22 @@ async function handleBidAmountInput(
   await clearConversationState(deps, context.userId);
 
   const confirmation = t("bot.bid.confirmation", context.locale, {
-    amount: formatAmount(amount),
+    amount: formatAmount(parsed.amount),
     currency
   });
+  const proxyLine =
+    parsed.maxAmount !== undefined
+      ? t("bot.bid.proxyMax", context.locale, {
+          maxAmount: formatAmount(parsed.maxAmount),
+          currency
+        })
+      : null;
   const keyboard = {
     inline_keyboard: [
       [
         {
           text: t("bot.bid.confirmYes", context.locale),
-          callback_data: `bid:confirm:${auctionId}:${amount}`
+          callback_data: `bid:confirm:${auctionId}:${parsed.amount}:${parsed.maxAmount ?? ""}`
         }
       ],
       [
@@ -1375,7 +1414,8 @@ async function handleBidAmountInput(
     ]
   };
 
-  await sendMessage(deps, context.chatId, confirmation, { reply_markup: keyboard });
+  const message = proxyLine ? `${confirmation}\n${proxyLine}` : confirmation;
+  await sendMessage(deps, context.chatId, message, { reply_markup: keyboard });
 }
 
 async function handleCallbackData(
@@ -1411,7 +1451,21 @@ async function handleCallbackData(
     if (parts[1] === "start") {
       await handleStartBid(deps, context, parts[2] ?? "");
     } else if (parts[1] === "confirm") {
-      await handleConfirmBid(deps, context, parts[2] ?? "", parseFloat(parts[3] ?? "0"));
+      await handleConfirmBid(
+        deps,
+        context,
+        parts[2] ?? "",
+        parseFloat(parts[3] ?? "0"),
+        parseOptionalNumber(parts[4] ?? "")
+      );
+    }
+  } else if (parts[0] === "rebid") {
+    await handleRebid(deps, context, parts[1] ?? "", parseFloat(parts[2] ?? "0"));
+  } else if (parts[0] === "watch") {
+    if (parts[1] === "add") {
+      await handleWatchUpdate(deps, context, parts[2] ?? "", true);
+    } else if (parts[1] === "remove") {
+      await handleWatchUpdate(deps, context, parts[2] ?? "", false);
     }
   } else if (parts[0] === "withdraw") {
     if (parts[1] === "confirm") {
@@ -1454,7 +1508,11 @@ async function handleAuctionDetails(
   }
 
   const bids = deps.mongo.db.collection<BidDocument>(mongoCollections.bids);
+  const watchlist = deps.mongo.db.collection<AuctionWatchlistDocument>(
+    mongoCollections.auctionWatchlist
+  );
   const userBid = await bids.findOne({ auctionId, userId: context.userId, active: true });
+  const watching = await watchlist.findOne({ auctionId, userId: context.userId });
 
   let snapshot: AuctionSnapshotCache | null = null;
   try {
@@ -1561,6 +1619,17 @@ async function handleAuctionDetails(
     }
   }
 
+  const watchLabel = watching
+    ? t("bot.watch.unwatch", context.locale)
+    : t("bot.watch.watch", context.locale);
+  const watchAction = watching ? "remove" : "add";
+  buttons.push([
+    {
+      text: watchLabel,
+      callback_data: `watch:${watchAction}:${auctionIdStr}`
+    }
+  ]);
+
   buttons.push([
     {
       text: t("bot.auction.backToList", context.locale),
@@ -1620,7 +1689,8 @@ async function handleConfirmBid(
   deps: ServiceDependencies,
   context: BotContext,
   auctionIdStr: string,
-  amount: number
+  amount: number,
+  maxAmount?: number
 ): Promise<void> {
   const processingMsg = t("bot.bid.processing", context.locale);
   await sendMessage(deps, context.chatId, processingMsg);
@@ -1642,6 +1712,7 @@ async function handleConfirmBid(
       auctionId,
       userId: context.userId,
       amount,
+      maxAmount,
       idempotencyKey: randomUUID(),
       audit: { source: "telegram", actorId: context.userId },
       ip: `telegram:${context.userId}`
@@ -1657,7 +1728,17 @@ async function handleConfirmBid(
       currency
     });
 
-    await sendMessage(deps, context.chatId, `${success}\n\n${successAmount}\n${successHeld}`);
+    const proxyLine =
+      maxAmount !== undefined
+        ? t("bot.bid.proxyMax", context.locale, {
+            maxAmount: formatAmount(maxAmount),
+            currency
+          })
+        : null;
+    const message = proxyLine
+      ? `${success}\n\n${successAmount}\n${proxyLine}\n${successHeld}`
+      : `${success}\n\n${successAmount}\n${successHeld}`;
+    await sendMessage(deps, context.chatId, message);
   } catch (error) {
     if (error instanceof BidError) {
       await sendMessage(deps, context.chatId, formatBidErrorMessage(error, context.locale));
@@ -1677,6 +1758,50 @@ async function handleConfirmBid(
         : t("bot.error.tryAgain", context.locale);
     await sendMessage(deps, context.chatId, fallback);
   }
+}
+
+async function handleRebid(
+  deps: ServiceDependencies,
+  context: BotContext,
+  auctionIdStr: string,
+  amount: number
+): Promise<void> {
+  if (!ObjectId.isValid(auctionIdStr) || !Number.isFinite(amount) || amount <= 0) {
+    await sendMessage(deps, context.chatId, t("bot.bid.invalidAmount", context.locale));
+    return;
+  }
+  await handleConfirmBid(deps, context, auctionIdStr, amount);
+}
+
+async function handleWatchUpdate(
+  deps: ServiceDependencies,
+  context: BotContext,
+  auctionIdStr: string,
+  enable: boolean
+): Promise<void> {
+  if (!ObjectId.isValid(auctionIdStr)) {
+    await sendMessage(deps, context.chatId, t("errors.notFound", context.locale));
+    return;
+  }
+  const watchlist = deps.mongo.db.collection<AuctionWatchlistDocument>(
+    mongoCollections.auctionWatchlist
+  );
+  const auctionId = ObjectId.createFromHexString(auctionIdStr);
+  const now = new Date();
+  if (enable) {
+    await watchlist.updateOne(
+      { userId: context.userId, auctionId },
+      {
+        $setOnInsert: { userId: context.userId, auctionId, createdAt: now },
+        $set: { updatedAt: now, notifyOutbid: true }
+      },
+      { upsert: true }
+    );
+    await sendMessage(deps, context.chatId, t("bot.watch.added", context.locale));
+    return;
+  }
+  await watchlist.deleteOne({ userId: context.userId, auctionId });
+  await sendMessage(deps, context.chatId, t("bot.watch.removed", context.locale));
 }
 
 async function handleConfirmWithdraw(

@@ -34,12 +34,22 @@ The codebase favors explicit validation, strict schemas, and careful concurrency
 - All client-visible state is derived from canonical Mongo records and cached safely in Redis.
 - All state transitions are idempotent and safe to retry.
 
+User-facing highlights:
+- Verifiable fairness: signed round results + Merkle root of bids with replay endpoints.
+- Proxy bidding (max bid/auto-raise) with escrowed max holds.
+- Live replay timeline with bid streaks, anti-sniping extensions, and top-K shifts.
+- Watchlist + outbid alerts with one-tap rebid in the bot.
+- Instant delivery receipts for winners (access code, Telegram role, NFT mint).
+
 ## Core mechanics
 - Multi-round allocation: each round selects winners, non-winners carry forward.
 - Anti-sniping: bids in the final window extend the round with hard caps.
 - Ledger-first balances: holds, captures, and releases are append-only entries.
 - Idempotency: all money-moving operations use idempotency keys.
 - Deterministic ranking: amount desc, createdAt asc, bid id asc.
+- Proxy bidding: max bid escrow + automatic raises.
+- Verifiable rounds: signed proofs + Merkle roots for bid sets.
+- Delivery receipts: per-winner proof of fulfillment.
 
 ## Architecture
 The system is split into specialized services so that each domain can scale independently and so
@@ -89,6 +99,24 @@ External dependencies:
 - A hold is placed in the ledger for the bid amount.
 - Bid is stored and ranking is updated in Redis sorted sets.
 - Realtime event is emitted for auction bids and active bids per user.
+
+### Proxy bidding (max bid / auto-raise)
+- Users can submit a max bid to auto-raise above competitors.
+- Ledger holds escrow the delta to the new max bid.
+- Auto-raise bids are recorded with origin metadata.
+
+### Round verification and replay
+- Round results are signed with a Merkle root of all bids.
+- Replay endpoints expose full bid timelines, anti-sniping extensions, and winners.
+- Verification compares the signed payload to the stored round data.
+
+### Watchlist and outbid alerts
+- Users can watch auctions and opt into outbid alerts.
+- Outbid alerts include replay links and one-tap rebid actions in the bot.
+
+### Delivery receipts
+- Winners receive delivery receipts (access code, Telegram role token, or NFT mint ref).
+- Delivery receipts are available in bot messages and the web UI.
 
 ### Round progression and settlement (workers)
 - Auction round scheduler moves rounds from scheduled to live to closed based on time and
@@ -187,6 +215,10 @@ The config is validated at startup; missing required values cause a hard error.
 - `RATE_LIMIT_AUCTION_USER_PER_SECOND`: per-user-per-auction (default 3)
 - `RATE_LIMIT_IP_PER_SECOND`: per-IP (default 20)
 
+### Bidding
+- `BID_MIN_INCREMENT`: minimum bid increment (default 0)
+- `BID_PROXY_AUTO_RAISE`: auto-raise increment when proxy bidding (default 0)
+
 ### Retention
 - `RETENTION_BIDS_DAYS`: TTL for bids
 - `RETENTION_LEDGER_DAYS`: TTL for ledger entries
@@ -204,6 +236,7 @@ The config is validated at startup; missing required values cause a hard error.
 ### Web
 - `WEB_ALLOWED_ORIGINS`: comma-separated list of allowed origins
 - `WEB_ALLOW_DEMO_USER`: enable demo auth in non-production
+- `WEB_PUBLIC_URL`: public base URL used for replay/share links
 
 ### Crypto general
 - `CRYPTO_SUPPORTED_CURRENCIES`: comma-separated currency list

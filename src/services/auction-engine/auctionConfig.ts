@@ -22,6 +22,7 @@ export const auctionConfigSchema = z
     title: z.string().min(1),
     description: z.string().optional(),
     currency: z.string().min(1),
+    deliveryType: z.enum(["access_code", "telegram_role", "nft_mint"]).optional(),
     startsAt: z.coerce.date(),
     endsAt: z.coerce.date(),
     rounds: z.array(auctionRoundConfigSchema).min(1)

@@ -1,7 +1,7 @@
 // Web UI routes and static file serving.
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import websocket from "@fastify/websocket";
-import { randomUUID } from "node:crypto";
+import { createPublicKey, randomUUID, verify } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,12 +11,17 @@ import { resolveLocale, type Catalog } from "../../shared/i18n/index.js";
 import enCatalog from "../../shared/i18n/en.js";
 import ruCatalog from "../../shared/i18n/ru.js";
 import type { ServiceDependencies } from "../../shared/service.js";
+import { canonicalize } from "../../shared/crypto/canonicalize.js";
+import { buildMerkleRootFromPayloads } from "../../shared/crypto/merkle.js";
+import type { RoundProofPayload, SignedRoundProof } from "../../shared/auctionProof.js";
 import {
   mongoCollections,
+  type AuctionWatchlistDocument,
   type AuctionDocument,
   type AuctionRoundStatus,
   type AuctionStatus,
   type BidDocument,
+  type DeliveryRecordDocument,
   type RoundResultDocument
 } from "../../shared/storage/mongoSchemas.js";
 import {
@@ -54,6 +59,7 @@ type CreateAuctionBody = {
   title: string;
   description?: string;
   currency?: string;
+  deliveryType?: AuctionDocument["deliveryType"];
   rounds?: number;
   allocationSize?: number;
   roundDurationSeconds?: number;
@@ -67,6 +73,7 @@ type CreateAuctionBody = {
 
 type BidPlacementBody = {
   amount: number;
+  maxAmount?: number;
   idempotencyKey?: string;
 };
 
@@ -84,6 +91,7 @@ const createAuctionSchema = {
     title: { type: "string", minLength: 1 },
     description: { type: "string" },
     currency: { type: "string", minLength: 1 },
+    deliveryType: { type: "string", enum: ["access_code", "telegram_role", "nft_mint"] },
     rounds: { type: "integer", minimum: 1, maximum: 20 },
     allocationSize: { type: "integer", minimum: 1, maximum: 500 },
     roundDurationSeconds: { type: "integer", minimum: 30, maximum: 7200 },
@@ -107,6 +115,7 @@ const bidPlacementSchema = {
   type: "object",
   properties: {
     amount: { type: "number", exclusiveMinimum: 0 },
+    maxAmount: { type: "number", exclusiveMinimum: 0 },
     idempotencyKey: { type: "string", minLength: 1 }
   },
   required: ["amount"],
@@ -126,6 +135,16 @@ const withdrawalRequestSchema = {
   additionalProperties: false
 } as const;
 
+const watchlistSchema = {
+  type: "object",
+  properties: {
+    auctionId: { type: "string", pattern: "^[a-fA-F0-9]{24}$" },
+    notifyOutbid: { type: "boolean" }
+  },
+  required: ["auctionId"],
+  additionalProperties: false
+} as const;
+
 type AuthenticatedUser = TelegramWebUser & {
   source: "telegram" | "demo";
 };
@@ -140,6 +159,7 @@ type ActiveAuctionPayload = {
   description?: string;
   status: AuctionStatus;
   currency: string;
+  deliveryType?: AuctionDocument["deliveryType"] | null;
   startsAt: Date;
   endsAt: Date;
   currentRoundIndex: number | null;
@@ -159,12 +179,48 @@ type ActiveBidPayload = {
   id: string;
   auctionId: string;
   amount: number;
+  maxAmount?: number | null;
   createdAt: Date;
   roundIndex: number | null;
   roundsCount: number | null;
   auctionTitle: string;
   auctionStatus: AuctionStatus;
   currency: string;
+};
+
+type ReplayBidPayload = {
+  bidId: string;
+  userId: string;
+  amount: number;
+  maxAmount: number | null;
+  createdAt: string;
+  origin: BidDocument["origin"] | null;
+};
+
+type ReplayPayload = {
+  auction: {
+    id: string;
+    title: string;
+    currency: string;
+    deliveryType?: AuctionDocument["deliveryType"] | null;
+  };
+  round: {
+    index: number;
+    allocationSize: number;
+    startAt: string;
+    endAt: string;
+    antiSniping: AuctionDocument["rounds"][number]["antiSniping"];
+  };
+  state: {
+    effectiveEndAt: string | null;
+    extensionCount: number | null;
+    lastBidAt: string | null;
+  };
+  bids: ReplayBidPayload[];
+  winners: RoundResultDocument["winners"] | null;
+  proof: SignedRoundProof | null;
+  merkleRoot: string | null;
+  merkleCount: number | null;
 };
 
 type SocketMessage = string | Buffer | ArrayBuffer | Buffer[];
@@ -195,6 +251,12 @@ export async function registerWebRoutes(
   const bidService = createBidService(deps);
   const bids = deps.mongo.db.collection<BidDocument>(mongoCollections.bids);
   const roundResults = deps.mongo.db.collection<RoundResultDocument>(mongoCollections.roundResults);
+  const watchlist = deps.mongo.db.collection<AuctionWatchlistDocument>(
+    mongoCollections.auctionWatchlist
+  );
+  const deliveryRecords = deps.mongo.db.collection<DeliveryRecordDocument>(
+    mongoCollections.deliveryRecords
+  );
 
   const unsafeMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
@@ -889,6 +951,167 @@ export async function registerWebRoutes(
     return loadActiveBidsForUser(deps, bids, auth.id, limit);
   });
 
+  app.get("/api/watchlist", async (request, reply) => {
+    const auth = requireAuth(request, reply, deps);
+    if (!auth) {
+      return;
+    }
+    const entries = await watchlist
+      .find({ userId: auth.id })
+      .sort({ updatedAt: -1 })
+      .toArray();
+    const auctionIds = entries.map((entry) => entry.auctionId);
+    const auctions = await deps.mongo.db
+      .collection<AuctionDocument>(mongoCollections.auctions)
+      .find({ _id: { $in: auctionIds } })
+      .project({ title: 1, status: 1, currency: 1, deliveryType: 1 })
+      .toArray();
+    const auctionMap = new Map(
+      auctions.map((auction) => [auction._id.toHexString(), auction])
+    );
+    return entries.map((entry) => {
+      const auction = auctionMap.get(entry.auctionId.toHexString());
+      return {
+        auctionId: entry.auctionId.toHexString(),
+        notifyOutbid: entry.notifyOutbid ?? true,
+        updatedAt: entry.updatedAt,
+        auctionTitle: auction?.title ?? "Auction",
+        auctionStatus: auction?.status ?? "draft",
+        currency: auction?.currency ?? "USDT",
+        deliveryType: auction?.deliveryType ?? null
+      };
+    });
+  });
+
+  app.post(
+    "/api/watchlist",
+    { schema: { body: watchlistSchema } },
+    async (request, reply) => {
+      const auth = requireAuth(request, reply, deps);
+      if (!auth) {
+        return;
+      }
+      const body = request.body as { auctionId: string; notifyOutbid?: boolean };
+      if (!ObjectId.isValid(body.auctionId)) {
+        return reply.code(400).send({ error: "invalid_request", message: "Invalid auction id." });
+      }
+      const now = new Date();
+      await watchlist.updateOne(
+        { userId: auth.id, auctionId: new ObjectId(body.auctionId) },
+        {
+          $setOnInsert: { userId: auth.id, auctionId: new ObjectId(body.auctionId), createdAt: now },
+          $set: { updatedAt: now, notifyOutbid: body.notifyOutbid ?? true }
+        },
+        { upsert: true }
+      );
+      return { ok: true };
+    }
+  );
+
+  app.delete("/api/watchlist/:auctionId", async (request, reply) => {
+    const auth = requireAuth(request, reply, deps);
+    if (!auth) {
+      return;
+    }
+    const params = request.params as { auctionId: string };
+    if (!ObjectId.isValid(params.auctionId)) {
+      return reply.code(400).send({ error: "invalid_request", message: "Invalid auction id." });
+    }
+    await watchlist.deleteOne({
+      userId: auth.id,
+      auctionId: new ObjectId(params.auctionId)
+    });
+    return { ok: true };
+  });
+
+  app.get("/api/deliveries", async (request, reply) => {
+    const auth = requireAuth(request, reply, deps);
+    if (!auth) {
+      return;
+    }
+    const deliveries = await deliveryRecords
+      .find({ userId: auth.id })
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .toArray();
+    return deliveries.map((delivery) => ({
+      auctionId: delivery.auctionId.toHexString(),
+      roundIndex: delivery.roundIndex,
+      deliveryRef: delivery.deliveryRef,
+      deliveryType: delivery.deliveryType ?? null,
+      deliveryPayload: delivery.deliveryPayload ?? null,
+      status: delivery.status ?? null,
+      deliveredAt: delivery.deliveredAt ?? null,
+      createdAt: delivery.createdAt
+    }));
+  });
+
+  app.get("/api/auctions/:auctionId/rounds/:roundIndex/replay", async (request, reply) => {
+    const params = request.params as { auctionId: string; roundIndex: string };
+    const parsed = parseRoundParams(params);
+    if (!parsed) {
+      return reply.code(400).send({ error: "invalid_request", message: "Invalid round params." });
+    }
+    const replay = await loadRoundReplayPayload(
+      deps,
+      auctionRepository,
+      bids,
+      roundResults,
+      parsed.auctionId,
+      parsed.roundIndex
+    );
+    if (!replay) {
+      return reply.code(404).send({ error: "not_found", message: "Round not found." });
+    }
+    return { replay };
+  });
+
+  app.get("/api/auctions/:auctionId/rounds/:roundIndex/proof", async (request, reply) => {
+    const params = request.params as { auctionId: string; roundIndex: string };
+    const parsed = parseRoundParams(params);
+    if (!parsed) {
+      return reply.code(400).send({ error: "invalid_request", message: "Invalid round params." });
+    }
+    const result = await roundResults.findOne({
+      auctionId: parsed.auctionId,
+      roundIndex: parsed.roundIndex
+    });
+    if (!result) {
+      return reply.code(404).send({ error: "not_found", message: "Round proof missing." });
+    }
+    return {
+      auctionId: parsed.auctionId.toHexString(),
+      roundIndex: parsed.roundIndex,
+      winners: result.winners,
+      merkleRoot: result.merkleRoot ?? null,
+      merkleCount: result.merkleCount ?? null,
+      proof: result.proof ?? null
+    };
+  });
+
+  app.get("/api/auctions/:auctionId/rounds/:roundIndex/verify", async (request, reply) => {
+    const params = request.params as { auctionId: string; roundIndex: string };
+    const parsed = parseRoundParams(params);
+    if (!parsed) {
+      return reply.code(400).send({ error: "invalid_request", message: "Invalid round params." });
+    }
+    const result = await roundResults.findOne({
+      auctionId: parsed.auctionId,
+      roundIndex: parsed.roundIndex
+    });
+    if (!result) {
+      return reply.code(404).send({ error: "not_found", message: "Round proof missing." });
+    }
+    const verification = await verifyRoundProof(
+      auctionRepository,
+      bids,
+      result,
+      parsed.auctionId,
+      parsed.roundIndex
+    );
+    return verification;
+  });
+
   app.post(
     "/api/auctions",
     { schema: { body: createAuctionSchema } },
@@ -926,6 +1149,7 @@ export async function registerWebRoutes(
         title: body.title,
         status,
         currency: body.currency ?? "USDT",
+        deliveryType: body.deliveryType ?? undefined,
         startsAt: startAt,
         endsAt,
         rounds,
@@ -982,6 +1206,7 @@ export async function registerWebRoutes(
       description: auction.description,
       status: auction.status,
       currency: auction.currency,
+      deliveryType: auction.deliveryType ?? null,
       startsAt: auction.startsAt,
       endsAt: auction.endsAt,
       rounds: auction.rounds
@@ -1041,6 +1266,7 @@ export async function registerWebRoutes(
           auctionId: new ObjectId(params.auctionId),
           userId,
           amount: body.amount,
+          maxAmount: body.maxAmount,
           idempotencyKey: body.idempotencyKey ?? randomUUID(),
           audit,
           ip: request.ip
@@ -1053,9 +1279,11 @@ export async function registerWebRoutes(
             roundIndex: result.bid.roundIndex ?? null,
             userId: result.bid.userId,
             amount: result.bid.amount,
+            maxAmount: result.bid.maxAmount ?? null,
             createdAt: result.bid.createdAt,
             idempotencyKey: result.bid.idempotencyKey,
-            active: result.bid.active
+            active: result.bid.active,
+            origin: result.bid.origin ?? null
           },
           balance: result.balance,
           roundState: {
@@ -1579,6 +1807,7 @@ async function loadActiveAuctions(
     description: auction.description,
     status: auction.status,
     currency: auction.currency,
+    deliveryType: auction.deliveryType ?? null,
     startsAt: auction.startsAt,
     endsAt: auction.endsAt,
     currentRoundIndex: auction.currentRoundIndex ?? null,
@@ -1635,6 +1864,7 @@ async function loadActiveBidsForUser(
       id: bid._id.toHexString(),
       auctionId: bid.auctionId.toHexString(),
       amount: bid.amount,
+      maxAmount: bid.maxAmount ?? null,
       createdAt: bid.createdAt,
       roundIndex: bid.roundIndex ?? auction?.currentRoundIndex ?? null,
       roundsCount: auction?.rounds?.length ?? null,
@@ -1765,6 +1995,216 @@ async function loadAuctionBidsPayload(
       amount: bid.amount,
       createdAt: bid.createdAt
     }));
+}
+
+function parseRoundParams(params: {
+  auctionId?: string;
+  roundIndex?: string;
+}): { auctionId: ObjectId; roundIndex: number } | null {
+  if (!params.auctionId || !ObjectId.isValid(params.auctionId)) {
+    return null;
+  }
+  const roundIndex = Number(params.roundIndex);
+  if (!Number.isInteger(roundIndex) || roundIndex < 0) {
+    return null;
+  }
+  return { auctionId: new ObjectId(params.auctionId), roundIndex };
+}
+
+async function loadRoundReplayPayload(
+  deps: ServiceDependencies,
+  auctionRepository: ReturnType<typeof createAuctionRepository>,
+  bids: Collection<BidDocument>,
+  roundResults: Collection<RoundResultDocument>,
+  auctionId: ObjectId,
+  roundIndex: number
+): Promise<ReplayPayload | null> {
+  const auction = await auctionRepository.getAuctionById(auctionId);
+  if (!auction) {
+    return null;
+  }
+  const roundConfig = auction.rounds.find((round) => round.index === roundIndex);
+  if (!roundConfig) {
+    return null;
+  }
+  const roundState = await auctionRepository.getRoundState(auctionId, roundIndex);
+  const result = await roundResults.findOne({ auctionId, roundIndex });
+  const bidDocs = await bids
+    .find({ auctionId, roundIndex })
+    .sort({ createdAt: 1, _id: 1 })
+    .project<Pick<WithId<BidDocument>, "_id" | "userId" | "amount" | "maxAmount" | "createdAt" | "origin">>({
+      _id: 1,
+      userId: 1,
+      amount: 1,
+      maxAmount: 1,
+      createdAt: 1,
+      origin: 1
+    })
+    .toArray();
+  const bidPayloads: ReplayBidPayload[] = bidDocs.map((bid) => ({
+    bidId: bid._id.toHexString(),
+    userId: bid.userId,
+    amount: bid.amount,
+    maxAmount: bid.maxAmount ?? null,
+    createdAt: bid.createdAt.toISOString(),
+    origin: bid.origin ?? null
+  }));
+
+  return {
+    auction: {
+      id: auction._id.toHexString(),
+      title: auction.title,
+      currency: auction.currency,
+      deliveryType: auction.deliveryType ?? null
+    },
+    round: {
+      index: roundIndex,
+      allocationSize: roundConfig.allocationSize,
+      startAt: roundConfig.startAt.toISOString(),
+      endAt: roundConfig.endAt.toISOString(),
+      antiSniping: roundConfig.antiSniping
+    },
+    state: {
+      effectiveEndAt: roundState?.effectiveEndAt?.toISOString() ?? null,
+      extensionCount: roundState?.extensionCount ?? null,
+      lastBidAt: roundState?.lastBidAt?.toISOString() ?? null
+    },
+    bids: bidPayloads,
+    winners: result?.winners ?? null,
+    proof: (result?.proof as SignedRoundProof | undefined) ?? null,
+    merkleRoot: result?.merkleRoot ?? null,
+    merkleCount: result?.merkleCount ?? null
+  };
+}
+
+async function verifyRoundProof(
+  auctionRepository: ReturnType<typeof createAuctionRepository>,
+  bids: Collection<BidDocument>,
+  roundResult: WithId<RoundResultDocument>,
+  auctionId: ObjectId,
+  roundIndex: number
+): Promise<Record<string, unknown>> {
+  const proofPayload = await buildRoundProofPayload(
+    auctionRepository,
+    bids,
+    roundResult,
+    auctionId,
+    roundIndex
+  );
+  if (!proofPayload) {
+    return { ok: false, reason: "missing_round_context" };
+  }
+
+  const signedProof = roundResult.proof as SignedRoundProof | undefined;
+  const signedPayload = signedProof?.payload ?? proofPayload.payload;
+  const payloadMatch =
+    signedProof?.payload ? canonicalize(signedProof.payload) === canonicalize(proofPayload.payload) : true;
+
+  const expectedRoot = proofPayload.payload.bidsRoot;
+  const storedRoot = roundResult.merkleRoot ?? signedProof?.payload?.bidsRoot ?? null;
+  const merkleRootMatch = storedRoot ? storedRoot === expectedRoot : false;
+
+  const winnersMatch =
+    canonicalize(roundResult.winners.map((winner) => ({
+      userId: winner.userId,
+      bidId: winner.bidId.toHexString(),
+      amount: winner.amount,
+      rank: winner.rank
+    }))) === canonicalize(proofPayload.payload.winners);
+
+  let signatureValid = false;
+  if (signedProof?.signature && signedProof.publicKey) {
+    try {
+      const publicKey = createPublicKey({
+        key: Buffer.from(signedProof.publicKey, "base64"),
+        format: "der",
+        type: "spki"
+      });
+      signatureValid = verify(
+        null,
+        Buffer.from(canonicalize(signedPayload), "utf8"),
+        publicKey,
+        Buffer.from(signedProof.signature, "base64")
+      );
+    } catch {
+      signatureValid = false;
+    }
+  }
+
+  return {
+    ok: payloadMatch && merkleRootMatch && winnersMatch && signatureValid,
+    payloadMatch,
+    merkleRootMatch,
+    winnersMatch,
+    signatureValid,
+    merkleRoot: expectedRoot,
+    bidsCount: proofPayload.payload.bidsCount
+  };
+}
+
+async function buildRoundProofPayload(
+  auctionRepository: ReturnType<typeof createAuctionRepository>,
+  bids: Collection<BidDocument>,
+  roundResult: WithId<RoundResultDocument>,
+  auctionId: ObjectId,
+  roundIndex: number
+): Promise<{ payload: RoundProofPayload } | null> {
+  const auction = await auctionRepository.getAuctionById(auctionId);
+  if (!auction) {
+    return null;
+  }
+  const roundConfig = auction.rounds.find((round) => round.index === roundIndex);
+  if (!roundConfig) {
+    return null;
+  }
+  const roundState = await auctionRepository.getRoundState(auctionId, roundIndex);
+  const bidDocs = await bids
+    .find({ auctionId, roundIndex })
+    .sort({ createdAt: 1, _id: 1 })
+    .project<Pick<WithId<BidDocument>, "_id" | "userId" | "amount" | "maxAmount" | "createdAt" | "origin">>({
+      _id: 1,
+      userId: 1,
+      amount: 1,
+      maxAmount: 1,
+      createdAt: 1,
+      origin: 1
+    })
+    .toArray();
+  const bidPayloads = bidDocs.map((bid) => ({
+    bidId: bid._id.toHexString(),
+    userId: bid.userId,
+    amount: bid.amount,
+    maxAmount: bid.maxAmount ?? null,
+    createdAt: bid.createdAt.toISOString(),
+    origin: bid.origin ?? "manual"
+  }));
+  const { root } = buildMerkleRootFromPayloads(bidPayloads);
+
+  const payload: RoundProofPayload = {
+    auctionId: auction._id.toHexString(),
+    roundIndex,
+    allocationSize: roundConfig.allocationSize,
+    roundStartAt: roundConfig.startAt.toISOString(),
+    roundEndAt: roundConfig.endAt.toISOString(),
+    effectiveEndAt: roundState?.effectiveEndAt?.toISOString() ?? null,
+    extensionCount: roundState?.extensionCount ?? null,
+    antiSniping: {
+      triggerWindowSeconds: roundConfig.antiSniping.triggerWindowSeconds,
+      extensionSeconds: roundConfig.antiSniping.extensionSeconds,
+      maxExtensions: roundConfig.antiSniping.maxExtensions
+    },
+    bidsRoot: root,
+    bidsCount: bidPayloads.length,
+    winners: roundResult.winners.map((winner) => ({
+      userId: winner.userId,
+      bidId: winner.bidId.toHexString(),
+      amount: winner.amount,
+      rank: winner.rank
+    })),
+    finalizedAt: (roundResult.finalizedAt ?? roundResult.createdAt ?? new Date()).toISOString()
+  };
+
+  return { payload };
 }
 
 type WebI18nPayload = {

@@ -37,6 +37,7 @@ type BidAuditPayload = BidDocument["audit"];
 type BidBody = {
   userId?: string;
   amount: number;
+  maxAmount?: number;
   idempotencyKey: string;
   metadata?: Record<string, unknown>;
   audit?: BidAuditPayload;
@@ -80,6 +81,7 @@ const bidBodySchema = {
   properties: {
     userId: { type: "string", minLength: 1 },
     amount: { type: "number", exclusiveMinimum: 0 },
+    maxAmount: { type: "number", exclusiveMinimum: 0 },
     idempotencyKey: { type: "string", minLength: 1 },
     metadata: { type: "object", additionalProperties: true },
     audit: auditSchema
@@ -359,6 +361,7 @@ export async function registerAuctionRoutes(
           auctionId: new ObjectId(params.auctionId),
           userId,
           amount: body.amount,
+          maxAmount: body.maxAmount,
           idempotencyKey: body.idempotencyKey,
           metadata: body.metadata,
           audit,
@@ -401,9 +404,11 @@ function serializeBid(bid: WithId<BidDocument>) {
     roundIndex: bid.roundIndex ?? null,
     userId: bid.userId,
     amount: bid.amount,
+    maxAmount: bid.maxAmount ?? null,
     createdAt: bid.createdAt,
     idempotencyKey: bid.idempotencyKey,
-    active: bid.active
+    active: bid.active,
+    origin: bid.origin ?? null
   };
 }
 
@@ -421,6 +426,7 @@ function serializeAuctionSummary(auction: WithId<AuctionDocument>) {
     description: auction.description ?? null,
     status: auction.status,
     currency: auction.currency,
+    deliveryType: auction.deliveryType ?? null,
     startsAt: auction.startsAt,
     endsAt: auction.endsAt,
     roundCount: auction.rounds.length,
@@ -451,6 +457,7 @@ function buildAuctionDocument(
   const title = normalizeRequiredText(config.title, "title");
   const currency = normalizeCurrency(config.currency, supportedCurrencies);
   const description = normalizeOptionalText(config.description);
+  const deliveryType = config.deliveryType;
   const rounds = normalizeRounds(config.rounds);
   const firstRound = rounds[0] ?? null;
   const now = new Date();
@@ -460,6 +467,7 @@ function buildAuctionDocument(
     title,
     status: "draft",
     currency,
+    deliveryType,
     startsAt: config.startsAt,
     endsAt: config.endsAt,
     rounds,

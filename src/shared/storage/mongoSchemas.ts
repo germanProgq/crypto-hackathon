@@ -10,6 +10,7 @@ export const mongoCollections = {
   roundResults: "round_results",
   deliveryRecords: "delivery_records",
   notificationQueue: "notification_queue",
+  auctionWatchlist: "auction_watchlist",
   cryptoWalletAddresses: "crypto_wallet_addresses",
   cryptoAddressPool: "crypto_address_pool",
   cryptoDeposits: "crypto_deposits",
@@ -60,6 +61,7 @@ export interface AuctionDocument {
   description?: string;
   status: AuctionStatus;
   currency: string;
+  deliveryType?: "access_code" | "telegram_role" | "nft_mint";
   startsAt: Date;
   endsAt: Date;
   rounds: AuctionRoundConfig[];
@@ -95,6 +97,7 @@ export interface BidDocument {
   auctionId: ObjectId;
   userId: string;
   amount: number;
+  maxAmount?: number;
   createdAt: Date;
   idempotencyKey: string;
   active: boolean;
@@ -111,6 +114,7 @@ export interface BidDocument {
     userAgent?: string;
     actorId?: string;
   };
+  origin?: "manual" | "proxy" | "auto";
 }
 
 export interface LedgerEntryDocument {
@@ -149,6 +153,20 @@ export interface RoundResultDocument {
     amount: number;
     rank: number;
   }>;
+  merkleRoot?: string;
+  merkleCount?: number;
+  proof?: {
+    payload?: Record<string, unknown>;
+    signature?: string;
+    publicKey?: string;
+    algorithm?: "ed25519";
+    signedAt?: string;
+    cosignatures?: Array<{
+      signature: string;
+      publicKey: string;
+      algorithm: "ed25519";
+    }>;
+  };
   finalizedAt: Date;
   settlementCompletedAt?: Date;
   createdAt: Date;
@@ -159,6 +177,10 @@ export interface DeliveryRecordDocument {
   roundIndex: number;
   userId: string;
   deliveryRef: string;
+  deliveryType?: "access_code" | "telegram_role" | "nft_mint";
+  deliveryPayload?: Record<string, unknown>;
+  status?: "pending" | "delivered" | "failed";
+  deliveredAt?: Date;
   createdAt: Date;
 }
 
@@ -169,7 +191,16 @@ export type NotificationType =
   | "withdrawal_confirmed"
   | "withdrawal_failed"
   | "auction_starting"
-  | "round_starting";
+  | "round_starting"
+  | "outbid_alert";
+
+export interface AuctionWatchlistDocument {
+  userId: string;
+  auctionId: ObjectId;
+  createdAt: Date;
+  updatedAt: Date;
+  notifyOutbid?: boolean;
+}
 
 export interface NotificationQueueDocument {
   type: NotificationType;
@@ -416,6 +447,7 @@ const auctionValidator: Document = {
       description: { bsonType: "string" },
       status: { bsonType: "string", enum: ["draft", "live", "closed"] },
       currency: { bsonType: "string" },
+      deliveryType: { bsonType: "string", enum: ["access_code", "telegram_role", "nft_mint"] },
       startsAt: { bsonType: "date" },
       endsAt: { bsonType: "date" },
       rounds: { bsonType: "array", minItems: 1, items: roundSchema },
@@ -443,6 +475,7 @@ const bidValidator: Document = {
       auctionId: { bsonType: "objectId" },
       userId: { bsonType: "string" },
       amount: { bsonType: bsonNumber },
+      maxAmount: { bsonType: bsonNumber },
       createdAt: { bsonType: "date" },
       idempotencyKey: { bsonType: "string" },
       active: { bsonType: "bool" },
@@ -461,7 +494,8 @@ const bidValidator: Document = {
           userAgent: { bsonType: "string" },
           actorId: { bsonType: "string" }
         }
-      }
+      },
+      origin: { bsonType: "string", enum: ["manual", "proxy", "auto"] }
     }
   }
 };
@@ -539,6 +573,9 @@ const roundResultValidator: Document = {
           }
         }
       },
+      merkleRoot: { bsonType: "string" },
+      merkleCount: { bsonType: bsonNumber },
+      proof: { bsonType: "object" },
       finalizedAt: { bsonType: "date" },
       settlementCompletedAt: { bsonType: "date" },
       createdAt: { bsonType: "date" }
@@ -555,6 +592,10 @@ const deliveryValidator: Document = {
       roundIndex: { bsonType: bsonNumber },
       userId: { bsonType: "string" },
       deliveryRef: { bsonType: "string" },
+      deliveryType: { bsonType: "string", enum: ["access_code", "telegram_role", "nft_mint"] },
+      deliveryPayload: { bsonType: "object" },
+      status: { bsonType: "string", enum: ["pending", "delivered", "failed"] },
+      deliveredAt: { bsonType: "date" },
       createdAt: { bsonType: "date" }
     }
   }
@@ -584,7 +625,8 @@ const notificationQueueValidator: Document = {
           "withdrawal_confirmed",
           "withdrawal_failed",
           "auction_starting",
-          "round_starting"
+          "round_starting",
+          "outbid_alert"
         ]
       },
       userId: { bsonType: "string" },
@@ -616,6 +658,20 @@ const depositAddressValidator: Document = {
       derivationPath: { bsonType: "string" },
       createdAt: { bsonType: "date" },
       lastUsedAt: { bsonType: "date" }
+    }
+  }
+};
+
+const watchlistValidator: Document = {
+  $jsonSchema: {
+    bsonType: "object",
+    required: ["userId", "auctionId", "createdAt", "updatedAt"],
+    properties: {
+      userId: { bsonType: "string" },
+      auctionId: { bsonType: "objectId" },
+      createdAt: { bsonType: "date" },
+      updatedAt: { bsonType: "date" },
+      notifyOutbid: { bsonType: "bool" }
     }
   }
 };
@@ -866,6 +922,7 @@ export const mongoCollectionSpecs: Array<{ name: string; validator?: Document }>
   { name: mongoCollections.roundResults, validator: roundResultValidator },
   { name: mongoCollections.deliveryRecords, validator: deliveryValidator },
   { name: mongoCollections.notificationQueue, validator: notificationQueueValidator },
+  { name: mongoCollections.auctionWatchlist, validator: watchlistValidator },
   { name: mongoCollections.cryptoWalletAddresses, validator: cryptoWalletAddressValidator },
   { name: mongoCollections.cryptoAddressPool, validator: cryptoAddressPoolValidator },
   { name: mongoCollections.cryptoDeposits, validator: cryptoDepositValidator },
@@ -976,6 +1033,18 @@ export const mongoIndexSpecs: Array<{ collection: string; indexes: IndexDescript
     indexes: [
       { key: { auctionId: 1, userId: 1 }, name: "delivery_auction_user" },
       { key: { userId: 1, createdAt: -1 }, name: "delivery_user_createdAt" }
+    ]
+  },
+  {
+    collection: mongoCollections.auctionWatchlist,
+    indexes: [
+      {
+        key: { userId: 1, auctionId: 1 },
+        name: "watchlist_user_auction",
+        unique: true
+      },
+      { key: { userId: 1, createdAt: -1 }, name: "watchlist_user_created" },
+      { key: { auctionId: 1, createdAt: -1 }, name: "watchlist_auction_created" }
     ]
   },
   {

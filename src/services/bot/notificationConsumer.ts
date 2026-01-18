@@ -28,6 +28,9 @@ type RoundResultPayload = {
   bidId: string;
   rank?: number | null;
   deliveryRef?: string | null;
+  deliveryType?: string | null;
+  deliveryPayload?: Record<string, unknown> | null;
+  replayUrl?: string | null;
   locale?: string;
 };
 
@@ -171,11 +174,26 @@ async function deliverNotification(
   );
 
   let message: string;
+  let replyMarkup: Record<string, unknown> | undefined;
 
   switch (notification.type) {
-    case "round_result":
-      message = buildRoundResultMessage(locale, parseRoundResultPayload(notification.payload));
+    case "round_result": {
+      const payload = parseRoundResultPayload(notification.payload);
+      message = buildRoundResultMessage(locale, payload);
+      if (payload.replayUrl) {
+        replyMarkup = {
+          inline_keyboard: [
+            [
+              {
+                text: t("bot.roundResult.replay", locale),
+                url: payload.replayUrl
+              }
+            ]
+          ]
+        };
+      }
       break;
+    }
     case "bid_confirmed":
       message = buildBidConfirmedMessage(locale, parseBidConfirmedPayload(notification.payload));
       break;
@@ -200,17 +218,30 @@ async function deliverNotification(
     case "round_starting":
       message = buildRoundStartingMessage(locale, parseRoundPayload(notification.payload));
       break;
+    case "outbid_alert": {
+      const payload = parseOutbidPayload(notification.payload);
+      const built = buildOutbidMessage(locale, payload);
+      message = built.message;
+      replyMarkup = built.replyMarkup ?? undefined;
+      break;
+    }
     default:
       throw new Error(`Unsupported notification type: ${notification.type}.`);
   }
 
-  await sendTelegramMessage(deps.config, notification.userId, message);
+  await sendTelegramMessage(
+    deps.config,
+    notification.userId,
+    message,
+    replyMarkup ? { reply_markup: replyMarkup } : undefined
+  );
 }
 
 async function sendTelegramMessage(
   config: ServiceDependencies["config"],
   chatId: string,
-  message: string
+  message: string,
+  options?: { reply_markup?: unknown }
 ): Promise<void> {
   const token = config.telegram.botToken;
   if (!token) {
@@ -233,7 +264,8 @@ async function sendTelegramMessage(
       body: JSON.stringify({
         chat_id: chatId,
         text: message,
-        disable_web_page_preview: true
+        disable_web_page_preview: true,
+        ...options
       }),
       signal: controller.signal
     });
@@ -319,11 +351,15 @@ function buildRoundResultMessage(locale: string, payload: RoundResultPayload): s
       amount,
       currency: payload.currency
     });
-    if (payload.deliveryRef) {
-      const delivery = t("bot.roundResult.delivery", locale, {
-        deliveryRef: payload.deliveryRef
+    const deliveryLine = buildDeliveryLine(locale, payload);
+    if (deliveryLine) {
+      message = `${message}\n${deliveryLine}`;
+    }
+    if (payload.replayUrl) {
+      const replay = t("bot.roundResult.replayLink", locale, {
+        url: payload.replayUrl
       });
-      message = `${message}\n${delivery}`;
+      message = `${message}\n${replay}`;
     }
     return message;
   }
@@ -334,6 +370,29 @@ function buildRoundResultMessage(locale: string, payload: RoundResultPayload): s
     amount,
     currency: payload.currency
   });
+}
+
+function buildDeliveryLine(locale: string, payload: RoundResultPayload): string | null {
+  if (!payload.deliveryRef && !payload.deliveryType) {
+    return null;
+  }
+  const type = payload.deliveryType ?? "access_code";
+  const deliveryPayload = payload.deliveryPayload ?? {};
+  if (type === "telegram_role") {
+    const token =
+      typeof deliveryPayload.token === "string" ? deliveryPayload.token : payload.deliveryRef;
+    const role =
+      typeof deliveryPayload.role === "string" ? deliveryPayload.role : "VIP";
+    return t("bot.roundResult.delivery.role", locale, { role, token: token ?? "" });
+  }
+  if (type === "nft_mint") {
+    const mintId =
+      typeof deliveryPayload.mintId === "string" ? deliveryPayload.mintId : payload.deliveryRef;
+    return t("bot.roundResult.delivery.nft", locale, { mintId: mintId ?? "" });
+  }
+  const code =
+    typeof deliveryPayload.code === "string" ? deliveryPayload.code : payload.deliveryRef;
+  return t("bot.roundResult.delivery.code", locale, { code: code ?? "" });
 }
 
 function formatAmount(amount: number, locale: string): string {
@@ -355,6 +414,9 @@ function parseRoundResultPayload(payload: Record<string, unknown>): RoundResultP
   const amount = readNumber(payload, "amount");
   const bidId = readString(payload, "bidId");
   const localeValue = readOptionalString(payload, "locale");
+  const deliveryType = readOptionalString(payload, "deliveryType");
+  const deliveryPayload = readOptionalObject(payload, "deliveryPayload");
+  const replayUrl = readOptionalString(payload, "replayUrl");
 
   if (result !== "winner" && result !== "non_winner") {
     throw new Error(`Invalid round result type: ${result}.`);
@@ -384,6 +446,9 @@ function parseRoundResultPayload(payload: Record<string, unknown>): RoundResultP
     bidId,
     rank: rankValue,
     deliveryRef,
+    deliveryType,
+    deliveryPayload,
+    replayUrl,
     locale: localeValue ?? undefined
   };
 }
@@ -426,6 +491,20 @@ function readOptionalNumber(payload: Record<string, unknown>, key: string): numb
   return value;
 }
 
+function readOptionalObject(
+  payload: Record<string, unknown>,
+  key: string
+): Record<string, unknown> | null {
+  const value = payload[key];
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Notification payload invalid ${key}.`);
+  }
+  return value as Record<string, unknown>;
+}
+
 type BidConfirmedPayload = {
   auctionId: string;
   amount: number;
@@ -446,6 +525,19 @@ type AuctionPayload = {
 type RoundPayload = {
   auctionId: string;
   roundIndex: number;
+};
+
+type OutbidPayload = {
+  auctionId: string;
+  roundIndex: number;
+  auctionTitle?: string;
+  currency: string;
+  previousAmount: number;
+  currentAmount: number;
+  rebidAmount: number;
+  currentLeader?: string;
+  bidId?: string;
+  replayUrl?: string;
 };
 
 function buildBidConfirmedMessage(locale: string, payload: BidConfirmedPayload): string {
@@ -497,6 +589,34 @@ function buildRoundStartingMessage(locale: string, payload: RoundPayload): strin
   });
 }
 
+function buildOutbidMessage(
+  locale: string,
+  payload: OutbidPayload
+): { message: string; replyMarkup?: Record<string, unknown> } {
+  const amount = formatAmount(payload.currentAmount, locale);
+  const rebidAmount = formatAmount(payload.rebidAmount, locale);
+  const title = payload.auctionTitle ?? payload.auctionId;
+  const message = t("bot.outbid.alert", locale, {
+    auction: title,
+    amount,
+    currency: payload.currency,
+    rebidAmount
+  });
+  const buttons: Array<Array<Record<string, string>>> = [
+    [
+      {
+        text: t("bot.outbid.rebid", locale, { amount: rebidAmount, currency: payload.currency }),
+        callback_data: `rebid:${payload.auctionId}:${payload.rebidAmount}`
+      }
+    ]
+  ];
+  if (payload.replayUrl) {
+    buttons.push([{ text: t("bot.roundResult.replay", locale), url: payload.replayUrl }]);
+  }
+  const replyMarkup = { inline_keyboard: buttons };
+  return { message, replyMarkup };
+}
+
 function parseBidConfirmedPayload(payload: Record<string, unknown>): BidConfirmedPayload {
   if (!payload || typeof payload !== "object") {
     throw new Error("Notification payload missing.");
@@ -536,6 +656,24 @@ function parseRoundPayload(payload: Record<string, unknown>): RoundPayload {
   return {
     auctionId: readString(payload, "auctionId"),
     roundIndex: readNumber(payload, "roundIndex")
+  };
+}
+
+function parseOutbidPayload(payload: Record<string, unknown>): OutbidPayload {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Notification payload missing.");
+  }
+  return {
+    auctionId: readString(payload, "auctionId"),
+    roundIndex: readNumber(payload, "roundIndex"),
+    auctionTitle: readOptionalString(payload, "auctionTitle") ?? undefined,
+    currency: readString(payload, "currency"),
+    previousAmount: readNumber(payload, "previousAmount"),
+    currentAmount: readNumber(payload, "currentAmount"),
+    rebidAmount: readNumber(payload, "rebidAmount"),
+    currentLeader: readOptionalString(payload, "currentLeader") ?? undefined,
+    bidId: readOptionalString(payload, "bidId") ?? undefined,
+    replayUrl: readOptionalString(payload, "replayUrl") ?? undefined
   };
 }
 

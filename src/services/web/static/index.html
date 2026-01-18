@@ -483,6 +483,13 @@
       margin-bottom: 12px;
     }
 
+    .auction-header-actions {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 6px;
+    }
+
     .auction-icon {
       width: 48px;
       height: 48px;
@@ -1043,6 +1050,366 @@
       font-size: 13px;
     }
 
+    /* === AUCTION DETAIL === */
+    body.detail-open {
+      overflow: hidden;
+    }
+
+    body.detail-open .header,
+    body.detail-open .bottom-nav {
+      display: none;
+    }
+
+    .detail-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 19, 23, 0.92);
+      backdrop-filter: blur(16px) saturate(150%);
+      z-index: 200;
+      display: flex;
+      justify-content: center;
+      overflow-y: auto;
+    }
+
+    .detail-panel {
+      width: min(520px, 100%);
+      padding: 18px 18px calc(28px + env(safe-area-inset-bottom));
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .detail-topbar {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      margin: -18px -18px 0;
+      padding: 16px 18px 12px;
+      background: rgba(15, 19, 23, 0.95);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .detail-topbar-title {
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: -0.2px;
+      text-align: center;
+      flex: 1;
+      color: var(--tg-text);
+    }
+
+    .detail-hero {
+      padding: 18px;
+      border-radius: var(--radius-lg);
+      background: var(--gradient-card);
+      border: 1px solid var(--app-divider);
+      box-shadow: var(--shadow-md);
+      display: grid;
+      gap: 12px;
+    }
+
+    .detail-status-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .detail-title {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.4px;
+    }
+
+    .detail-desc {
+      font-size: 14px;
+      color: var(--tg-hint);
+    }
+
+    .detail-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .detail-watch.is-active {
+      background: rgba(61, 215, 138, 0.18);
+      border-color: rgba(61, 215, 138, 0.35);
+      color: #3dd78a;
+    }
+
+    .auction-watch {
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      background: rgba(61, 215, 138, 0.18);
+      border: 1px solid rgba(61, 215, 138, 0.35);
+      color: #3dd78a;
+    }
+
+    .detail-stats {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .detail-stat {
+      padding: 12px;
+      border-radius: var(--radius-md);
+      background: var(--app-surface-2);
+      border: 1px solid var(--app-divider);
+      display: grid;
+      gap: 6px;
+    }
+
+    .detail-stat-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--tg-hint);
+      font-weight: 600;
+    }
+
+    .detail-stat-value {
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .detail-card {
+      padding: 16px;
+      border-radius: var(--radius-md);
+      background: var(--app-surface);
+      border: 1px solid var(--app-divider);
+      box-shadow: var(--shadow-sm);
+      display: grid;
+      gap: 12px;
+    }
+
+    .detail-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .detail-card-title {
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .detail-card-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .detail-select {
+      min-width: 140px;
+    }
+
+    .detail-pill {
+      font-size: 12px;
+      color: var(--tg-hint);
+    }
+
+    .detail-bid-grid {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .detail-bids-list,
+    .detail-winners-list,
+    .timeline-list,
+    .delivery-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .detail-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px;
+      border-radius: var(--radius-sm);
+      background: var(--app-surface-2);
+      border: 1px solid var(--app-divider);
+    }
+
+    .detail-row-main {
+      display: grid;
+      gap: 4px;
+    }
+
+    .detail-row-title {
+      font-weight: 600;
+      font-size: 14px;
+    }
+
+    .detail-row-meta {
+      font-size: 12px;
+      color: var(--tg-hint);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .detail-amount {
+      font-weight: 700;
+      font-size: 15px;
+    }
+
+    .timeline-item {
+      display: grid;
+      grid-template-columns: 12px 1fr;
+      gap: 12px;
+      align-items: start;
+      padding: 8px 0;
+    }
+
+    .timeline-marker {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--app-accent);
+      margin-top: 6px;
+      box-shadow: 0 0 0 4px rgba(166, 184, 204, 0.12);
+    }
+
+    .timeline-item.extension .timeline-marker {
+      background: #3dd78a;
+      box-shadow: 0 0 0 4px rgba(61, 215, 138, 0.18);
+    }
+
+    .timeline-item.shift .timeline-marker {
+      background: #ffb95c;
+      box-shadow: 0 0 0 4px rgba(255, 185, 92, 0.18);
+    }
+
+    .timeline-item.winner .timeline-marker {
+      background: #7f93aa;
+    }
+
+    .timeline-title {
+      font-weight: 600;
+      font-size: 14px;
+    }
+
+    .timeline-meta {
+      font-size: 12px;
+      color: var(--tg-hint);
+      margin-top: 4px;
+    }
+
+    .timeline-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+    }
+
+    .timeline-tag {
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      border: 1px solid var(--app-divider);
+      background: var(--app-surface-3);
+      color: var(--tg-hint);
+    }
+
+    .timeline-tag.is-strong {
+      background: var(--app-accent-strong);
+      color: #0f1317;
+      border-color: transparent;
+    }
+
+    .proof-grid {
+      display: grid;
+      gap: 10px;
+    }
+
+    .proof-item {
+      padding: 10px 12px;
+      border-radius: var(--radius-sm);
+      background: var(--app-surface-2);
+      border: 1px solid var(--app-divider);
+      display: grid;
+      gap: 6px;
+    }
+
+    .proof-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--tg-hint);
+      font-weight: 600;
+    }
+
+    .proof-value {
+      font-size: 12px;
+      word-break: break-all;
+    }
+
+    .verification-result {
+      font-size: 13px;
+      color: var(--tg-hint);
+    }
+
+    .verification-result.is-ok {
+      color: #3dd78a;
+    }
+
+    .verification-result.is-fail {
+      color: #ff9a9a;
+    }
+
+    .delivery-card {
+      padding: 14px;
+      border-radius: var(--radius-md);
+      background: var(--app-surface);
+      border: 1px solid var(--app-divider);
+      display: grid;
+      gap: 6px;
+    }
+
+    .delivery-title {
+      font-weight: 600;
+      font-size: 14px;
+    }
+
+    .delivery-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--tg-hint);
+    }
+
+    .delivery-pill {
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      background: var(--app-surface-3);
+      border: 1px solid var(--app-divider);
+      color: var(--tg-hint);
+    }
+
+    @media (max-width: 380px) {
+      .detail-bid-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .detail-stats {
+        grid-template-columns: 1fr;
+      }
+    }
+
     .modal-open {
       overflow: hidden;
     }
@@ -1135,6 +1502,19 @@
           </div>
         </div>
       </div>
+      <div class="home-deliveries" id="home-deliveries-section">
+        <div class="section-header">
+          <h2 class="section-title" data-i18n="web.home.deliveries.title">Deliveries</h2>
+          <a class="section-link" onclick="loadDeliveries()" data-i18n="web.home.deliveries.refresh">
+            Refresh
+          </a>
+        </div>
+        <div class="delivery-list" id="deliveries-list">
+          <div class="loading">
+            <div class="spinner"></div>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- AUCTIONS SECTION -->
@@ -1170,6 +1550,19 @@
                 Description
               </label>
               <textarea class="input input-textarea" id="create-description" rows="3"></textarea>
+            </div>
+            <div class="field-group">
+              <label class="field-label" for="create-delivery" data-i18n="web.create.deliveryLabel">
+                Delivery
+              </label>
+              <select class="input" id="create-delivery">
+                <option value="" data-i18n="web.create.deliveryDefault">Default</option>
+                <option value="access_code" data-i18n="web.create.deliveryType.access_code">Access code</option>
+                <option value="telegram_role" data-i18n="web.create.deliveryType.telegram_role">
+                  Telegram role
+                </option>
+                <option value="nft_mint" data-i18n="web.create.deliveryType.nft_mint">NFT mint</option>
+              </select>
             </div>
           </div>
           <div class="wizard-actions">
@@ -1382,6 +1775,188 @@
         </div>
       </form>
     </section>
+  </div>
+
+  <div class="detail-overlay hidden" id="auction-detail" role="dialog" aria-modal="true">
+    <div class="detail-panel">
+      <div class="detail-topbar">
+        <button
+          class="btn btn-secondary btn-small"
+          id="detail-back"
+          type="button"
+          onclick="closeAuctionDetail()"
+          data-i18n="web.detail.back"
+        >
+          Back
+        </button>
+        <div class="detail-topbar-title" id="detail-topbar-title"></div>
+        <button
+          class="btn btn-secondary btn-small"
+          id="detail-share"
+          type="button"
+          onclick="shareAuctionReplay()"
+          data-i18n="web.detail.share"
+        >
+          Share
+        </button>
+      </div>
+
+      <div class="detail-hero">
+        <div class="detail-status-row">
+          <span class="auction-status" id="detail-status"></span>
+          <span class="detail-pill" id="detail-round-state"></span>
+        </div>
+        <h2 class="detail-title" id="detail-title">Auction</h2>
+        <p class="detail-desc" id="detail-description"></p>
+        <div class="detail-actions">
+          <button
+            class="btn btn-secondary btn-small detail-watch"
+            id="detail-watch-btn"
+            type="button"
+            onclick="toggleWatchlist()"
+          ></button>
+          <button
+            class="btn btn-secondary btn-small"
+            id="detail-replay-copy"
+            type="button"
+            onclick="copyReplayLink()"
+            data-i18n="web.detail.replay.copy"
+          >
+            Copy replay
+          </button>
+        </div>
+        <div class="toggle-row">
+          <input class="toggle-input" id="detail-outbid-toggle" type="checkbox">
+          <label class="toggle-label" for="detail-outbid-toggle" data-i18n="web.detail.outbidToggle">
+            Outbid alerts
+          </label>
+        </div>
+        <div class="detail-stats">
+          <div class="detail-stat">
+            <span class="detail-stat-label" data-i18n="web.detail.stats.round">Round</span>
+            <span class="detail-stat-value" id="detail-round">--</span>
+          </div>
+          <div class="detail-stat">
+            <span class="detail-stat-label" data-i18n="web.detail.stats.ends">Ends</span>
+            <span class="detail-stat-value" id="detail-ends">--</span>
+          </div>
+          <div class="detail-stat">
+            <span class="detail-stat-label" data-i18n="web.detail.stats.lastBid">Last bid</span>
+            <span class="detail-stat-value" id="detail-last-bid">--</span>
+          </div>
+          <div class="detail-stat">
+            <span class="detail-stat-label" data-i18n="web.detail.stats.delivery">Delivery</span>
+            <span class="detail-stat-value" id="detail-delivery">--</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="detail-card">
+        <div class="detail-card-header">
+          <span class="detail-card-title" data-i18n="web.detail.bid.title">Place bid</span>
+          <span class="detail-pill" id="detail-balance-hint"></span>
+        </div>
+        <div class="detail-bid-grid">
+          <input
+            class="input"
+            id="detail-bid-amount"
+            type="number"
+            min="0"
+            step="0.01"
+            placeholder="Bid amount"
+          >
+          <input
+            class="input"
+            id="detail-bid-max"
+            type="number"
+            min="0"
+            step="0.01"
+            placeholder="Proxy max (optional)"
+          >
+        </div>
+        <button
+          class="btn btn-primary"
+          id="detail-bid-submit"
+          type="button"
+          onclick="submitAuctionBid()"
+          data-i18n="web.detail.bid.submit"
+        >
+          Place bid
+        </button>
+        <div class="field-hint" id="detail-bid-hint" data-i18n="web.detail.bid.hint">
+          We'll auto-raise up to your max.
+        </div>
+        <div class="form-error hidden" id="detail-bid-error"></div>
+      </div>
+
+      <div class="detail-card">
+        <div class="detail-card-header">
+          <span class="detail-card-title" data-i18n="web.detail.topBids.title">Top bids</span>
+          <span class="detail-pill" id="detail-bids-updated"></span>
+        </div>
+        <div class="detail-bids-list" id="detail-bids-list"></div>
+      </div>
+
+      <div class="detail-card">
+        <div class="detail-card-header">
+          <span class="detail-card-title" data-i18n="web.detail.timeline.title">Replay timeline</span>
+          <div class="detail-card-actions">
+            <select class="input detail-select" id="detail-round-select" onchange="handleRoundSelectChange(event)">
+            </select>
+            <button
+              class="btn btn-secondary btn-small"
+              type="button"
+              onclick="reloadReplay()"
+              data-i18n="web.detail.timeline.refresh"
+            >
+              Refresh
+            </button>
+          </div>
+        </div>
+        <div class="timeline-list" id="detail-timeline"></div>
+      </div>
+
+      <div class="detail-card">
+        <div class="detail-card-header">
+          <span class="detail-card-title" data-i18n="web.detail.winners.title">Winners</span>
+        </div>
+        <div class="detail-winners-list" id="detail-winners-list"></div>
+      </div>
+
+      <div class="detail-card">
+        <div class="detail-card-header">
+          <span class="detail-card-title" data-i18n="web.detail.proof.title">Proof & verification</span>
+          <button
+            class="btn btn-secondary btn-small"
+            id="detail-verify-btn"
+            type="button"
+            onclick="verifyRoundProof()"
+            data-i18n="web.detail.proof.verify"
+          >
+            Verify
+          </button>
+        </div>
+        <div class="proof-grid" id="detail-proof-grid">
+          <div class="proof-item">
+            <div class="proof-label" data-i18n="web.detail.proof.merkleRoot">Merkle root</div>
+            <div class="proof-value" id="detail-merkle-root">--</div>
+          </div>
+          <div class="proof-item">
+            <div class="proof-label" data-i18n="web.detail.proof.merkleCount">Bids in tree</div>
+            <div class="proof-value" id="detail-merkle-count">--</div>
+          </div>
+          <div class="proof-item">
+            <div class="proof-label" data-i18n="web.detail.proof.signature">Signature</div>
+            <div class="proof-value" id="detail-signature">--</div>
+          </div>
+          <div class="proof-item">
+            <div class="proof-label" data-i18n="web.detail.proof.publicKey">Public key</div>
+            <div class="proof-value" id="detail-public-key">--</div>
+          </div>
+        </div>
+        <div class="verification-result" id="detail-verify-result"></div>
+      </div>
+    </div>
   </div>
 
   <!-- BOTTOM NAV -->
@@ -1639,6 +2214,16 @@
       updateWalletAddress();
       updateCreateWizardUI();
       updateHeaderTitle(uiState.activeTab);
+      renderAuctionLists();
+      renderActiveBids(state.activeBids);
+      renderDeliveries(state.deliveries);
+      renderAuctionDetail();
+      renderAuctionDetailSnapshot();
+      renderDetailTopBids();
+      renderReplayTimeline();
+      renderWinners();
+      renderProofDetails();
+      renderWatchlistState();
     }
 
     function canUseHapticFeedback() {
@@ -1672,6 +2257,8 @@
       currentUser: null,
       activeBids: [],
       auctions: [],
+      watchlist: new Map(),
+      deliveries: [],
       balance: { available: 0, held: 0, current: 0, currency: 'USDT' }
     };
     const uiState = {
@@ -1679,11 +2266,14 @@
       withdrawSubmitting: false,
       createSubmitting: false,
       activeTab: 'home',
+      lastTab: 'home',
       home: {
         bidsLoaded: false,
         bidsError: false,
         auctionsLoaded: false,
-        auctionsError: false
+        auctionsError: false,
+        deliveriesLoaded: false,
+        deliveriesError: false
       }
     };
     const realtimeState = {
@@ -1692,7 +2282,25 @@
       reconnectTimer: null,
       queue: [],
       subscribedAuctionIds: new Set(),
-      auctionSnapshots: new Map()
+      auctionSnapshots: new Map(),
+      detailAuctionId: null
+    };
+    const detailState = {
+      auctionId: null,
+      auction: null,
+      snapshot: null,
+      replay: null,
+      roundIndex: null,
+      endsAt: null,
+      loading: false,
+      replayLoading: false,
+      topBids: [],
+      topBidsUpdatedAt: null,
+      verify: null,
+      replayRefreshTimer: null,
+      bidSubmitting: false,
+      watchlistUpdating: false,
+      countdownTimer: null
     };
     const createWizard = { step: 0, steps: [] };
     const createDefaults = {
@@ -1856,6 +2464,22 @@
       if (message.type === 'auction_snapshot') {
         if (message.data && typeof message.data.auctionId === 'string') {
           upsertAuctionSnapshot(message.data);
+          if (detailState.auctionId === message.data.auctionId) {
+            detailState.snapshot = message.data;
+            renderAuctionDetailSnapshot();
+            scheduleReplayRefresh();
+          }
+        }
+        return;
+      }
+      if (message.type === 'auction_bids') {
+        if (detailState.auctionId && message.auctionId === detailState.auctionId) {
+          if (Array.isArray(message.data)) {
+            detailState.topBids = message.data;
+            detailState.topBidsUpdatedAt = new Date();
+            renderDetailTopBids();
+          }
+          scheduleReplayRefresh();
         }
         return;
       }
@@ -1883,6 +2507,9 @@
 
     function syncAuctionSubscriptions() {
       const nextIds = new Set(getAuctionIdsFromState());
+      if (typeof realtimeState.detailAuctionId === 'string' && realtimeState.detailAuctionId.length > 0) {
+        nextIds.add(realtimeState.detailAuctionId);
+      }
       pruneAuctionSnapshots(nextIds);
 
       for (const auctionId of nextIds) {
@@ -1912,11 +2539,15 @@
     // Initialize
     async function init() {
       initCreateForm();
+      initDetailControls();
       initRealtime();
       await loadUser();
       await loadBalance();
       await loadActiveBids();
       await loadAuctions();
+      await loadWatchlist();
+      await loadDeliveries();
+      applyInitialDetailFromUrl();
     }
 
     // Load user
@@ -2003,6 +2634,7 @@
       if (headerCurrency) headerCurrency.textContent = currency;
       updateWithdrawAvailable();
       updateCreateCurrency();
+      renderDetailBalance();
     }
 
     function formatUserHandle(user) {
@@ -2017,6 +2649,35 @@
       if (!raw) return '';
       if (raw.length <= 16) return raw;
       return `${raw.slice(0, 4)}...${raw.slice(-4)}`;
+    }
+
+    function formatShortId(value) {
+      if (!value) return '';
+      const raw = String(value);
+      if (raw.length <= 10) return raw;
+      return `${raw.slice(0, 4)}...${raw.slice(-4)}`;
+    }
+
+    function formatUserLabel(userId) {
+      if (!userId) return t('web.detail.userUnknown');
+      if (state.currentUser && userId === state.currentUser.id) {
+        return t('web.detail.you');
+      }
+      return formatShortId(userId);
+    }
+
+    function formatDateTime(value) {
+      if (!value) return '--';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return '--';
+      return date.toLocaleString();
+    }
+
+    function formatAmount(value, currency) {
+      const amount = typeof value === 'number' && Number.isFinite(value) ? value : null;
+      if (amount === null) return '--';
+      const code = currency || getCurrentCurrency();
+      return `${amount.toFixed(2)} ${code}`;
     }
 
     function updateWalletAddress() {
@@ -2185,11 +2846,15 @@
           const spots = Array.isArray(view.rounds) && view.rounds.length > 0
             ? view.rounds[0].allocationSize
             : 0;
+          const isWatching = state.watchlist instanceof Map && state.watchlist.has(view._id);
           return `
             <div class="auction-card fade-in" onclick="openAuction('${view._id}')">
               <div class="auction-header">
                 <div class="auction-icon">🎁</div>
-                <span class="auction-status ${status}">${formatStatusLabel(status)}</span>
+                <div class="auction-header-actions">
+                  <span class="auction-status ${status}">${formatStatusLabel(status)}</span>
+                  ${isWatching ? `<span class="auction-watch">${t('web.auctions.watch')}</span>` : ''}
+                </div>
               </div>
               <h3 class="auction-title">${view.title}</h3>
               ${view.description ? `<p class="auction-desc">${view.description}</p>` : ''}
@@ -2224,28 +2889,37 @@
     function updateHomeVisibility() {
       const bidsSection = document.getElementById('home-bids-section');
       const auctionsSection = document.getElementById('home-auctions-section');
+      const deliveriesSection = document.getElementById('home-deliveries-section');
       const emptyState = document.getElementById('home-empty-state');
 
       const bidsLoaded = uiState.home.bidsLoaded;
       const auctionsLoaded = uiState.home.auctionsLoaded;
+      const deliveriesLoaded = uiState.home.deliveriesLoaded;
       const bidsError = uiState.home.bidsError;
       const auctionsError = uiState.home.auctionsError;
+      const deliveriesError = uiState.home.deliveriesError;
 
       const hasBids = Array.isArray(state.activeBids) && state.activeBids.length > 0;
       const hasAuctions = Array.isArray(state.auctions) && state.auctions.length > 0;
+      const hasDeliveries = Array.isArray(state.deliveries) && state.deliveries.length > 0;
 
       const showBidsSection = !bidsLoaded || bidsError || hasBids;
       const showAuctionsSection = !auctionsLoaded || auctionsError || hasAuctions;
+      const showDeliveriesSection = !deliveriesLoaded || deliveriesError || hasDeliveries;
       const showEmptyState =
         bidsLoaded &&
         auctionsLoaded &&
+        deliveriesLoaded &&
         !bidsError &&
         !auctionsError &&
+        !deliveriesError &&
         !hasBids &&
-        !hasAuctions;
+        !hasAuctions &&
+        !hasDeliveries;
 
       if (bidsSection) bidsSection.classList.toggle('hidden', !showBidsSection);
       if (auctionsSection) auctionsSection.classList.toggle('hidden', !showAuctionsSection);
+      if (deliveriesSection) deliveriesSection.classList.toggle('hidden', !showDeliveriesSection);
       if (emptyState) emptyState.classList.toggle('hidden', !showEmptyState);
     }
 
@@ -2421,6 +3095,250 @@
       }
     }
 
+    function isWatchingAuction(auctionId) {
+      if (!auctionId || !(state.watchlist instanceof Map)) return false;
+      return state.watchlist.has(auctionId);
+    }
+
+    async function loadWatchlist() {
+      if (!state.currentUser) {
+        state.watchlist = new Map();
+        renderAuctionLists();
+        renderWatchlistState();
+        return;
+      }
+      try {
+        const response = await apiFetch('/api/watchlist');
+        if (!response.ok) {
+          state.watchlist = new Map();
+          renderAuctionLists();
+          renderWatchlistState();
+          return;
+        }
+        const data = await readJsonSafe(response);
+        const next = new Map();
+        (Array.isArray(data) ? data : []).forEach((entry) => {
+          if (entry && typeof entry.auctionId === 'string') {
+            next.set(entry.auctionId, entry);
+          }
+        });
+        state.watchlist = next;
+        renderAuctionLists();
+        renderWatchlistState();
+      } catch (error) {
+        state.watchlist = new Map();
+        renderAuctionLists();
+        renderWatchlistState();
+      }
+    }
+
+    function renderWatchlistState() {
+      const watchButton = document.getElementById('detail-watch-btn');
+      const outbidToggle = document.getElementById('detail-outbid-toggle');
+      if (!watchButton || !outbidToggle) return;
+      const auctionId = detailState.auctionId;
+      const watching = auctionId ? isWatchingAuction(auctionId) : false;
+      const entry = auctionId ? state.watchlist.get(auctionId) : null;
+      watchButton.textContent = watching ? t('web.detail.watching') : t('web.detail.watch');
+      watchButton.classList.toggle('is-active', watching);
+      outbidToggle.checked = watching ? entry?.notifyOutbid ?? true : false;
+      outbidToggle.disabled = !watching;
+    }
+
+    async function updateWatchlistPreference(auctionId, notifyOutbid) {
+      try {
+        const response = await apiFetch('/api/watchlist', {
+          method: 'POST',
+          body: JSON.stringify({ auctionId, notifyOutbid })
+        });
+        if (!response.ok) return false;
+        state.watchlist.set(auctionId, {
+          auctionId,
+          notifyOutbid,
+          updatedAt: new Date().toISOString()
+        });
+        return true;
+      } catch (error) {
+        return false;
+      }
+    }
+
+    async function toggleWatchlist() {
+      if (!state.currentUser) {
+        showAlert(t('web.auth.required'));
+        return;
+      }
+      const auctionId = detailState.auctionId;
+      if (!auctionId || detailState.watchlistUpdating) return;
+      detailState.watchlistUpdating = true;
+      const watching = isWatchingAuction(auctionId);
+      let ok = false;
+      if (watching) {
+        try {
+          const response = await apiFetch(`/api/watchlist/${auctionId}`, { method: 'DELETE' });
+          ok = response.ok;
+          if (ok) {
+            state.watchlist.delete(auctionId);
+          }
+        } catch (error) {
+          ok = false;
+        }
+      } else {
+        const entry = state.watchlist.get(auctionId);
+        const notifyOutbid = entry?.notifyOutbid ?? true;
+        ok = await updateWatchlistPreference(auctionId, notifyOutbid);
+      }
+      detailState.watchlistUpdating = false;
+      renderWatchlistState();
+      renderAuctionLists();
+      if (!ok) {
+        showAlert(t('web.detail.watchError'));
+      }
+    }
+
+    async function handleOutbidToggle(event) {
+      const auctionId = detailState.auctionId;
+      if (!auctionId) return;
+      if (!state.currentUser) {
+        showAlert(t('web.auth.required'));
+        if (event?.target) {
+          event.target.checked = false;
+        }
+        return;
+      }
+      const notifyOutbid = Boolean(event?.target?.checked);
+      await updateWatchlistPreference(auctionId, notifyOutbid);
+      renderWatchlistState();
+      renderAuctionLists();
+    }
+
+    async function loadDeliveries() {
+      const container = document.getElementById('deliveries-list');
+      if (!container) return;
+
+      if (!state.currentUser) {
+        uiState.home.deliveriesLoaded = true;
+        uiState.home.deliveriesError = false;
+        renderDeliveries([]);
+        return;
+      }
+
+      uiState.home.deliveriesLoaded = false;
+      uiState.home.deliveriesError = false;
+      updateHomeVisibility();
+      container.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+      try {
+        const response = await apiFetch('/api/deliveries');
+        if (!response.ok) {
+          uiState.home.deliveriesLoaded = true;
+          uiState.home.deliveriesError = true;
+          renderDeliveriesError();
+          return;
+        }
+        const data = await readJsonSafe(response);
+        uiState.home.deliveriesLoaded = true;
+        uiState.home.deliveriesError = false;
+        renderDeliveries(Array.isArray(data) ? data : []);
+      } catch (error) {
+        uiState.home.deliveriesLoaded = true;
+        uiState.home.deliveriesError = true;
+        renderDeliveriesError();
+      }
+    }
+
+    function formatDeliveryType(type) {
+      if (!type) return t('web.delivery.unknown');
+      const key = `web.delivery.${type}`;
+      const value = t(key);
+      return value === key ? type : value;
+    }
+
+    function formatDeliveryPayload(entry) {
+      const payload = entry?.deliveryPayload;
+      if (payload && typeof payload === 'object') {
+        if (entry.deliveryType === 'access_code' && payload.code) {
+          return t('web.delivery.code', { value: payload.code });
+        }
+        if (entry.deliveryType === 'telegram_role' && payload.token) {
+          return t('web.delivery.token', { value: payload.token });
+        }
+        if (entry.deliveryType === 'nft_mint' && payload.mintId) {
+          return t('web.delivery.mint', { value: payload.mintId });
+        }
+        if (payload.reference) {
+          return t('web.delivery.reference', { value: payload.reference });
+        }
+      }
+      if (entry.deliveryRef) {
+        return t('web.delivery.reference', { value: entry.deliveryRef });
+      }
+      return '';
+    }
+
+    function renderDeliveries(deliveries) {
+      const container = document.getElementById('deliveries-list');
+      if (!container) return;
+      const normalized = Array.isArray(deliveries) ? deliveries : [];
+      state.deliveries = normalized;
+
+      if (normalized.length === 0) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-icon">📦</div>
+            <div class="empty-title">${t('web.home.deliveries.empty.title')}</div>
+            <div class="empty-text">${t('web.home.deliveries.empty.body')}</div>
+          </div>
+        `;
+        updateHomeVisibility();
+        return;
+      }
+
+      container.innerHTML = normalized
+        .map((delivery) => {
+          const round = Number.isInteger(delivery.roundIndex) ? delivery.roundIndex + 1 : '--';
+          const auctionLabel = formatShortId(delivery.auctionId || '');
+          const title = t('web.home.deliveries.itemTitle', { auctionId: auctionLabel, round });
+          const typeLabel = formatDeliveryType(delivery.deliveryType);
+          const payloadLabel = formatDeliveryPayload(delivery);
+          const statusLabel = delivery.status ? t(`web.delivery.status.${delivery.status}`) : '';
+          const deliveredAt = delivery.deliveredAt || delivery.createdAt;
+          return `
+            <div class="delivery-card">
+              <div class="delivery-title">${title}</div>
+              <div class="delivery-meta">
+                <span class="delivery-pill">${typeLabel}</span>
+                ${statusLabel ? `<span class="delivery-pill">${statusLabel}</span>` : ''}
+              </div>
+              ${payloadLabel ? `<div class="delivery-meta">${payloadLabel}</div>` : ''}
+              <div class="delivery-meta">${formatDateTime(deliveredAt)}</div>
+            </div>
+          `;
+        })
+        .join('');
+      updateHomeVisibility();
+    }
+
+    function renderDeliveriesError() {
+      const container = document.getElementById('deliveries-list');
+      if (!container) return;
+      container.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">⚠️</div>
+          <div class="empty-title">${t('web.home.deliveries.error.title')}</div>
+          <div class="empty-text">${t('web.home.deliveries.error.body')}</div>
+        </div>
+      `;
+      updateHomeVisibility();
+    }
+
+    function initDetailControls() {
+      const outbidToggle = document.getElementById('detail-outbid-toggle');
+      if (outbidToggle) {
+        outbidToggle.addEventListener('change', handleOutbidToggle);
+      }
+    }
+
     function initCreateForm() {
       const form = document.getElementById('create-form');
       if (!form) return;
@@ -2548,6 +3466,7 @@
     function resetCreateForm(clearStatus = true) {
       const title = document.getElementById('create-title');
       const description = document.getElementById('create-description');
+      const delivery = document.getElementById('create-delivery');
       const currency = document.getElementById('create-currency');
       const rounds = document.getElementById('create-rounds');
       const allocation = document.getElementById('create-allocation');
@@ -2560,6 +3479,7 @@
 
       if (title) title.value = '';
       if (description) description.value = '';
+      if (delivery) delivery.value = '';
       if (currency) {
         currency.value = getCurrentCurrency() || 'USDT';
         currency.dataset.autofill = 'true';
@@ -2644,11 +3564,13 @@
 
       const titleInput = document.getElementById('create-title');
       const descriptionInput = document.getElementById('create-description');
+      const deliveryInput = document.getElementById('create-delivery');
       const currencyInput = document.getElementById('create-currency');
       const toggle = document.getElementById('create-antisniping-toggle');
 
       const title = titleInput ? titleInput.value.trim() : '';
       const description = descriptionInput ? descriptionInput.value.trim() : '';
+      const deliveryType = deliveryInput ? deliveryInput.value.trim() : '';
       const currency = currencyInput && currencyInput.value.trim()
         ? currencyInput.value.trim()
         : getCurrentCurrency();
@@ -2681,6 +3603,10 @@
 
       if (description) {
         payload.description = description;
+      }
+
+      if (deliveryType) {
+        payload.deliveryType = deliveryType;
       }
 
       if (toggle && toggle.checked) {
@@ -3141,6 +4067,868 @@
       }
     }
 
+    // Auction detail
+    function setDetailOpen(open) {
+      const overlay = document.getElementById('auction-detail');
+      if (!overlay) return;
+      overlay.classList.toggle('hidden', !open);
+      document.body.classList.toggle('detail-open', open);
+      if (!open) {
+        stopDetailCountdown();
+      }
+    }
+
+    function resetDetailView() {
+      const title = document.getElementById('detail-title');
+      const description = document.getElementById('detail-description');
+      const status = document.getElementById('detail-status');
+      const roundState = document.getElementById('detail-round-state');
+      const topbarTitle = document.getElementById('detail-topbar-title');
+      const round = document.getElementById('detail-round');
+      const ends = document.getElementById('detail-ends');
+      const lastBid = document.getElementById('detail-last-bid');
+      const delivery = document.getElementById('detail-delivery');
+      const bids = document.getElementById('detail-bids-list');
+      const winners = document.getElementById('detail-winners-list');
+      const timeline = document.getElementById('detail-timeline');
+      const verifyResult = document.getElementById('detail-verify-result');
+      if (title) title.textContent = t('web.detail.loadingTitle');
+      if (description) {
+        description.textContent = '';
+        description.classList.add('hidden');
+      }
+      if (status) {
+        status.textContent = '';
+        status.className = 'auction-status';
+      }
+      if (roundState) roundState.textContent = '';
+      if (topbarTitle) topbarTitle.textContent = '';
+      if (round) round.textContent = '--';
+      if (ends) ends.textContent = '--';
+      if (lastBid) lastBid.textContent = '--';
+      if (delivery) delivery.textContent = '--';
+      if (bids) bids.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+      if (winners) winners.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+      if (timeline) timeline.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+      if (verifyResult) verifyResult.textContent = '';
+      clearDetailBidError();
+      renderDetailBalance();
+      renderWatchlistState();
+      renderProofDetails();
+    }
+
+    function renderDetailBalance() {
+      const hint = document.getElementById('detail-balance-hint');
+      if (!hint) return;
+      const available = typeof state.balance.available === 'number' ? state.balance.available : 0;
+      hint.textContent = t('web.detail.balance', {
+        amount: available.toFixed(2),
+        currency: getCurrentCurrency()
+      });
+    }
+
+    function renderAuctionDetail() {
+      const auction = detailState.auction;
+      if (!auction) return;
+      const title = document.getElementById('detail-title');
+      const description = document.getElementById('detail-description');
+      const status = document.getElementById('detail-status');
+      const topbarTitle = document.getElementById('detail-topbar-title');
+      const delivery = document.getElementById('detail-delivery');
+
+      if (title) title.textContent = auction.title || t('web.detail.untitled');
+      if (topbarTitle) topbarTitle.textContent = auction.title || t('web.detail.untitled');
+      if (description) {
+        if (auction.description) {
+          description.textContent = auction.description;
+          description.classList.remove('hidden');
+        } else {
+          description.textContent = '';
+          description.classList.add('hidden');
+        }
+      }
+      if (status) {
+        const label = formatStatusLabel(auction.status || 'draft');
+        status.textContent = label;
+        status.className = `auction-status ${auction.status || 'draft'}`;
+      }
+      if (delivery) {
+        const deliveryType = detailState.replay?.auction?.deliveryType ?? auction.deliveryType ?? null;
+        delivery.textContent = deliveryType ? formatDeliveryType(deliveryType) : t('web.detail.deliveryDefault');
+      }
+      renderRoundSelect();
+      renderWatchlistState();
+      renderDetailBalance();
+    }
+
+    function formatRoundStatus(status) {
+      if (!status) return '';
+      const key = `web.round.status.${status}`;
+      const value = t(key);
+      return value === key ? status : value;
+    }
+
+    function renderAuctionDetailSnapshot() {
+      const snapshot = detailState.snapshot;
+      const roundState = document.getElementById('detail-round-state');
+      const round = document.getElementById('detail-round');
+      const lastBid = document.getElementById('detail-last-bid');
+      if (snapshot && roundState) {
+        roundState.textContent = formatRoundStatus(snapshot.roundStatus || '');
+      }
+
+      if (round && detailState.auction && Array.isArray(detailState.auction.rounds)) {
+        const totalRounds = detailState.auction.rounds.length;
+        const index = Number.isInteger(snapshot?.currentRoundIndex)
+          ? snapshot.currentRoundIndex
+          : Number.isInteger(detailState.roundIndex)
+            ? detailState.roundIndex
+            : null;
+        if (index !== null && totalRounds > 0) {
+          round.textContent = `${index + 1}/${totalRounds}`;
+        } else if (totalRounds > 0) {
+          round.textContent = `--/${totalRounds}`;
+        }
+      }
+
+      if (lastBid) {
+        const amount =
+          typeof snapshot?.lastBidAmount === 'number' && Number.isFinite(snapshot.lastBidAmount)
+            ? snapshot.lastBidAmount
+            : null;
+        if (amount === null) {
+          lastBid.textContent = '--';
+        } else {
+          lastBid.textContent = formatAmount(amount, snapshot.currency || getCurrentCurrency());
+        }
+      }
+
+      if (
+        snapshot &&
+        Number.isInteger(snapshot.currentRoundIndex) &&
+        detailState.roundIndex === snapshot.currentRoundIndex
+      ) {
+        detailState.endsAt = snapshot.roundEffectiveEndAt || null;
+      }
+      renderDetailEnds();
+    }
+
+    function renderDetailEnds() {
+      const ends = document.getElementById('detail-ends');
+      if (!ends) return;
+      if (!detailState.endsAt) {
+        ends.textContent = '--';
+        return;
+      }
+      const snapshot = detailState.snapshot;
+      const isLiveRound =
+        snapshot &&
+        Number.isInteger(snapshot.currentRoundIndex) &&
+        detailState.roundIndex === snapshot.currentRoundIndex;
+      ends.textContent = isLiveRound ? formatCountdown(detailState.endsAt) : formatDateTime(detailState.endsAt);
+      if (isLiveRound) {
+        if (!detailState.countdownTimer) {
+          startDetailCountdown();
+        }
+      } else {
+        stopDetailCountdown();
+      }
+    }
+
+    function formatCountdown(value) {
+      const target = new Date(value).getTime();
+      if (Number.isNaN(target)) return '--';
+      const diff = target - Date.now();
+      if (diff <= 0) return t('web.detail.ended');
+      const totalSeconds = Math.floor(diff / 1000);
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      const parts = [];
+      if (hours > 0) parts.push(`${hours}h`);
+      if (minutes > 0 || hours > 0) parts.push(`${minutes}m`);
+      parts.push(`${seconds}s`);
+      return parts.join(' ');
+    }
+
+    function startDetailCountdown() {
+      if (detailState.countdownTimer || !detailState.endsAt) return;
+      detailState.countdownTimer = setInterval(() => {
+        renderDetailEnds();
+      }, 1000);
+    }
+
+    function stopDetailCountdown() {
+      if (detailState.countdownTimer) {
+        clearInterval(detailState.countdownTimer);
+        detailState.countdownTimer = null;
+      }
+    }
+
+    function resolveRoundIndex(auction, snapshot, requested) {
+      const rounds = Array.isArray(auction?.rounds) ? auction.rounds.length : 0;
+      if (Number.isInteger(requested) && requested >= 0 && requested < rounds) {
+        return requested;
+      }
+      if (Number.isInteger(snapshot?.currentRoundIndex)) {
+        return snapshot.currentRoundIndex;
+      }
+      return rounds > 0 ? 0 : null;
+    }
+
+    function renderRoundSelect() {
+      const select = document.getElementById('detail-round-select');
+      if (!select || !detailState.auction || !Array.isArray(detailState.auction.rounds)) return;
+      if (detailState.auction.rounds.length === 0) {
+        select.innerHTML = '';
+        select.disabled = true;
+        return;
+      }
+      select.disabled = false;
+      select.innerHTML = detailState.auction.rounds
+        .map((round) => {
+          const label = t('web.detail.roundOption', { index: round.index + 1 });
+          return `<option value="${round.index}">${label}</option>`;
+        })
+        .join('');
+      if (detailState.roundIndex !== null) {
+        select.value = String(detailState.roundIndex);
+      }
+    }
+
+    async function openAuctionDetail(auctionId, roundIndexOverride = null) {
+      if (!auctionId) return;
+      uiState.lastTab = uiState.activeTab;
+      detailState.auctionId = auctionId;
+      detailState.roundIndex = Number.isInteger(roundIndexOverride) ? roundIndexOverride : null;
+      detailState.auction = null;
+      detailState.snapshot = null;
+      detailState.replay = null;
+      detailState.topBids = [];
+      detailState.topBidsUpdatedAt = null;
+      detailState.endsAt = null;
+      detailState.verify = null;
+      resetDetailView();
+      setDetailOpen(true);
+      updateDetailUrl();
+      realtimeState.detailAuctionId = auctionId;
+      syncAuctionSubscriptions();
+      await loadAuctionDetail();
+    }
+
+    function closeAuctionDetail() {
+      detailState.auctionId = null;
+      detailState.auction = null;
+      detailState.snapshot = null;
+      detailState.replay = null;
+      detailState.roundIndex = null;
+      detailState.endsAt = null;
+      detailState.verify = null;
+      if (detailState.replayRefreshTimer) {
+        clearTimeout(detailState.replayRefreshTimer);
+        detailState.replayRefreshTimer = null;
+      }
+      realtimeState.detailAuctionId = null;
+      syncAuctionSubscriptions();
+      setDetailOpen(false);
+      updateDetailUrl();
+    }
+
+    function applyInitialDetailFromUrl() {
+      const params = new URLSearchParams(window.location.search);
+      const auctionId = params.get('auction');
+      const roundParam = params.get('round');
+      if (!auctionId) return;
+      const roundIndex = roundParam !== null ? Number(roundParam) : null;
+      openAuctionDetail(auctionId, Number.isInteger(roundIndex) ? roundIndex : null);
+    }
+
+    function updateDetailUrl() {
+      const params = new URLSearchParams(window.location.search);
+      if (detailState.auctionId) {
+        params.set('auction', detailState.auctionId);
+        if (Number.isInteger(detailState.roundIndex)) {
+          params.set('round', String(detailState.roundIndex));
+        } else {
+          params.delete('round');
+        }
+      } else {
+        params.delete('auction');
+        params.delete('round');
+      }
+      const query = params.toString();
+      const url = `${window.location.pathname}${query ? `?${query}` : ''}`;
+      window.history.replaceState(null, '', url);
+    }
+
+    function buildReplayLink() {
+      if (!detailState.auctionId) return '';
+      const params = new URLSearchParams();
+      params.set('auction', detailState.auctionId);
+      if (Number.isInteger(detailState.roundIndex)) {
+        params.set('round', String(detailState.roundIndex));
+      }
+      return `${window.location.origin}${window.location.pathname}?${params.toString()}`;
+    }
+
+    async function copyReplayLink() {
+      const link = buildReplayLink();
+      if (!link) return;
+      const ok = await copyToClipboard(link);
+      showAlert(ok ? t('web.detail.replay.copied') : t('web.detail.replay.copyFailed'));
+    }
+
+    async function shareAuctionReplay() {
+      const link = buildReplayLink();
+      if (!link) return;
+      const title = detailState.auction?.title || t('web.detail.untitled');
+      const text = t('web.detail.shareText', { title });
+      if (tg && typeof tg.openTelegramLink === 'function') {
+        const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`;
+        tg.openTelegramLink(shareUrl);
+        return;
+      }
+      if (navigator.share) {
+        try {
+          await navigator.share({ title, text, url: link });
+          return;
+        } catch (error) {
+          // fall through to copy
+        }
+      }
+      await copyReplayLink();
+    }
+
+    async function loadAuctionDetail() {
+      const auctionId = detailState.auctionId;
+      if (!auctionId) return;
+      detailState.loading = true;
+      try {
+        const response = await apiFetch(`/api/auctions/${auctionId}`);
+        if (!response.ok) {
+          showAlert(t('web.detail.loadError'));
+          detailState.loading = false;
+          return;
+        }
+        const auction = await readJsonSafe(response);
+        detailState.auction = auction;
+        await Promise.all([loadAuctionSnapshot(), loadTopBids()]);
+        detailState.roundIndex = resolveRoundIndex(auction, detailState.snapshot, detailState.roundIndex);
+        renderAuctionDetail();
+        if (detailState.roundIndex === null) {
+          detailState.replay = null;
+          renderReplayTimeline();
+          renderWinners();
+          renderProofDetails();
+        } else {
+          await reloadReplay();
+        }
+      } catch (error) {
+        showAlert(t('web.detail.loadError'));
+      } finally {
+        detailState.loading = false;
+      }
+    }
+
+    async function loadAuctionSnapshot() {
+      const auctionId = detailState.auctionId;
+      if (!auctionId) return;
+      try {
+        const response = await apiFetch(`/api/auctions/${auctionId}/snapshot`);
+        if (!response.ok) {
+          return;
+        }
+        detailState.snapshot = await readJsonSafe(response);
+        renderAuctionDetailSnapshot();
+      } catch (error) {
+        // ignore
+      }
+    }
+
+    async function loadTopBids() {
+      const auctionId = detailState.auctionId;
+      if (!auctionId) return;
+      try {
+        const response = await apiFetch(`/api/auctions/${auctionId}/bids?limit=15`);
+        if (!response.ok) return;
+        const data = await readJsonSafe(response);
+        detailState.topBids = Array.isArray(data) ? data : [];
+        detailState.topBidsUpdatedAt = new Date();
+        renderDetailTopBids();
+      } catch (error) {
+        // ignore
+      }
+    }
+
+    function renderDetailTopBids() {
+      const container = document.getElementById('detail-bids-list');
+      const updated = document.getElementById('detail-bids-updated');
+      if (!container) return;
+      const bids = Array.isArray(detailState.topBids) ? detailState.topBids : [];
+      if (updated) {
+        updated.textContent = detailState.topBidsUpdatedAt
+          ? t('web.detail.topBids.updated', { time: formatDateTime(detailState.topBidsUpdatedAt) })
+          : '';
+      }
+      if (bids.length === 0) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-icon">🪙</div>
+            <div class="empty-title">${t('web.detail.topBids.empty.title')}</div>
+            <div class="empty-text">${t('web.detail.topBids.empty.body')}</div>
+          </div>
+        `;
+        return;
+      }
+      container.innerHTML = bids
+        .map((bid, index) => {
+          const userLabel = formatUserLabel(bid.userId);
+          const amount = typeof bid.amount === 'number' ? bid.amount : 0;
+          const rank = index + 1;
+          return `
+            <div class="detail-row">
+              <div class="detail-row-main">
+                <div class="detail-row-title">#${rank} ${userLabel}</div>
+                <div class="detail-row-meta">${formatDateTime(bid.createdAt)}</div>
+              </div>
+              <div class="detail-amount">${formatAmount(amount, detailState.auction?.currency)}</div>
+            </div>
+          `;
+        })
+        .join('');
+    }
+
+    function handleRoundSelectChange(event) {
+      const value = Number(event?.target?.value);
+      if (!Number.isInteger(value)) return;
+      detailState.roundIndex = value;
+      detailState.verify = null;
+      updateDetailUrl();
+      reloadReplay();
+    }
+
+    function scheduleReplayRefresh() {
+      if (!detailState.auctionId || detailState.roundIndex === null) return;
+      if (detailState.replayRefreshTimer) {
+        clearTimeout(detailState.replayRefreshTimer);
+      }
+      detailState.replayRefreshTimer = setTimeout(() => {
+        detailState.replayRefreshTimer = null;
+        reloadReplay();
+      }, 1200);
+    }
+
+    async function reloadReplay() {
+      const auctionId = detailState.auctionId;
+      if (!auctionId || detailState.roundIndex === null) return;
+      await loadAuctionReplay(auctionId, detailState.roundIndex);
+    }
+
+    async function loadAuctionReplay(auctionId, roundIndex) {
+      if (!auctionId || roundIndex === null) return;
+      const timeline = document.getElementById('detail-timeline');
+      if (timeline) {
+        timeline.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+      }
+      detailState.replayLoading = true;
+      detailState.verify = null;
+      try {
+        const response = await apiFetch(`/api/auctions/${auctionId}/rounds/${roundIndex}/replay`);
+        if (!response.ok) {
+          detailState.replay = null;
+          renderReplayTimeline();
+          renderWinners();
+          renderProofDetails();
+          return;
+        }
+        const data = await readJsonSafe(response);
+        detailState.replay = data?.replay || null;
+        renderAuctionDetail();
+        renderReplayTimeline();
+        renderWinners();
+        renderProofDetails();
+      } catch (error) {
+        detailState.replay = null;
+        renderReplayTimeline();
+        renderWinners();
+        renderProofDetails();
+      } finally {
+        detailState.replayLoading = false;
+      }
+    }
+
+    function computeExtensions(bids, round) {
+      const extensions = [];
+      if (!round || !round.antiSniping) return extensions;
+      const triggerWindow = Math.max(0, Number(round.antiSniping.triggerWindowSeconds || 0)) * 1000;
+      const extensionMs = Math.max(0, Number(round.antiSniping.extensionSeconds || 0)) * 1000;
+      const maxExtensions = Math.max(0, Number(round.antiSniping.maxExtensions || 0));
+      let currentEnd = new Date(round.endAt).getTime();
+      let count = 0;
+      bids.forEach((bid) => {
+        const bidTime = new Date(bid.createdAt).getTime();
+        if (Number.isNaN(bidTime) || count >= maxExtensions) return;
+        if (bidTime >= currentEnd - triggerWindow) {
+          currentEnd += extensionMs;
+          count += 1;
+          extensions.push({
+            bidId: bid.bidId,
+            time: bidTime,
+            count,
+            endAt: new Date(currentEnd).toISOString()
+          });
+        }
+      });
+      return extensions;
+    }
+
+    function computeTopKChanges(bids, allocationSize) {
+      const active = new Map();
+      const changes = new Map();
+      let lastKey = '';
+      bids.forEach((bid) => {
+        active.set(bid.userId, bid);
+        const ranking = Array.from(active.values()).sort((a, b) => {
+          if (b.amount !== a.amount) return b.amount - a.amount;
+          return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+        });
+        const top = ranking.slice(0, Math.max(1, allocationSize || 0));
+        const key = top.map((entry) => entry.userId).join('|');
+        if (key !== lastKey) {
+          changes.set(bid.bidId, top);
+          lastKey = key;
+        }
+      });
+      return changes;
+    }
+
+    function buildReplayTimeline(replay) {
+      if (!replay || !Array.isArray(replay.bids)) return [];
+      const events = [];
+      const bids = replay.bids;
+      const currency = replay.auction?.currency || getCurrentCurrency();
+      const allocationSize = replay.round?.allocationSize || 0;
+
+      const startTime = new Date(replay.round.startAt).getTime();
+      if (!Number.isNaN(startTime)) {
+        events.push({
+          type: 'start',
+          time: startTime,
+          title: t('web.detail.timeline.start')
+        });
+      }
+
+      const extensionEvents = computeExtensions(bids, replay.round);
+      const extensionsByBid = new Map(extensionEvents.map((entry) => [entry.bidId, entry]));
+      const topKChanges = computeTopKChanges(bids, allocationSize);
+
+      let lastUser = null;
+      let streak = 0;
+
+      bids.forEach((bid) => {
+        const bidTime = new Date(bid.createdAt).getTime();
+        if (Number.isNaN(bidTime)) return;
+        if (bid.userId === lastUser) {
+          streak += 1;
+        } else {
+          streak = 1;
+          lastUser = bid.userId;
+        }
+
+        const tags = [];
+        if (bid.origin) {
+          tags.push(t(`web.detail.timeline.origin.${bid.origin}`));
+        }
+        if (typeof bid.maxAmount === 'number') {
+          tags.push(t('web.detail.timeline.max', { amount: `${bid.maxAmount.toFixed(2)} ${currency}` }));
+        }
+        if (streak > 1) {
+          tags.push(t('web.detail.timeline.streak', { count: streak }));
+        }
+
+        events.push({
+          type: 'bid',
+          time: bidTime,
+          title: t('web.detail.timeline.bid', {
+            user: formatUserLabel(bid.userId),
+            amount: `${bid.amount.toFixed(2)} ${currency}`
+          }),
+          meta: formatDateTime(bid.createdAt),
+          tags
+        });
+
+        const extension = extensionsByBid.get(bid.bidId);
+        if (extension) {
+          events.push({
+            type: 'extension',
+            time: extension.time,
+            title: t('web.detail.timeline.extension', {
+              count: extension.count
+            }),
+            meta: t('web.detail.timeline.extensionEnd', { time: formatDateTime(extension.endAt) })
+          });
+        }
+
+        const topK = topKChanges.get(bid.bidId);
+        if (topK) {
+          const topLabel = topK
+            .map((entry, index) => `${index + 1}. ${formatUserLabel(entry.userId)}`)
+            .join(' · ');
+          events.push({
+            type: 'shift',
+            time: bidTime,
+            title: t('web.detail.timeline.topShift', { size: allocationSize || topK.length }),
+            meta: topLabel
+          });
+        }
+      });
+
+      const endAt = replay.state?.effectiveEndAt || replay.round.endAt;
+      const endTime = endAt ? new Date(endAt).getTime() : null;
+      if (endTime && !Number.isNaN(endTime)) {
+        events.push({
+          type: 'end',
+          time: endTime,
+          title: t('web.detail.timeline.end'),
+          meta: formatDateTime(endAt)
+        });
+      }
+
+      if (Array.isArray(replay.winners) && replay.winners.length > 0) {
+        events.push({
+          type: 'winner',
+          time: endTime || Date.now(),
+          title: t('web.detail.timeline.winners'),
+          meta: replay.winners
+            .map((winner) => `${winner.rank}. ${formatUserLabel(winner.userId)}`)
+            .join(' · ')
+        });
+      }
+
+      return events.sort((a, b) => a.time - b.time);
+    }
+
+    function renderReplayTimeline() {
+      const timeline = document.getElementById('detail-timeline');
+      if (!timeline) return;
+      if (!detailState.replay) {
+        timeline.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-icon">🧭</div>
+            <div class="empty-title">${t('web.detail.timeline.empty.title')}</div>
+            <div class="empty-text">${t('web.detail.timeline.empty.body')}</div>
+          </div>
+        `;
+        return;
+      }
+      detailState.endsAt = detailState.replay.state?.effectiveEndAt || detailState.replay.round?.endAt || null;
+      renderDetailEnds();
+
+      const events = buildReplayTimeline(detailState.replay);
+      if (events.length === 0) {
+        timeline.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-icon">🧭</div>
+            <div class="empty-title">${t('web.detail.timeline.empty.title')}</div>
+            <div class="empty-text">${t('web.detail.timeline.empty.body')}</div>
+          </div>
+        `;
+        return;
+      }
+      timeline.innerHTML = events
+        .map((event) => {
+          const tags = event.tags && event.tags.length
+            ? `<div class="timeline-tags">${event.tags.map((tag) => `<span class="timeline-tag">${tag}</span>`).join('')}</div>`
+            : '';
+          const meta = event.meta ? `<div class="timeline-meta">${event.meta}</div>` : '';
+          return `
+            <div class="timeline-item ${event.type}">
+              <div class="timeline-marker"></div>
+              <div>
+                <div class="timeline-title">${event.title}</div>
+                ${meta}
+                ${tags}
+              </div>
+            </div>
+          `;
+        })
+        .join('');
+    }
+
+    function renderWinners() {
+      const container = document.getElementById('detail-winners-list');
+      if (!container) return;
+      const winners = detailState.replay?.winners;
+      if (!Array.isArray(winners) || winners.length === 0) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-icon">🏁</div>
+            <div class="empty-title">${t('web.detail.winners.empty.title')}</div>
+            <div class="empty-text">${t('web.detail.winners.empty.body')}</div>
+          </div>
+        `;
+        return;
+      }
+      container.innerHTML = winners
+        .map((winner) => `
+          <div class="detail-row">
+            <div class="detail-row-main">
+              <div class="detail-row-title">#${winner.rank} ${formatUserLabel(winner.userId)}</div>
+              <div class="detail-row-meta">${formatShortId(winner.bidId)}</div>
+            </div>
+            <div class="detail-amount">${formatAmount(winner.amount, detailState.replay?.auction?.currency)}</div>
+          </div>
+        `)
+        .join('');
+    }
+
+    function renderProofDetails() {
+      const merkleRoot = document.getElementById('detail-merkle-root');
+      const merkleCount = document.getElementById('detail-merkle-count');
+      const signature = document.getElementById('detail-signature');
+      const publicKey = document.getElementById('detail-public-key');
+      const verifyButton = document.getElementById('detail-verify-btn');
+
+      const replay = detailState.replay;
+      const proof = replay?.proof || null;
+      const root = replay?.merkleRoot || proof?.payload?.bidsRoot || null;
+      const count = replay?.merkleCount ?? proof?.payload?.bidsCount ?? null;
+
+      if (merkleRoot) {
+        merkleRoot.textContent = root || t('web.detail.proof.pending');
+      }
+      if (merkleCount) {
+        merkleCount.textContent = count !== null ? String(count) : t('web.detail.proof.pending');
+      }
+      if (signature) {
+        signature.textContent = proof?.signature || t('web.detail.proof.pending');
+      }
+      if (publicKey) {
+        publicKey.textContent = proof?.publicKey || t('web.detail.proof.pending');
+      }
+      if (verifyButton) {
+        verifyButton.disabled = !detailState.auctionId || detailState.roundIndex === null || !root;
+      }
+      renderVerificationResult();
+    }
+
+    function renderVerificationResult() {
+      const result = document.getElementById('detail-verify-result');
+      if (!result) return;
+      if (!detailState.verify) {
+        result.textContent = '';
+        result.classList.remove('is-ok', 'is-fail');
+        return;
+      }
+      if (detailState.verify.ok) {
+        result.textContent = t('web.detail.proof.verified');
+        result.classList.add('is-ok');
+        result.classList.remove('is-fail');
+        return;
+      }
+      result.textContent = t('web.detail.proof.failed');
+      result.classList.add('is-fail');
+      result.classList.remove('is-ok');
+    }
+
+    async function verifyRoundProof() {
+      const auctionId = detailState.auctionId;
+      const roundIndex = detailState.roundIndex;
+      const result = document.getElementById('detail-verify-result');
+      if (!auctionId || roundIndex === null) return;
+      if (result) {
+        result.textContent = t('web.detail.proof.verifying');
+        result.classList.remove('is-ok', 'is-fail');
+      }
+      try {
+        const response = await apiFetch(`/api/auctions/${auctionId}/rounds/${roundIndex}/verify`);
+        if (!response.ok) {
+          detailState.verify = { ok: false };
+          renderVerificationResult();
+          return;
+        }
+        const data = await readJsonSafe(response);
+        detailState.verify = data;
+        renderVerificationResult();
+      } catch (error) {
+        detailState.verify = { ok: false };
+        renderVerificationResult();
+      }
+    }
+
+    function setDetailBidError(message) {
+      const errorEl = document.getElementById('detail-bid-error');
+      if (!errorEl) return;
+      errorEl.textContent = message || '';
+      errorEl.classList.toggle('hidden', !message);
+    }
+
+    function clearDetailBidError() {
+      setDetailBidError('');
+    }
+
+    async function submitAuctionBid() {
+      if (detailState.bidSubmitting) return;
+      const auctionId = detailState.auctionId;
+      if (!auctionId) return;
+      if (!state.currentUser) {
+        showAlert(t('web.auth.required'));
+        return;
+      }
+      const amountInput = document.getElementById('detail-bid-amount');
+      const maxInput = document.getElementById('detail-bid-max');
+      const submitButton = document.getElementById('detail-bid-submit');
+      const amount = amountInput ? parseFloat(amountInput.value) : NaN;
+      const maxAmount = maxInput && maxInput.value.trim() !== '' ? parseFloat(maxInput.value) : null;
+
+      clearDetailBidError();
+
+      if (!Number.isFinite(amount) || amount <= 0) {
+        setDetailBidError(t('web.detail.bid.error.invalidAmount'));
+        return;
+      }
+      if (maxAmount !== null && (!Number.isFinite(maxAmount) || maxAmount <= 0)) {
+        setDetailBidError(t('web.detail.bid.error.invalidMax'));
+        return;
+      }
+      if (maxAmount !== null && maxAmount < amount) {
+        setDetailBidError(t('web.detail.bid.error.maxBelow'));
+        return;
+      }
+
+      detailState.bidSubmitting = true;
+      if (submitButton) submitButton.disabled = true;
+
+      try {
+        const payload = { amount };
+        if (maxAmount !== null) {
+          payload.maxAmount = maxAmount;
+        }
+        const response = await apiFetch(`/api/auctions/${auctionId}/bids`, {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+        const data = await readJsonSafe(response);
+        if (!response.ok) {
+          setDetailBidError(
+            t('web.detail.bid.error.failed', { message: data?.message || t('errors.unknown') })
+          );
+          detailState.bidSubmitting = false;
+          if (submitButton) submitButton.disabled = false;
+          return;
+        }
+        if (amountInput) amountInput.value = '';
+        if (maxInput) maxInput.value = '';
+        await loadBalance();
+        scheduleReplayRefresh();
+      } catch (error) {
+        setDetailBidError(t('web.detail.bid.error.network'));
+      } finally {
+        detailState.bidSubmitting = false;
+        if (submitButton) submitButton.disabled = false;
+      }
+    }
+
     // Switch tab
     function switchTab(tab, silent = false) {
       const nextTab = tab === 'auctions' || tab === 'create' || tab === 'home' ? tab : 'home';
@@ -3170,6 +4958,7 @@
       if (nextTab === 'home') {
         loadActiveBids();
         loadAuctions();
+        loadDeliveries();
       }
 
       if (!silent && tg) {
@@ -3188,7 +4977,7 @@
 
     function openAuction(id) {
       triggerHapticImpact('medium');
-      window.location.href = `/auction/${id}`;
+      openAuctionDetail(id);
     }
 
     // Start app
