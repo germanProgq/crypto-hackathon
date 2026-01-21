@@ -1,306 +1,353 @@
-# Crypto Hack Auction Platform
+# Платформа аукционов Crypto Hack
 
-Telegram-native, multi-round auctions with crypto balances and settlement. The system is built as a
-ledger-first, concurrency-safe engine that mirrors Telegram Gift Auction mechanics: one active bid
-per auction, deterministic ranking, and automatic bid carry-over across rounds.
+Боевой Telegram-стек для многораундовых крипто-аукционов, рассчитанный на высокую конкуренцию
+ставок, прозрачные расчеты и мгновенные обновления. Движок построен как ledger-first система с
+безопасной конкуренцией: одна активная ставка на аукцион, детерминированное ранжирование и
+автоматический перенос ставок между раундами.
 
-## Contents
-- Overview
-- Core mechanics
-- Architecture
-- Services and ports
-- Data stores and external dependencies
-- Key flows
-- Auth and security
-- Rate limiting and safety controls
-- Caching and realtime
-- Data retention
-- Configuration (env)
-- Running locally
-- Mocking external crypto services
-- Observability
-- Load testing
-- Troubleshooting
-- Reference docs
+Это не просто витрина ставок, а полноразмерный расчетный контур: депозиты, блокировки, списания,
+возвраты и выводы проходят через проверяемый журнал операций с идемпотентностью и строгими
+контролями безопасности.
 
-## Overview
-This repo ships a full auction stack composed of multiple Node services. The auction engine and
-ledger are designed to be deterministic and idempotent. The crypto gateway bridges deposits and
-withdrawals to external observers and signers. A minimal web UI and Telegram bot expose the
-experience to users.
+Результаты раундов подписываются, строятся Merkle-корни ставок, а replay-эндпоинты позволяют
+проверить честность и восстановить полную картину раунда.
 
-The codebase favors explicit validation, strict schemas, and careful concurrency controls:
-- All money-moving operations are append-only ledger entries.
-- All client-visible state is derived from canonical Mongo records and cached safely in Redis.
-- All state transitions are idempotent and safe to retry.
+## Содержание
+- [Обзор](#overview)
+- [Возможности](#features)
+- [Ключевые механики](#core-mechanics)
+- [Архитектура](#architecture)
+- [Сервисы и порты](#services-and-ports)
+- [Хранилища данных и внешние зависимости](#data-and-deps)
+- [Ключевые сценарии](#key-flows)
+- [Аутентификация и безопасность](#auth-and-security)
+- [Ограничения частоты и защитные контроли](#rate-limits)
+- [Кэширование и realtime](#caching-realtime)
+- [Хранение данных](#data-retention)
+- [Конфигурация (env)](#configuration)
+- [Запуск локально](#running-locally)
+- [Мокирование внешних крипто-сервисов](#mocking-crypto)
+- [Наблюдаемость](#observability)
+- [Нагрузочное тестирование](#load-testing)
+- [Диагностика проблем](#troubleshooting)
+- [Справочные документы](#reference-docs)
 
-User-facing highlights:
-- Verifiable fairness: signed round results + Merkle root of bids with replay endpoints.
-- Proxy bidding (max bid/auto-raise) with escrowed max holds.
-- Live replay timeline with bid streaks, anti-sniping extensions, and top-K shifts.
-- Watchlist + outbid alerts with one-tap rebid in the bot.
-- Instant delivery receipts for winners (access code, Telegram role, NFT mint).
+<a id="overview"></a>
+## Обзор
+В репозитории поставляется полный стек аукционов, разложенный на несколько Node‑сервисов. Движок
+аукционов и журнал операций спроектированы детерминированно и идемпотентно. Крипто‑шлюз
+соединяет депозиты и выводы со внешними наблюдателями и сервисами подписи. Минимальный web‑UI и
+Telegram‑бот дают пользователям доступ к опыту.
+Стек рассчитан на плотную конкуренцию ставок: быстрый для пользователя и железобетонный для денег.
 
-## Core mechanics
-- Multi-round allocation: each round selects winners, non-winners carry forward.
-- Anti-sniping: bids in the final window extend the round with hard caps.
-- Ledger-first balances: holds, captures, and releases are append-only entries.
-- Idempotency: all money-moving operations use idempotency keys.
-- Deterministic ranking: amount desc, createdAt asc, bid id asc.
-- Proxy bidding: max bid escrow + automatic raises.
-- Verifiable rounds: signed proofs + Merkle roots for bid sets.
-- Delivery receipts: per-winner proof of fulfillment.
+Кодовая база делает упор на явную валидацию, строгие схемы и аккуратный контроль конкуренции:
+- Все операции, двигающие деньги, пишутся в журнал только на добавление.
+- Любое видимое клиенту состояние выводится из каноничных записей MongoDB и безопасно
+  кэшируется в Redis.
+- Все переходы состояния идемпотентны и безопасны к повторным попыткам.
 
-## Architecture
-The system is split into specialized services so that each domain can scale independently and so
-that failures are isolated.
+<a id="features"></a>
+## Возможности
+- Прозрачная справедливость: раунды подписываются, строятся Merkle-корни ставок и доступны
+  replay-эндпоинты для полной верификации.
+- Многораундовые аукционы с переносом ставок и детерминированным ранжированием без спорных исходов.
+- Антиснайпинг с умными продлениями и жесткими лимитами, чтобы финал оставался динамичным и
+  контролируемым.
+- Прокси-ставки: максимум в эскроу и авто-повышение по шагу, чтобы выигрывать без постоянного
+  клика.
+- Ledger-first расчеты: блокировки, списания и возвраты живут в журнале операций и легко
+  аудируются.
+- Гибкие депозитные стратегии: address_pool, memo_tag, address_per_user (HD) с отслеживанием
+  подтверждений.
+- Строгий вывод средств: allowlist, cooldown, лимиты, детектор аномалий, ручная или
+  авто-авторизация, подпись и подтверждения.
+- Realtime-опыт: WebSocket-ленты ставок, топ-K сдвиги, streak-динамика и молниеносные обновления
+  UI и бота.
+- Уведомления и вовлечение: watchlist, outbid alerts, one-tap rebid и быстрый возврат в гонку.
+- Доставка выигрышей: access code, Telegram-роль или NFT-минт с подтверждением для победителя.
+- Безопасная конкуренция: ключи идемпотентности, распределенные блокировки и rate limit на
+  пользователя, аукцион и IP.
+- Масштабирование по доменам: движок, воркеры, gateway, web и бот масштабируются независимо.
+- Кэширование без потерь: Redis sorted sets для рейтингов, снапшоты и безопасные
+  fallback-синхронизации.
+- Наблюдаемость из коробки: health/ready, Prometheus-метрики и структурированные JSON-логи.
+- Готовность к нагрузке: сценарии стресс-тестов, anti-sniping и reconcile-наборы для проверки
+  устойчивости.
+- Быстрый локальный старт: Docker compose, мок-обсервер и мок-подписант для разработки без внешней
+  сети.
 
-### Services and responsibilities
-- Auction engine: auction CRUD, bids, round snapshots, ranking caches.
-- Ledger: balances, holds, and withdrawal ledger entries.
-- Crypto gateway: deposit attribution, withdrawal lifecycle, safety checks, and broadcasting.
-- Workers: auction round progression and settlement finalization loops.
-- Web: web UI, HTTP API, and realtime WebSocket updates.
-- Bot: Telegram bot handlers and notification delivery.
-- Signer: signs withdrawal payloads (local keys or KMS).
-- Mock RPC: network mock for observer + signer endpoints.
+<a id="core-mechanics"></a>
+## Ключевые механики
+- Одна активная ставка на аукцион: конкурентные ставки сериализуются и остаются прозрачными.
+- Многораундовое распределение: каждый раунд выбирает победителей, остальные переходят дальше.
+- Антиснайпинг: ставки в последнем окне продлевают раунд с жесткими лимитами.
+- Балансы на базе журнала: блокировки, списания и возвраты оформлены append-only записями.
+- Идемпотентность: все денежные операции используют ключи идемпотентности.
+- Детерминированное ранжирование: сумма desc, createdAt asc, id ставки asc.
+- Прокси-ставки: эскроу максимума и авто-повышение.
+- Проверяемые раунды: подписи и корни Меркла для наборов ставок.
+- Квитанции выдачи: подтверждение исполнения для каждого победителя.
 
-## Services and ports (default docker-compose)
-- Auction engine: http://localhost:4001
-- Ledger: http://localhost:4002
-- Crypto gateway: http://localhost:4003
-- Bot: http://localhost:4004
+<a id="architecture"></a>
+## Архитектура
+Система разделена на специализированные сервисы, чтобы домены масштабировались независимо,
+а сбои локализовались.
+
+### Сервисы и ответственность
+- Движок аукциона: CRUD аукционов, ставки, снимки раундов, кэш ранжирования.
+- Журнал операций: балансы, блокировки и записи вывода средств.
+- Крипто‑шлюз: атрибуция депозитов, жизненный цикл выводов, проверки безопасности, отправка.
+- Воркеры: прогресс раундов и финализация расчётов.
+- Web: web‑UI, HTTP API и realtime‑обновления по WebSocket.
+- Бот: обработчики Telegram и доставка уведомлений.
+- Подписант: подписывает выводы (локальные ключи или KMS).
+- Mock RPC: сетевой мок для наблюдателя и подписанта.
+
+<a id="services-and-ports"></a>
+## Сервисы и порты (docker-compose по умолчанию)
+- Движок аукциона: http://localhost:4001
+- Журнал операций: http://localhost:4002
+- Крипто‑шлюз: http://localhost:4003
+- Бот: http://localhost:4004
 - Web UI: http://localhost:4005
-- Workers: http://localhost:4006
-- Signer: http://localhost:4007
+- Воркеры: http://localhost:4006
+- Подписант: http://localhost:4007
 - Mock RPC: http://localhost:9000
 
-## Data stores and external dependencies
-Data stores:
-- MongoDB: canonical source of truth for auctions, bids, ledger entries, withdrawals, and
-  notifications.
-- Redis: realtime pub/sub, rate limiting, locks, ranking caches, and short-lived snapshots.
+<a id="data-and-deps"></a>
+## Хранилища данных и внешние зависимости
+Хранилища данных:
+- MongoDB: каноничный источник правды для аукционов, ставок, записей журнала, выводов и
+  уведомлений.
+- Redis: pub/sub в реальном времени, ограничения частоты, блокировки, кэш ранжирования и
+  краткоживущие снимки.
 
-External dependencies:
-- Telegram: WebApp init data for user auth, bot API for notifications.
-- Crypto observer: external service for inbound transaction observations.
-- Crypto signer: external or internal service that signs withdrawal payloads.
+Внешние зависимости:
+- Telegram: init‑данные WebApp для аутентификации, bot API для уведомлений.
+- Крипто‑наблюдатель: внешний сервис, фиксирующий входящие транзакции.
+- Крипто‑подписант: внешний или внутренний сервис, подписывающий выводы.
 
-## Key flows
+<a id="key-flows"></a>
+## Ключевые сценарии
 
-### Auction creation
-- The auction engine validates the full auction configuration, including timing rules.
-- Auctions are stored in MongoDB and round state documents are created.
-- Realtime events are published to update web clients.
+### Создание аукциона
+- Движок валидирует конфигурацию, включая временные правила.
+- Аукционы сохраняются в MongoDB, создаются документы состояния раунда.
+- Realtime‑события публикуются для обновления клиентов.
 
-### Bid placement
-- Bid request validates auth, amount, and idempotency key.
-- Bid service uses Redis rate limits and a distributed lock to prevent race conditions.
-- A hold is placed in the ledger for the bid amount.
-- Bid is stored and ranking is updated in Redis sorted sets.
-- Realtime event is emitted for auction bids and active bids per user.
+### Размещение ставки
+- Запрос валидирует авторизацию, сумму и ключ идемпотентности.
+- Сервис ставок применяет лимиты Redis и распределённую блокировку от гонок.
+- В журнале ставится блокировка на сумму ставки.
+- Ставка сохраняется, ранжирование обновляется в Redis sorted sets.
+- Realtime‑события публикуются для ставок и активных ставок пользователя.
 
-### Proxy bidding (max bid / auto-raise)
-- Users can submit a max bid to auto-raise above competitors.
-- Ledger holds escrow the delta to the new max bid.
-- Auto-raise bids are recorded with origin metadata.
+### Прокси‑ставки (максимум / авто‑повышение)
+- Пользователь задаёт максимум, система автоматически поднимает ставку над конкурентами.
+- Блокировка в журнале удерживает дельту до нового максимума.
+- Авто‑ставки записываются с метаданными происхождения.
 
-### Round verification and replay
-- Round results are signed with a Merkle root of all bids.
-- Replay endpoints expose full bid timelines, anti-sniping extensions, and winners.
-- Verification compares the signed payload to the stored round data.
+### Проверка раундов и воспроизведение
+- Результаты раунда подписываются вместе с корнем Меркла по ставкам.
+- Replay‑эндпоинты отдают таймлайны ставок, антиснайпинг и победителей.
+- Проверка сопоставляет подписанный payload с сохранёнными данными.
 
-### Watchlist and outbid alerts
-- Users can watch auctions and opt into outbid alerts.
-- Outbid alerts include replay links and one-tap rebid actions in the bot.
+### Список наблюдения и уведомления о перебитии
+- Пользователь добавляет аукционы в лист наблюдения и включает алерты.
+- Уведомления содержат ссылку на replay и кнопку для ставки в один тап.
 
-### Delivery receipts
-- Winners receive delivery receipts (access code, Telegram role token, or NFT mint ref).
-- Delivery receipts are available in bot messages and the web UI.
+### Квитанции выдачи
+- Победители получают подтверждения (access code, Telegram‑роль или ref NFT‑минта).
+- Квитанции доступны в сообщениях бота и web‑интерфейсе.
 
-### Round progression and settlement (workers)
-- Auction round scheduler moves rounds from scheduled to live to closed based on time and
-  anti-sniping rules.
-- Round finalizer settles a closed round by:
-  - Capturing holds for winners.
-  - Releasing holds for non-winners.
-  - Storing round results.
-  - Publishing realtime events.
+### Переход раундов и расчёт (воркеры)
+- Планировщик переводит раунды из scheduled в live и closed по времени и правилам антиснайпинга.
+- Финализатор закрытого раунда:
+  - Списывает блокировки победителей.
+  - Освобождает блокировки проигравших.
+  - Сохраняет результаты раунда.
+  - Публикует realtime‑события.
 
-### Deposits (crypto gateway)
-- Observer client lists transactions for watched addresses.
-- Wallet strategy maps observed transactions to users via:
-  - address_pool, memo_tag, or address_per_user strategy.
-- Confirmations are tracked until the required threshold is met.
-- Ledger entry is created for confirmed deposits.
+### Депозиты (крипто‑шлюз)
+- Клиент наблюдателя перечисляет транзакции для отслеживаемых адресов.
+- Стратегия кошелька связывает транзакции с пользователями через:
+  - address_pool, memo_tag или address_per_user.
+- Подтверждения отслеживаются до заданного порога.
+- Для подтверждённых депозитов создаётся запись журнала.
 
-### Withdrawals (crypto gateway)
-- Request is validated, idempotent, and safety-checked.
-- Safety checks include allowlists, cooldowns, per-hour/day limits, and anomaly detection.
-- Admin approval is required for withdrawals that are not auto-authorized.
-- Approved withdrawals are signed, broadcast, and confirmed.
-- Ledger entries are created for request, broadcast, and confirm stages.
+### Выводы (крипто‑шлюз)
+- Запрос валидируется, проверяется идемпотентность и безопасность.
+- Проверки включают allowlist, cooldown, лимиты по часу/дню и поиск аномалий.
+- Для неавто‑разрешённых выводов требуется админ‑одобрение.
+- Одобренные выводы подписываются, отправляются и подтверждаются.
+- Записи журнала создаются для этапов запроса, отправки и подтверждения.
 
-### Realtime updates
-- Realtime events are published to Redis pub/sub.
-- Web service fans out updates to WebSocket clients.
-- If pub/sub is unavailable, the web service falls back to periodic resyncs.
+### Обновления в реальном времени
+- События публикуются через Redis pub/sub.
+- Web‑сервис рассылает обновления WebSocket‑клиентам.
+- Если pub/sub недоступен, web‑сервис переключается на периодические синхронизации.
 
-## Auth and security
-Core auth (auction-engine, ledger, crypto-gateway):
-- Service token: `x-service-token: <CORE_API_TOKEN>` or `Authorization: Bearer <CORE_API_TOKEN>`.
-- Telegram init data: `x-telegram-init-data`, `x-telegram-web-app-data`, or `Authorization: TMA`.
-- Demo user (non-production only): `x-demo-user-id: <userId>`.
+<a id="auth-and-security"></a>
+## Аутентификация и безопасность
+Основная аутентификация (движок аукциона, журнал, крипто‑шлюз):
+- Токен сервиса: `x-service-token: <CORE_API_TOKEN>` или `Authorization: Bearer <CORE_API_TOKEN>`.
+- Telegram init data: `x-telegram-init-data`, `x-telegram-web-app-data` или `Authorization: TMA`.
+- Демо‑пользователь (только не‑prod): `x-demo-user-id: <userId>`.
 
-Admin auth (crypto-gateway admin endpoints):
+Админская аутентификация (admin‑эндпоинты крипто‑шлюза):
 - `x-admin-token: <CRYPTO_ADMIN_TOKEN>`.
 
-Signer auth:
+Аутентификация подписанта:
 - `x-signer-token: <SIGNER_API_TOKEN>`.
-- IP allowlist enforced by `SIGNER_ALLOWED_IPS` (defaults to private networks).
+- IP‑allowlist по `SIGNER_ALLOWED_IPS` (по умолчанию private‑сети).
 
 Web CSRF/CORS:
-- Unsafe methods require a valid `Origin` header and must match `WEB_ALLOWED_ORIGINS`.
-- Disallowed origins return `403` with `csrf_failed` or `cors_rejected`.
+- Небезопасные методы требуют валидный `Origin`, совпадающий с `WEB_ALLOWED_ORIGINS`.
+- Запрещённые origin возвращают `403` с `csrf_failed` или `cors_rejected`.
 
-## Rate limiting and safety controls
-Bidding rate limits:
-- Per-user, per-user-per-auction, and per-IP limits are enforced.
-- Redis is used for shared limits; a local fallback is used when Redis is unavailable.
+<a id="rate-limits"></a>
+## Ограничения частоты и защитные контроли
+Ограничения ставок:
+- Применяются лимиты на пользователя, на пользователя в аукционе и на IP.
+- Redis используется для общих лимитов; локальный fallback включается при недоступности Redis.
 
-Withdrawal safety checks:
-- Allowlist requirement (optional).
-- Cooldown between withdrawals per user.
-- Max withdrawals per hour and per day.
-- Daily amount limits.
-- Anomaly detection using historical averages.
+Защита выводов:
+- Требование allowlist (опционально).
+- Cooldown между выводами для пользователя.
+- Максимум выводов в час и день.
+- Дневные лимиты по суммам.
+- Поиск аномалий по историческим средним.
 
-## Caching and realtime
-- Auction list cache is stored in Redis with short TTL.
-- Auction snapshot and round state caches use Redis + in-process TTL caches.
-- Bid ranking is stored in Redis sorted sets for fast leaderboard reads.
-- Web realtime uses pub/sub with periodic resyncs as a safety net.
+<a id="caching-realtime"></a>
+## Кэширование и realtime
+- Кэш списка аукционов хранится в Redis с коротким TTL.
+- Кэш снимков аукциона и состояния раунда использует Redis и локальные TTL‑кэши.
+- Ранжирование ставок хранится в Redis sorted sets для быстрых чтений.
+- Realtime основан на pub/sub и периодической пересинхронизации как safety net.
 
-## Data retention
-Retention is controlled via TTL fields and background cleanup:
-- Bids: `RETENTION_BIDS_DAYS` (default 90).
-- Ledger entries: `RETENTION_LEDGER_DAYS` (default 365).
-- Notification queue: `RETENTION_NOTIFICATIONS_DAYS` (default 30).
+<a id="data-retention"></a>
+## Хранение данных
+Ретеншн контролируется TTL‑полями и фоновыми очистками:
+- Ставки: `RETENTION_BIDS_DAYS` (по умолчанию 90).
+- Записи журнала: `RETENTION_LEDGER_DAYS` (по умолчанию 365).
+- Очередь уведомлений: `RETENTION_NOTIFICATIONS_DAYS` (по умолчанию 30).
 
-## Configuration (env)
-The config is validated at startup; missing required values cause a hard error.
+<a id="configuration"></a>
+## Конфигурация (env)
+Конфигурация валидируется при старте; отсутствие обязательных значений вызывает ошибку.
 
-### Core service settings
+### Настройки core‑сервисов
 - `NODE_ENV`: development | test | production (default development)
-- `SERVICE_NAME`: name of the service
-- `HTTP_HOST`: host to bind (default 0.0.0.0)
-- `HTTP_PORT`: port to bind
+- `SERVICE_NAME`: имя сервиса
+- `HTTP_HOST`: host для биндинга (default 0.0.0.0)
+- `HTTP_PORT`: порт
 - `LOG_LEVEL`: fatal | error | warn | info | debug | trace (default info)
 
-### Storage
-- `MONGO_URI`: MongoDB connection string
-- `MONGO_DB`: database name
-- `MONGO_POOL_MAX`: connection pool size
-- `REDIS_URL`: Redis connection string
-- `REDIS_PREFIX`: Redis key prefix
+### Хранилища
+- `MONGO_URI`: строка подключения MongoDB
+- `MONGO_DB`: имя базы
+- `MONGO_POOL_MAX`: размер пула подключений
+- `REDIS_URL`: строка подключения Redis
+- `REDIS_PREFIX`: префикс ключей Redis
 
-### Auth tokens
-- `CORE_API_TOKEN`: required for auction-engine, ledger, crypto-gateway
-- `CRYPTO_ADMIN_TOKEN`: admin actions in crypto gateway
-- `SIGNER_API_TOKEN`: signer auth token
-- `CRYPTO_SIGNER_TOKEN`: token used by crypto gateway when calling signer
+### Токены аутентификации
+- `CORE_API_TOKEN`: обязательный для движка аукциона, журнала, крипто‑шлюза
+- `CRYPTO_ADMIN_TOKEN`: админ‑действия в крипто‑шлюзе
+- `SIGNER_API_TOKEN`: токен аутентификации подписанта
+- `CRYPTO_SIGNER_TOKEN`: токен, который крипто‑шлюз использует при вызове подписанта
 
-### Rate limits
-- `RATE_LIMIT_USER_PER_SECOND`: per-user (default 5)
-- `RATE_LIMIT_AUCTION_USER_PER_SECOND`: per-user-per-auction (default 3)
-- `RATE_LIMIT_IP_PER_SECOND`: per-IP (default 20)
+### Лимиты
+- `RATE_LIMIT_USER_PER_SECOND`: на пользователя (default 5)
+- `RATE_LIMIT_AUCTION_USER_PER_SECOND`: на пользователя в аукционе (default 3)
+- `RATE_LIMIT_IP_PER_SECOND`: на IP (default 20)
 
-### Bidding
-- `BID_MIN_INCREMENT`: minimum bid increment (default 0)
-- `BID_PROXY_AUTO_RAISE`: auto-raise increment when proxy bidding (default 0)
+### Ставки
+- `BID_MIN_INCREMENT`: минимальный шаг ставки (default 0)
+- `BID_PROXY_AUTO_RAISE`: авто‑шаг при прокси‑ставках (default 0)
 
-### Retention
-- `RETENTION_BIDS_DAYS`: TTL for bids
-- `RETENTION_LEDGER_DAYS`: TTL for ledger entries
-- `RETENTION_NOTIFICATIONS_DAYS`: TTL for notification queue
+### Хранение
+- `RETENTION_BIDS_DAYS`: TTL для ставок
+- `RETENTION_LEDGER_DAYS`: TTL для журнала
+- `RETENTION_NOTIFICATIONS_DAYS`: TTL для очереди уведомлений
 
 ### I18n
-- `I18N_DEFAULT_LOCALE`: default locale (en or ru)
-- `I18N_SUPPORTED_LOCALES`: comma-separated locale list
+- `I18N_DEFAULT_LOCALE`: локаль по умолчанию (en или ru)
+- `I18N_SUPPORTED_LOCALES`: список локалей через запятую
 
 ### Telegram
-- `TELEGRAM_BOT_TOKEN`: bot token (required for Telegram auth)
-- `TELEGRAM_API_BASE`: Telegram API base URL
-- `TELEGRAM_WEBAPP_MAX_AGE_SECONDS`: max age for init data
+- `TELEGRAM_BOT_TOKEN`: токен бота (обязателен для Telegram‑аутентификации)
+- `TELEGRAM_API_BASE`: базовый URL Telegram API
+- `TELEGRAM_WEBAPP_MAX_AGE_SECONDS`: допустимый возраст init‑данных
 
 ### Web
-- `WEB_ALLOWED_ORIGINS`: comma-separated list of allowed origins
-- `WEB_ALLOW_DEMO_USER`: enable demo auth in non-production
-- `WEB_PUBLIC_URL`: public base URL used for replay/share links
+- `WEB_ALLOWED_ORIGINS`: список разрешённых origin через запятую
+- `WEB_ALLOW_DEMO_USER`: включить demo‑аутентификацию в не‑prod
+- `WEB_PUBLIC_URL`: публичный base URL для replay/share‑ссылок
 
-### Crypto general
-- `CRYPTO_SUPPORTED_CURRENCIES`: comma-separated currency list
+### Крипто: общее
+- `CRYPTO_SUPPORTED_CURRENCIES`: список валют через запятую
 - `CRYPTO_WALLET_STRATEGY`: address_pool | memo_tag | address_per_user
-- `CRYPTO_OBSERVER_URL`: observer base URL, empty or `mock`
-- `CRYPTO_SIGNER_URL`: signer base URL, empty or `mock`
-- `CRYPTO_SIGNER_TOKEN`: token required by signer
-- `CRYPTO_ADMIN_TOKEN`: admin token for allowlist and authorization
-- `CRYPTO_USD_RATES`: currency rates, e.g. `USDT:1,BTC:65000`
+- `CRYPTO_OBSERVER_URL`: base URL наблюдателя, пусто или `mock`
+- `CRYPTO_SIGNER_URL`: base URL подписанта, пусто или `mock`
+- `CRYPTO_SIGNER_TOKEN`: токен подписанта
+- `CRYPTO_ADMIN_TOKEN`: админ‑токен для allowlist и авторизации
+- `CRYPTO_USD_RATES`: курсы валют, например `USDT:1,BTC:65000`
 
-### Crypto deposit
-- `CRYPTO_DEPOSIT_CONFIRMATIONS`: required confirmations (default 6)
-- `CRYPTO_DEPOSIT_POLL_INTERVAL_MS`: polling interval
-- `CRYPTO_DEPOSIT_ADDRESS_POOL`: comma list of `CUR:ADDRESS` entries
-- `CRYPTO_MEMO_DEPOSIT_ADDRESS`: `CUR:ADDRESS` for memo_tag
-- `CRYPTO_HD_MASTER_PUBLIC_KEY`: `CUR:XPUB` for address_per_user
-- `CRYPTO_HD_DERIVATION_PATH_PREFIX`: derivation prefix (default m/0)
+### Крипто: депозиты
+- `CRYPTO_DEPOSIT_CONFIRMATIONS`: требуемые подтверждения (default 6)
+- `CRYPTO_DEPOSIT_POLL_INTERVAL_MS`: интервал опроса
+- `CRYPTO_DEPOSIT_ADDRESS_POOL`: список `CUR:ADDRESS` через запятую
+- `CRYPTO_MEMO_DEPOSIT_ADDRESS`: `CUR:ADDRESS` для memo_tag
+- `CRYPTO_HD_MASTER_PUBLIC_KEY`: `CUR:XPUB` для address_per_user
+- `CRYPTO_HD_DERIVATION_PATH_PREFIX`: префикс деривации (default m/0)
 
-### Crypto withdrawal
-- `CRYPTO_HOT_WALLET_ADDRESS`: `CUR:ADDRESS` entries
-- `CRYPTO_WITHDRAWAL_CONFIRMATIONS`: confirmations required (default 6)
-- `CRYPTO_WITHDRAWAL_POLL_INTERVAL_MS`: confirm polling interval
-- `CRYPTO_WITHDRAWAL_BROADCAST_INTERVAL_MS`: broadcast polling interval
-- `CRYPTO_WITHDRAWAL_MIN_AMOUNT`: minimum withdrawal
-- `CRYPTO_WITHDRAWAL_MAX_AMOUNT`: maximum withdrawal
-- `CRYPTO_WITHDRAWAL_DAILY_LIMIT`: per-user daily limit
-- `CRYPTO_WITHDRAWAL_COOLDOWN_SECONDS`: per-user cooldown
-- `CRYPTO_WITHDRAWAL_ALLOWLIST_REQUIRED`: require allowlist
-- `CRYPTO_WITHDRAWAL_AUTO_AUTHORIZE_MAX_AMOUNT`: auto-approve threshold
-- `CRYPTO_WITHDRAWAL_ANOMALY_MULTIPLIER`: anomaly detection multiplier
+### Крипто: выводы
+- `CRYPTO_HOT_WALLET_ADDRESS`: записи `CUR:ADDRESS`
+- `CRYPTO_WITHDRAWAL_CONFIRMATIONS`: требуемые подтверждения (default 6)
+- `CRYPTO_WITHDRAWAL_POLL_INTERVAL_MS`: интервал проверки подтверждений
+- `CRYPTO_WITHDRAWAL_BROADCAST_INTERVAL_MS`: интервал проверки отправки
+- `CRYPTO_WITHDRAWAL_MIN_AMOUNT`: минимум вывода
+- `CRYPTO_WITHDRAWAL_MAX_AMOUNT`: максимум вывода
+- `CRYPTO_WITHDRAWAL_DAILY_LIMIT`: дневной лимит на пользователя
+- `CRYPTO_WITHDRAWAL_COOLDOWN_SECONDS`: cooldown для пользователя
+- `CRYPTO_WITHDRAWAL_ALLOWLIST_REQUIRED`: требовать allowlist
+- `CRYPTO_WITHDRAWAL_AUTO_AUTHORIZE_MAX_AMOUNT`: порог авто‑одобрения
+- `CRYPTO_WITHDRAWAL_ANOMALY_MULTIPLIER`: множитель детектора аномалий
 - `CRYPTO_WITHDRAWAL_MAX_REQUESTS_PER_HOUR`: rate limit
 - `CRYPTO_WITHDRAWAL_MAX_REQUESTS_PER_DAY`: rate limit
 
-### Signer
-- `SIGNER_ALLOWED_IPS`: comma-separated allowlist (defaults to private ranges)
-- `SIGNER_PRIVATE_KEY`: base64 key for local signing
-- `SIGNER_PRIVATE_KEYS`: additional keys for multisig
-- `SIGNER_MULTISIG_THRESHOLD`: required signatures
-- `SIGNER_KMS_URL`: optional KMS endpoint
-- `SIGNER_KMS_KEY_ID`: KMS key identifier
-- `SIGNER_KMS_TOKEN`: KMS auth token
+### Подписант
+- `SIGNER_ALLOWED_IPS`: allowlist через запятую (по умолчанию private‑диапазоны)
+- `SIGNER_PRIVATE_KEY`: base64‑ключ для локальной подписи
+- `SIGNER_PRIVATE_KEYS`: дополнительные ключи для multisig
+- `SIGNER_MULTISIG_THRESHOLD`: число требуемых подписей
+- `SIGNER_KMS_URL`: опциональный KMS‑эндпоинт
+- `SIGNER_KMS_KEY_ID`: идентификатор ключа KMS
+- `SIGNER_KMS_TOKEN`: KMS‑токен
 
-## Running locally
-Prerequisites:
+<a id="running-locally"></a>
+## Запуск локально
+Требования:
 - Node.js 20
 - Docker
 
-Install deps:
+Установка зависимостей:
 ```bash
 npm install
 ```
 
-Start all services with Docker:
+Запуск всех сервисов через Docker:
 ```bash
 docker compose up -d
 ```
 
-Build and tests:
+Сборка и тесты:
 ```bash
 npm run build
 npm test
 ```
 
-Optional local dev without Docker (run services individually):
+Опциональный запуск без Docker (по сервисам):
 ```bash
 npm run dev:auction-engine
 npm run dev:ledger
@@ -312,7 +359,7 @@ npm run dev:signer
 npm run dev:mock-rpc
 ```
 
-### Minimal local .env example
+### Минимальный пример локального .env
 ```
 CORE_API_TOKEN=dev-core-token
 CRYPTO_ADMIN_TOKEN=dev-admin-token
@@ -328,44 +375,47 @@ CRYPTO_SIGNER_URL=mock
 WEB_ALLOW_DEMO_USER=true
 ```
 
-## Mocking external crypto services
-In-process mocks:
-- Set `CRYPTO_OBSERVER_URL=mock` and/or `CRYPTO_SIGNER_URL=mock`.
-- Withdrawals auto-confirm.
-- Deposits are disabled without a real observer.
+<a id="mocking-crypto"></a>
+## Мокирование внешних крипто‑сервисов
+In‑process моки:
+- Установите `CRYPTO_OBSERVER_URL=mock` и/или `CRYPTO_SIGNER_URL=mock`.
+- Выводы подтверждаются автоматически.
+- Депозиты отключены без реального наблюдателя.
 
-Networked mock (Mock RPC service):
-- Run `mock-rpc` service and set:
+Сетевой мок (Mock RPC сервис):
+- Запустите `mock-rpc` и задайте:
   - `CRYPTO_OBSERVER_URL=http://mock-rpc:9000`
   - `CRYPTO_SIGNER_URL=http://mock-rpc:9000`
-- Mint a deposit:
+- Создайте депозит:
 ```
 POST http://localhost:9000/mock/observer/mint
 { "currency": "USDT", "address": "ADDR1", "amount": 1 }
 ```
-- Advance confirmations:
+- Увеличьте число подтверждений:
 ```
 POST http://localhost:9000/mock/observer/mine
 { "blocks": 1 }
 ```
 
-## Observability
-Every service exposes:
+<a id="observability"></a>
+## Наблюдаемость
+Каждый сервис отдаёт:
 - `GET /health/live`
-- `GET /health/ready` (includes Redis and Mongo checks where applicable)
+- `GET /health/ready` (включает проверки Redis и Mongo при необходимости)
 - `GET /metrics` (Prometheus)
 
-Logs are JSON structured and include service name and environment.
+Логи в JSON с именем сервиса и окружением.
 
-## Load testing
-Scripts are in `scripts/load/` and require all services to be running.
+<a id="load-testing"></a>
+## Нагрузочное тестирование
+Скрипты находятся в `scripts/load/` и требуют запущенных сервисов.
 
-Run the full suite:
+Полный набор:
 ```bash
 npm run load:all
 ```
 
-Individual scripts:
+Отдельные сценарии:
 ```bash
 npm run load:bot
 npm run load:stress
@@ -373,24 +423,26 @@ npm run load:anti-sniping
 npm run load:reconcile
 ```
 
-Interactive performance CLI:
+Интерактивный CLI производительности:
 ```bash
 npm run load:perf
 ```
 
-## Troubleshooting
+<a id="troubleshooting"></a>
+## Диагностика проблем
 - `CORE_API_TOKEN must be set for core services.`
-  - Set `CORE_API_TOKEN` in your environment or `.env`.
+  - Задайте `CORE_API_TOKEN` в окружении или `.env`.
 - `CRYPTO_USD_RATES must include rates for: ...`
-  - Set `CRYPTO_USD_RATES`, e.g. `USDT:1`.
+  - Задайте `CRYPTO_USD_RATES`, например `USDT:1`.
 - `Deposit address pool exhausted.`
-  - Provide `CRYPTO_DEPOSIT_ADDRESS_POOL` or switch to `memo_tag` or `address_per_user`.
+  - Укажите `CRYPTO_DEPOSIT_ADDRESS_POOL` или переключитесь на `memo_tag`/`address_per_user`.
 - `CRYPTO_SIGNER_TOKEN must be set for crypto-gateway.`
-  - Set `CRYPTO_SIGNER_TOKEN` (and `SIGNER_API_TOKEN` for signer).
-- `Signer token required` or `IP not allowed.`
-  - Check `SIGNER_API_TOKEN` and `SIGNER_ALLOWED_IPS`.
-- Observer connection refused.
-  - Verify `CRYPTO_OBSERVER_URL` or switch to `mock`/`mock-rpc`.
+  - Укажите `CRYPTO_SIGNER_TOKEN` (и `SIGNER_API_TOKEN` для подписанта).
+- `Signer token required` или `IP not allowed.`
+  - Проверьте `SIGNER_API_TOKEN` и `SIGNER_ALLOWED_IPS`.
+- Ошибка подключения к наблюдателю.
+  - Проверьте `CRYPTO_OBSERVER_URL` или переключитесь на `mock`/`mock-rpc`.
 
-## Reference docs
-- Full API and WebSocket request reference: `docs/requests.md`
+<a id="reference-docs"></a>
+## Справочные документы
+- Полная справка по API и WebSocket‑запросам: `docs/requests.md`
