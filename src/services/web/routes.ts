@@ -18,6 +18,7 @@ import {
   mongoCollections,
   type AuctionWatchlistDocument,
   type AuctionDocument,
+  type AuctionRoundStateDocument,
   type AuctionRoundStatus,
   type AuctionStatus,
   type BidDocument,
@@ -33,6 +34,7 @@ import {
 import { parseRankingMember } from "../auction-engine/bidRanking.js";
 import { BidError, createBidService } from "../auction-engine/bidService.js";
 import { ensureAuctionRoundProgress } from "../auction-engine/auctionProgress.js";
+import { createRoundFinalizationService } from "../auction-engine/roundFinalizationService.js";
 import { createAuctionRepository } from "../auction-engine/auctionStore.js";
 import { CryptoGatewayError, createCryptoGatewayService } from "../crypto-gateway/cryptoGatewayService.js";
 import { createLedgerRepository, LedgerError } from "../ledger/ledgerStore.js";
@@ -85,6 +87,12 @@ type WithdrawalRequestBody = {
   idempotencyKey?: string;
 };
 
+type DemoDepositBody = {
+  amount: number;
+  currency?: string;
+  idempotencyKey?: string;
+};
+
 const createAuctionSchema = {
   type: "object",
   properties: {
@@ -132,6 +140,17 @@ const withdrawalRequestSchema = {
     idempotencyKey: { type: "string", minLength: 1 }
   },
   required: ["amount", "destinationAddress"],
+  additionalProperties: false
+} as const;
+
+const demoDepositSchema = {
+  type: "object",
+  properties: {
+    amount: { type: "number", exclusiveMinimum: 0 },
+    currency: { type: "string", minLength: 1 },
+    idempotencyKey: { type: "string", minLength: 1 }
+  },
+  required: ["amount"],
   additionalProperties: false
 } as const;
 
@@ -249,7 +268,11 @@ export async function registerWebRoutes(
   });
   const cryptoGatewayService = createCryptoGatewayService(deps);
   const bidService = createBidService(deps);
+  const roundFinalizationService = createRoundFinalizationService(deps);
   const bids = deps.mongo.db.collection<BidDocument>(mongoCollections.bids);
+  const roundStates = deps.mongo.db.collection<AuctionRoundStateDocument>(
+    mongoCollections.auctionRoundStates
+  );
   const roundResults = deps.mongo.db.collection<RoundResultDocument>(mongoCollections.roundResults);
   const watchlist = deps.mongo.db.collection<AuctionWatchlistDocument>(
     mongoCollections.auctionWatchlist
@@ -279,6 +302,82 @@ export async function registerWebRoutes(
   let snapshotResyncInFlight = false;
   let bidsResyncInFlight = false;
   let activeBidsResyncInFlight = false;
+  const demoFinalizationThrottle = new Map<string, number>();
+  const demoFinalizationThrottleMs = 4000;
+
+  async function maybeFinalizeDemoAuctions(userId: string, scanLimit: number): Promise<void> {
+    if (!deps.config.web.allowDemoUser) {
+      return;
+    }
+    const nowMs = Date.now();
+    const nextAllowed = demoFinalizationThrottle.get(userId) ?? 0;
+    if (nowMs < nextAllowed) {
+      return;
+    }
+    demoFinalizationThrottle.set(userId, nowMs + demoFinalizationThrottleMs);
+
+    const limit = Number.isFinite(scanLimit)
+      ? Math.max(1, Math.min(100, Math.floor(scanLimit)))
+      : 25;
+    const candidates = await bids
+      .find({ userId })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .project<Pick<BidDocument, "auctionId">>({ auctionId: 1 })
+      .toArray();
+    if (candidates.length === 0) {
+      return;
+    }
+
+    const auctionIdTexts = new Set(
+      candidates
+        .map((bid) => bid.auctionId?.toHexString())
+        .filter((value): value is string => typeof value === "string" && value.length > 0)
+    );
+    if (auctionIdTexts.size === 0) {
+      return;
+    }
+    const auctionIds = Array.from(auctionIdTexts).map((value) => new ObjectId(value));
+
+    for (const auctionId of auctionIds) {
+      try {
+        await ensureAuctionRoundProgress(deps, auctionRepository, auctionId);
+      } catch (error) {
+        deps.logger.warn(
+          { err: error, auctionId: auctionId.toHexString() },
+          "Failed to sync auction rounds for demo finalization"
+        );
+      }
+    }
+
+    const pendingRounds = await roundStates
+      .find({
+        auctionId: { $in: auctionIds },
+        status: "closed",
+        settlementCompletedAt: { $exists: false }
+      })
+      .sort({ closedAt: 1, effectiveEndAt: 1 })
+      .limit(20)
+      .toArray();
+
+    for (const roundState of pendingRounds) {
+      try {
+        await roundFinalizationService.finalizeRound(
+          roundState.auctionId,
+          roundState.roundIndex
+        );
+      } catch (error) {
+        deps.logger.warn(
+          {
+            err: error,
+            auctionId: roundState.auctionId.toHexString(),
+            roundIndex: roundState.roundIndex
+          },
+          "Failed to finalize round in demo fallback"
+        );
+      }
+    }
+  }
 
   let realtimeSubscriber: ReturnType<typeof deps.redis.duplicate> | null = null;
   try {
@@ -951,7 +1050,23 @@ export async function registerWebRoutes(
     }
     const query = request.query as { limit?: string };
     const limit = normalizeLimit(query.limit);
+    if (auth.source === "demo") {
+      await maybeFinalizeDemoAuctions(auth.id, limit * 4);
+    }
     return loadActiveBidsForUser(deps, bids, auth.id, limit);
+  });
+
+  app.get("/api/bids/history", async (request, reply) => {
+    const auth = requireAuth(request, reply, deps);
+    if (!auth) {
+      return;
+    }
+    const query = request.query as { limit?: string };
+    const limit = normalizeLimit(query.limit);
+    if (auth.source === "demo") {
+      await maybeFinalizeDemoAuctions(auth.id, limit * 4);
+    }
+    return loadBidHistoryForUser(deps, bids, auth.id, limit);
   });
 
   app.get("/api/watchlist", async (request, reply) => {
@@ -1337,6 +1452,64 @@ export async function registerWebRoutes(
       return handleCryptoError(reply, error);
     }
   });
+
+  app.post(
+    "/api/demo/deposit",
+    { schema: { body: demoDepositSchema } },
+    async (request, reply) => {
+      const auth = requireAuth(request, reply, deps);
+      if (!auth) {
+        return;
+      }
+      if (!deps.config.web.allowDemoUser || auth.source !== "demo") {
+        return reply
+          .code(403)
+          .send({ error: "forbidden", message: "Demo deposits are only available for demo users." });
+      }
+      const body = request.body as DemoDepositBody;
+      const amount = body.amount;
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return reply
+          .code(400)
+          .send({ error: "invalid_request", message: "Amount must be a positive number." });
+      }
+      const currency = body.currency?.trim() || "USDT";
+      const idempotencyKey = body.idempotencyKey?.trim() || `demo-deposit:${randomUUID()}`;
+
+      const userAgentHeader = request.headers["user-agent"];
+      const userAgent = Array.isArray(userAgentHeader) ? userAgentHeader[0] : userAgentHeader;
+      const audit = {
+        source: "web",
+        ip: request.ip,
+        userAgent:
+          typeof userAgent === "string" && userAgent.trim().length > 0 ? userAgent : undefined
+      };
+
+      try {
+        const result = await ledgerRepository.createEntry({
+          userId: auth.id,
+          entryType: "deposit_confirmed",
+          amount,
+          currency,
+          idempotencyKey,
+          metadata: { source: "demo" },
+          audit
+        });
+        return reply.send({
+          entryId: result.entry._id.toHexString(),
+          balance: result.balance
+        });
+      } catch (error) {
+        if (error instanceof LedgerError) {
+          return reply.code(error.status).send({ error: error.code, message: error.message });
+        }
+        if (error instanceof Error) {
+          return reply.code(500).send({ error: "internal_error", message: error.message });
+        }
+        return reply.code(500).send({ error: "internal_error", message: "Unknown error." });
+      }
+    }
+  );
 
   app.post(
     "/api/crypto/withdrawals",
@@ -1875,6 +2048,59 @@ async function loadActiveBidsForUser(
       currency: auction?.currency ?? "USDT"
     };
   });
+}
+
+async function loadBidHistoryForUser(
+  deps: ServiceDependencies,
+  bids: Collection<BidDocument>,
+  userId: string,
+  limit: number
+): Promise<ActiveBidPayload[]> {
+  const scanLimit = Math.max(limit, Math.min(200, limit * 4));
+  const bidDocs = await bids
+    .find({ userId })
+    .sort({ createdAt: -1 })
+    .limit(scanLimit)
+    .toArray();
+
+  if (bidDocs.length === 0) {
+    return [];
+  }
+
+  const auctionIds = bidDocs.map((bid) => bid.auctionId);
+  const auctionDocs = await deps.mongo.db
+    .collection<AuctionDocument>(mongoCollections.auctions)
+    .find({ _id: { $in: auctionIds } })
+    .project({ title: 1, status: 1, currency: 1, rounds: 1, currentRoundIndex: 1 })
+    .toArray();
+  const auctionMap = new Map(
+    auctionDocs.map((auction) => [auction._id.toHexString(), auction])
+  );
+
+  const history: ActiveBidPayload[] = [];
+  for (const bid of bidDocs) {
+    const auction = auctionMap.get(bid.auctionId.toHexString());
+    if (!auction || auction.status !== "closed") {
+      continue;
+    }
+    history.push({
+      id: bid._id.toHexString(),
+      auctionId: bid.auctionId.toHexString(),
+      amount: bid.amount,
+      maxAmount: bid.maxAmount ?? null,
+      createdAt: bid.createdAt,
+      roundIndex: bid.roundIndex ?? auction.currentRoundIndex ?? null,
+      roundsCount: auction.rounds?.length ?? null,
+      auctionTitle: auction.title ?? "Auction",
+      auctionStatus: auction.status ?? "draft",
+      currency: auction.currency ?? "USDT"
+    });
+    if (history.length >= limit) {
+      break;
+    }
+  }
+
+  return history;
 }
 
 async function loadAuctionSnapshotPayload(

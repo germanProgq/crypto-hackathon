@@ -959,6 +959,11 @@
       gap: 10px;
     }
 
+    .field-row .input {
+      flex: 1;
+      width: auto;
+    }
+
     .field-value {
       flex: 1;
       padding: 10px 12px;
@@ -1487,6 +1492,19 @@
           </a>
         </div>
         <div class="bids-list" id="active-bids-list">
+          <div class="loading">
+            <div class="spinner"></div>
+          </div>
+        </div>
+      </div>
+      <div class="home-bids" id="home-history-section">
+        <div class="section-header">
+          <h2 class="section-title" data-i18n="web.home.history.title">Bid history</h2>
+          <a class="section-link" onclick="loadBidHistory()" data-i18n="web.home.history.refresh">
+            Refresh
+          </a>
+        </div>
+        <div class="bids-list" id="history-bids-list">
           <div class="loading">
             <div class="spinner"></div>
           </div>
@@ -2027,6 +2045,32 @@
               Include the memo/tag so we can credit your deposit.
             </div>
           </div>
+          <div class="field-group hidden" id="deposit-demo-group">
+            <div class="field-label" data-i18n="web.deposit.demoLabel">Demo balance</div>
+            <div class="field-row">
+              <input
+                class="input"
+                id="deposit-demo-amount"
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="Amount"
+              >
+              <button
+                class="btn btn-secondary btn-small"
+                id="deposit-demo-submit"
+                type="button"
+                onclick="submitDemoDeposit()"
+                data-i18n="web.deposit.demoButton"
+              >
+                Add
+              </button>
+            </div>
+            <div class="field-hint" id="deposit-demo-hint" data-i18n="web.deposit.demoHint">
+              Instantly credits your demo balance.
+            </div>
+            <div class="field-hint" id="deposit-demo-status"></div>
+          </div>
           <div class="field-hint" id="deposit-warning" data-i18n="web.deposit.warning">
             Credits after network confirmations.
           </div>
@@ -2261,6 +2305,7 @@
     const state = {
       currentUser: null,
       activeBids: [],
+      bidHistory: [],
       auctions: [],
       watchlist: new Map(),
       deliveries: [],
@@ -2275,6 +2320,8 @@
       home: {
         bidsLoaded: false,
         bidsError: false,
+        historyLoaded: false,
+        historyError: false,
         auctionsLoaded: false,
         auctionsError: false,
         deliveriesLoaded: false,
@@ -2288,7 +2335,8 @@
       queue: [],
       subscribedAuctionIds: new Set(),
       auctionSnapshots: new Map(),
-      detailAuctionId: null
+      detailAuctionId: null,
+      lastBalanceRefreshAt: 0
     };
     const detailState = {
       auctionId: null,
@@ -2303,6 +2351,7 @@
       topBidsUpdatedAt: null,
       verify: null,
       replayRefreshTimer: null,
+      replayAutoRefreshUntil: null,
       bidSubmitting: false,
       watchlistUpdating: false,
       countdownTimer: null
@@ -2455,6 +2504,16 @@
       refreshButton.style.display = connected ? 'none' : 'inline-flex';
     }
 
+    function maybeRefreshBalanceFromRealtime() {
+      if (!state.currentUser) return;
+      const now = Date.now();
+      if (now - (realtimeState.lastBalanceRefreshAt || 0) < 3000) {
+        return;
+      }
+      realtimeState.lastBalanceRefreshAt = now;
+      void loadBalance();
+    }
+
     function handleRealtimeMessage(raw) {
       let message;
       try {
@@ -2479,6 +2538,7 @@
         uiState.home.bidsLoaded = true;
         uiState.home.bidsError = false;
         renderActiveBids(Array.isArray(message.data) ? message.data : []);
+        maybeRefreshBalanceFromRealtime();
         return;
       }
       if (message.type === 'auction_snapshot') {
@@ -2564,6 +2624,7 @@
       await loadUser();
       await loadBalance();
       await loadActiveBids();
+      await loadBidHistory();
       await loadAuctions();
       await loadWatchlist();
       await loadDeliveries();
@@ -2578,16 +2639,18 @@
         updateWalletAddress();
         updateHeaderAvatar();
         sendRealtimeAuth();
+        updateDemoDepositVisibility();
         return;
       }
       if (allowDemoUser) {
         const demoUserId = getDemoUserId();
         if (demoUserId) {
           localStorage.setItem('demoUserId', demoUserId);
-          state.currentUser = { id: demoUserId, displayName: 'Demo user' };
+          state.currentUser = { id: demoUserId, displayName: 'Demo user', source: 'demo' };
           updateWalletAddress();
           updateHeaderAvatar();
           sendRealtimeAuth();
+          updateDemoDepositVisibility();
           return;
         }
       }
@@ -2595,6 +2658,7 @@
       updateWalletAddress();
       updateHeaderAvatar();
       sendRealtimeAuth();
+      updateDemoDepositVisibility();
     }
 
     async function fetchSession() {
@@ -2908,36 +2972,45 @@
 
     function updateHomeVisibility() {
       const bidsSection = document.getElementById('home-bids-section');
+      const historySection = document.getElementById('home-history-section');
       const auctionsSection = document.getElementById('home-auctions-section');
       const deliveriesSection = document.getElementById('home-deliveries-section');
       const emptyState = document.getElementById('home-empty-state');
 
       const bidsLoaded = uiState.home.bidsLoaded;
+      const historyLoaded = uiState.home.historyLoaded;
       const auctionsLoaded = uiState.home.auctionsLoaded;
       const deliveriesLoaded = uiState.home.deliveriesLoaded;
       const bidsError = uiState.home.bidsError;
+      const historyError = uiState.home.historyError;
       const auctionsError = uiState.home.auctionsError;
       const deliveriesError = uiState.home.deliveriesError;
 
       const hasBids = Array.isArray(state.activeBids) && state.activeBids.length > 0;
+      const hasHistory = Array.isArray(state.bidHistory) && state.bidHistory.length > 0;
       const hasAuctions = Array.isArray(state.auctions) && state.auctions.length > 0;
       const hasDeliveries = Array.isArray(state.deliveries) && state.deliveries.length > 0;
 
       const showBidsSection = !bidsLoaded || bidsError || hasBids;
+      const showHistorySection = !historyLoaded || historyError || hasHistory;
       const showAuctionsSection = !auctionsLoaded || auctionsError || hasAuctions;
       const showDeliveriesSection = !deliveriesLoaded || deliveriesError || hasDeliveries;
       const showEmptyState =
         bidsLoaded &&
+        historyLoaded &&
         auctionsLoaded &&
         deliveriesLoaded &&
         !bidsError &&
+        !historyError &&
         !auctionsError &&
         !deliveriesError &&
         !hasBids &&
+        !hasHistory &&
         !hasAuctions &&
         !hasDeliveries;
 
       if (bidsSection) bidsSection.classList.toggle('hidden', !showBidsSection);
+      if (historySection) historySection.classList.toggle('hidden', !showHistorySection);
       if (auctionsSection) auctionsSection.classList.toggle('hidden', !showAuctionsSection);
       if (deliveriesSection) deliveriesSection.classList.toggle('hidden', !showDeliveriesSection);
       if (emptyState) emptyState.classList.toggle('hidden', !showEmptyState);
@@ -3022,11 +3095,12 @@
 
     function renderActiveBids(bids) {
       const normalized = Array.isArray(bids) ? bids : [];
-      state.activeBids = normalized;
+      const active = normalized.filter((bid) => bid && bid.auctionStatus !== 'closed');
+      state.activeBids = active;
       const container = document.getElementById('active-bids-list');
       if (!container) return;
 
-      if (normalized.length === 0) {
+      if (active.length === 0) {
         container.innerHTML = `
           <div class="empty-state">
             <div class="empty-icon">🧾</div>
@@ -3038,7 +3112,7 @@
         return;
       }
 
-      container.innerHTML = normalized
+      container.innerHTML = active
         .map((bid) => {
           const status = bid.auctionStatus || 'draft';
           const statusLabel = formatStatusLabel(status);
@@ -3108,10 +3182,104 @@
         uiState.home.bidsLoaded = true;
         uiState.home.bidsError = false;
         renderActiveBids(Array.isArray(data) ? data : []);
+        void loadBalance();
       } catch (error) {
         uiState.home.bidsLoaded = true;
         uiState.home.bidsError = true;
         renderActiveBidsError();
+      }
+    }
+
+    function renderBidHistory(bids) {
+      const normalized = Array.isArray(bids) ? bids : [];
+      state.bidHistory = normalized;
+      const container = document.getElementById('history-bids-list');
+      if (!container) return;
+
+      if (normalized.length === 0) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-icon">📚</div>
+            <div class="empty-title">${t('web.home.history.empty.title')}</div>
+            <div class="empty-text">${t('web.home.history.empty.body')}</div>
+          </div>
+        `;
+        updateHomeVisibility();
+        return;
+      }
+
+      container.innerHTML = normalized
+        .map((bid) => {
+          const status = bid.auctionStatus || 'draft';
+          const statusLabel = formatStatusLabel(status);
+          const amount = typeof bid.amount === 'number' ? bid.amount : 0;
+          const currency = bid.currency || state.balance.currency || 'USDT';
+          const title = bid.auctionTitle || t('web.home.bids.unknownAuction');
+          const roundLabel = formatBidRoundLabel(bid);
+          const metaParts = [t('web.home.history.status.closed'), roundLabel].filter(Boolean);
+          return `
+            <div class="bid-card">
+              <div class="bid-main">
+                <div class="bid-title">${title}</div>
+                <div class="bid-meta">
+                  <span class="bid-status ${status}">${statusLabel}</span>
+                  ${metaParts.map((entry) => `<span>${entry}</span>`).join('')}
+                </div>
+              </div>
+              <div class="bid-amount">${amount.toFixed(2)}<span>${currency}</span></div>
+            </div>
+          `;
+        })
+        .join('');
+      updateHomeVisibility();
+    }
+
+    function renderBidHistoryError() {
+      const container = document.getElementById('history-bids-list');
+      if (!container) return;
+      container.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">⚠️</div>
+          <div class="empty-title">${t('web.home.history.error.title')}</div>
+          <div class="empty-text">${t('web.home.history.error.body')}</div>
+        </div>
+      `;
+      updateHomeVisibility();
+    }
+
+    async function loadBidHistory() {
+      const container = document.getElementById('history-bids-list');
+      if (!container) return;
+
+      if (!state.currentUser) {
+        uiState.home.historyLoaded = true;
+        uiState.home.historyError = false;
+        renderBidHistory([]);
+        return;
+      }
+
+      uiState.home.historyLoaded = false;
+      uiState.home.historyError = false;
+      updateHomeVisibility();
+      container.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+      try {
+        const response = await apiFetch('/api/bids/history');
+        if (!response.ok) {
+          uiState.home.historyLoaded = true;
+          uiState.home.historyError = true;
+          renderBidHistoryError();
+          return;
+        }
+        const data = await readJsonSafe(response);
+        uiState.home.historyLoaded = true;
+        uiState.home.historyError = false;
+        renderBidHistory(Array.isArray(data) ? data : []);
+        void loadBalance();
+      } catch (error) {
+        uiState.home.historyLoaded = true;
+        uiState.home.historyError = true;
+        renderBidHistoryError();
       }
     }
 
@@ -3691,12 +3859,13 @@
           return;
         }
 
-        setCreateStatus(
-          t('web.create.status.success', { id: data?._id || '-' }),
-          'success'
-        );
         setCreateSubmitting(false);
+        resetCreateForm(true);
         await loadAuctions();
+        switchTab('auctions');
+        if (data && data._id) {
+          await openAuctionDetail(data._id);
+        }
       } catch (error) {
         setCreateError(t('web.create.error.network'));
         setCreateStatus(t('web.create.status.failed'), 'error');
@@ -3790,6 +3959,30 @@
       }
     }
 
+    function updateDemoDepositVisibility() {
+      const group = document.getElementById('deposit-demo-group');
+      if (!group) return;
+      const isDemo = allowDemoUser && state.currentUser && state.currentUser.source === 'demo';
+      group.classList.toggle('hidden', !isDemo);
+    }
+
+    function setDemoDepositStatus(message, tone) {
+      const status = document.getElementById('deposit-demo-status');
+      if (!status) return;
+      status.textContent = message || '';
+      if (!message) {
+        status.style.color = '';
+        return;
+      }
+      status.style.color = tone === 'error' ? '#ff9a9a' : 'var(--tg-hint)';
+    }
+
+    function resetDemoDepositInput() {
+      const input = document.getElementById('deposit-demo-amount');
+      if (input) input.value = '';
+      setDemoDepositStatus('');
+    }
+
     function resetDepositModal() {
       uiState.deposit = { address: '', memo: '', currency: '', strategy: '' };
       const loading = document.getElementById('deposit-loading');
@@ -3798,6 +3991,8 @@
       if (loading) loading.classList.remove('hidden');
       if (content) content.classList.add('hidden');
       if (error) error.classList.add('hidden');
+      updateDemoDepositVisibility();
+      resetDemoDepositInput();
     }
 
     function showDepositError(message) {
@@ -3869,6 +4064,51 @@
 
     function closeDepositModal() {
       setModalOpen('deposit-modal', false);
+    }
+
+    async function submitDemoDeposit() {
+      if (!state.currentUser) {
+        showAlert(t('web.auth.required'));
+        return;
+      }
+      const input = document.getElementById('deposit-demo-amount');
+      const button = document.getElementById('deposit-demo-submit');
+      if (!input) return;
+      const amount = Number(input.value);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        setDemoDepositStatus(t('web.deposit.demoInvalid'), 'error');
+        return;
+      }
+      if (button) button.disabled = true;
+      setDemoDepositStatus(t('web.deposit.demoProcessing'));
+      try {
+        const response = await apiFetch('/api/demo/deposit', {
+          method: 'POST',
+          body: JSON.stringify({ amount, currency: getCurrentCurrency() })
+        });
+        const data = await readJsonSafe(response);
+        if (!response.ok) {
+          setDemoDepositStatus(data?.message || t('web.deposit.demoFailed'), 'error');
+          return;
+        }
+        input.value = '';
+        if (data && data.balance) {
+          state.balance = Object.assign({}, state.balance, data.balance);
+          updateBalanceUI();
+        } else {
+          await loadBalance();
+        }
+        setDemoDepositStatus(
+          t('web.deposit.demoSuccess', {
+            amount: amount.toFixed(2),
+            currency: getCurrentCurrency()
+          })
+        );
+      } catch (error) {
+        setDemoDepositStatus(t('web.deposit.demoFailed'), 'error');
+      } finally {
+        if (button) button.disabled = false;
+      }
     }
 
     async function copyDepositAddress() {
@@ -4328,6 +4568,7 @@
       detailState.topBidsUpdatedAt = null;
       detailState.endsAt = null;
       detailState.verify = null;
+      detailState.replayAutoRefreshUntil = null;
       resetDetailView();
       setDetailOpen(true);
       updateDetailUrl();
@@ -4344,6 +4585,7 @@
       detailState.roundIndex = null;
       detailState.endsAt = null;
       detailState.verify = null;
+      detailState.replayAutoRefreshUntil = null;
       if (detailState.replayRefreshTimer) {
         clearTimeout(detailState.replayRefreshTimer);
         detailState.replayRefreshTimer = null;
@@ -4538,6 +4780,110 @@
       }, 1200);
     }
 
+    function scheduleReplayRefreshWithDelay(delayMs) {
+      const delay = Number.isFinite(delayMs) ? Math.max(250, delayMs) : 1200;
+      if (!detailState.auctionId || detailState.roundIndex === null) return;
+      if (detailState.replayRefreshTimer) {
+        clearTimeout(detailState.replayRefreshTimer);
+      }
+      detailState.replayRefreshTimer = setTimeout(() => {
+        detailState.replayRefreshTimer = null;
+        reloadReplay();
+      }, delay);
+    }
+
+    function getReplayEndTimestamp(replay) {
+      if (!replay) return null;
+      const endAt = replay.state?.effectiveEndAt || replay.round?.endAt;
+      if (!endAt) return null;
+      const endTime = new Date(endAt).getTime();
+      if (Number.isNaN(endTime)) return null;
+      return endTime;
+    }
+
+    function isReplayRoundEnded(replay) {
+      const endTime = getReplayEndTimestamp(replay);
+      if (endTime === null) return false;
+      return endTime <= Date.now();
+    }
+
+    function getReplayWinners(replay) {
+      if (!replay) return [];
+      if (Array.isArray(replay.winners) && replay.winners.length > 0) {
+        return replay.winners;
+      }
+      if (!isReplayRoundEnded(replay)) {
+        return [];
+      }
+      const allocationSize = Math.max(0, Math.floor(replay.round?.allocationSize ?? 0));
+      if (allocationSize === 0) {
+        return [];
+      }
+      const bids = Array.isArray(replay.bids) ? replay.bids : [];
+      if (bids.length === 0) {
+        return [];
+      }
+      const bestByUser = new Map();
+      bids.forEach((bid) => {
+        if (!bid || !bid.userId) return;
+        if (typeof bid.amount !== 'number' || !Number.isFinite(bid.amount)) return;
+        const createdAt = new Date(bid.createdAt).getTime();
+        const entry = {
+          bidId: bid.bidId,
+          userId: bid.userId,
+          amount: bid.amount,
+          createdAt: Number.isNaN(createdAt) ? 0 : createdAt
+        };
+        const existing = bestByUser.get(bid.userId);
+        if (!existing) {
+          bestByUser.set(bid.userId, entry);
+          return;
+        }
+        if (entry.amount > existing.amount) {
+          bestByUser.set(bid.userId, entry);
+          return;
+        }
+        if (entry.amount === existing.amount && entry.createdAt > existing.createdAt) {
+          bestByUser.set(bid.userId, entry);
+        }
+      });
+      const finalists = Array.from(bestByUser.values());
+      finalists.sort((a, b) => {
+        if (b.amount !== a.amount) return b.amount - a.amount;
+        if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt;
+        return String(a.bidId).localeCompare(String(b.bidId));
+      });
+      return finalists.slice(0, allocationSize).map((entry, index) => ({
+        userId: entry.userId,
+        bidId: entry.bidId,
+        amount: entry.amount,
+        rank: index + 1
+      }));
+    }
+
+    function shouldAutoRefreshReplay(replay) {
+      if (!replay) return false;
+      const winners = replay.winners;
+      if (Array.isArray(winners) && winners.length > 0) {
+        return false;
+      }
+      return isReplayRoundEnded(replay);
+    }
+
+    function maybeScheduleReplayRefresh() {
+      if (!shouldAutoRefreshReplay(detailState.replay)) {
+        detailState.replayAutoRefreshUntil = null;
+        return;
+      }
+      const now = Date.now();
+      if (!detailState.replayAutoRefreshUntil || detailState.replayAutoRefreshUntil < now) {
+        detailState.replayAutoRefreshUntil = now + 120000;
+      }
+      if (detailState.replayAutoRefreshUntil >= now) {
+        scheduleReplayRefreshWithDelay(2000);
+      }
+    }
+
     async function reloadReplay() {
       const auctionId = detailState.auctionId;
       if (!auctionId || detailState.roundIndex === null) return;
@@ -4574,6 +4920,7 @@
         renderProofDetails();
       } finally {
         detailState.replayLoading = false;
+        maybeScheduleReplayRefresh();
       }
     }
 
@@ -4714,12 +5061,13 @@
         });
       }
 
-      if (Array.isArray(replay.winners) && replay.winners.length > 0) {
+      const winners = getReplayWinners(replay);
+      if (winners.length > 0) {
         events.push({
           type: 'winner',
           time: endTime || Date.now(),
           title: t('web.detail.timeline.winners'),
-          meta: replay.winners
+          meta: winners
             .map((winner) => `${winner.rank}. ${formatUserLabel(winner.userId)}`)
             .join(' · ')
         });
@@ -4778,8 +5126,8 @@
     function renderWinners() {
       const container = document.getElementById('detail-winners-list');
       if (!container) return;
-      const winners = detailState.replay?.winners;
-      if (!Array.isArray(winners) || winners.length === 0) {
+      const winners = getReplayWinners(detailState.replay);
+      if (winners.length === 0) {
         container.innerHTML = `
           <div class="empty-state">
             <div class="empty-icon">🏁</div>
@@ -4977,6 +5325,7 @@
 
       if (nextTab === 'home') {
         loadActiveBids();
+        loadBidHistory();
         loadAuctions();
         loadDeliveries();
       }

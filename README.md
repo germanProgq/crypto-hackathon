@@ -243,6 +243,7 @@ Telegram‑бот дают пользователям доступ к опыту
 Web CSRF/CORS:
 - Небезопасные методы требуют валидный `Origin`, совпадающий с `WEB_ALLOWED_ORIGINS`.
 - Запрещённые origin возвращают `403` с `csrf_failed` или `cors_rejected`.
+- Для тестов можно задать `WEB_ALLOWED_ORIGINS=*` (разрешить любые origin и пропустить проверку `Origin`).
 
 <a id="rate-limits"></a>
 ## Ограничения частоты и защитные контроли
@@ -319,8 +320,8 @@ Web CSRF/CORS:
 - `TELEGRAM_WEBAPP_MAX_AGE_SECONDS`: допустимый возраст init‑данных
 
 ### Web
-- `WEB_ALLOWED_ORIGINS`: список разрешённых origin через запятую
-- `WEB_ALLOW_DEMO_USER`: включить demo‑аутентификацию в не‑prod
+- `WEB_ALLOWED_ORIGINS`: список разрешённых origin через запятую (`*` для всех)
+- `WEB_ALLOW_DEMO_USER`: включить demo‑аутентификацию (true разрешает даже в production)
 - `WEB_PUBLIC_URL`: публичный base URL для replay/share‑ссылок
 
 ### Крипто: общее
@@ -356,7 +357,7 @@ Web CSRF/CORS:
 - `CRYPTO_WITHDRAWAL_MAX_REQUESTS_PER_DAY`: rate limit
 
 ### Подписант
-- `SIGNER_ALLOWED_IPS`: allowlist через запятую (по умолчанию private‑диапазоны)
+- `SIGNER_ALLOWED_IPS`: allowlist через запятую (`*` для всех, по умолчанию private‑диапазоны)
 - `SIGNER_PRIVATE_KEY`: base64‑ключ для локальной подписи
 - `SIGNER_PRIVATE_KEYS`: дополнительные ключи для multisig
 - `SIGNER_MULTISIG_THRESHOLD`: число требуемых подписей
