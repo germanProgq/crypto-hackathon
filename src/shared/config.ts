@@ -394,8 +394,8 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
   const signerKmsToken = parsed.SIGNER_KMS_TOKEN.trim();
   const webAllowedOrigins = parseOrigins(parsed.WEB_ALLOWED_ORIGINS);
   const allowDemoUser =
-    parsed.NODE_ENV !== "production" &&
-    (parseOptionalBoolean(parsed.WEB_ALLOW_DEMO_USER) ?? true);
+    parseOptionalBoolean(parsed.WEB_ALLOW_DEMO_USER) ??
+    parsed.NODE_ENV !== "production";
   const webPublicUrl = parsed.WEB_PUBLIC_URL.trim();
   const proxyAutoRaise = parseOptionalBoolean(parsed.BID_PROXY_AUTO_RAISE) ?? true;
 

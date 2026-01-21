@@ -902,11 +902,14 @@ export async function registerWebRoutes(
       return;
     }
     const origin = getRequestOrigin(request);
+    const allowedOrigins = resolveAllowedOrigins(request, deps);
     if (!origin) {
+      if (allowedOrigins.includes("*")) {
+        return;
+      }
       reply.code(403).send({ error: "csrf_failed", message: "Origin required." });
       return;
     }
-    const allowedOrigins = resolveAllowedOrigins(request, deps);
     if (!isOriginAllowed(origin, allowedOrigins)) {
       reply.code(403).send({ error: "csrf_failed", message: "Origin not allowed." });
       return;
@@ -1149,7 +1152,6 @@ export async function registerWebRoutes(
         title: body.title,
         status,
         currency: body.currency ?? "USDT",
-        deliveryType: body.deliveryType ?? undefined,
         startsAt: startAt,
         endsAt,
         rounds,
@@ -1163,6 +1165,9 @@ export async function registerWebRoutes(
       };
       if (body.description && body.description.trim().length > 0) {
         auction.description = body.description.trim();
+      }
+      if (body.deliveryType) {
+        auction.deliveryType = body.deliveryType;
       }
 
       const auctions = deps.mongo.db.collection<AuctionDocument>(mongoCollections.auctions);
@@ -1607,19 +1612,18 @@ function resolveAuth(request: FastifyRequest, deps: ServiceDependencies): AuthRe
     };
   }
 
-  const allowDemoUser = deps.config.web.allowDemoUser && deps.config.env !== "production";
+  const allowDemoUser = deps.config.web.allowDemoUser;
   if (allowDemoUser) {
-    const demoUserId = normalizeDemoUserId(getHeaderValue(request.headers, "x-demo-user-id"));
-    if (demoUserId) {
-      return {
-        ok: true,
-        user: {
-          id: demoUserId,
-          displayName: "Demo user",
-          source: "demo"
-        }
-      };
-    }
+    const demoUserId =
+      normalizeDemoUserId(getHeaderValue(request.headers, "x-demo-user-id")) ?? "demo";
+    return {
+      ok: true,
+      user: {
+        id: demoUserId,
+        displayName: "Demo user",
+        source: "demo"
+      }
+    };
   }
 
   return {
@@ -1666,21 +1670,19 @@ function resolveAuthFromRealtimePayload(
     };
   }
 
-  const allowDemoUser = deps.config.web.allowDemoUser && deps.config.env !== "production";
+  const allowDemoUser = deps.config.web.allowDemoUser;
   if (allowDemoUser) {
-    const demoUserId = normalizeDemoUserId(
-      typeof payload.demoUserId === "string" ? payload.demoUserId : null
-    );
-    if (demoUserId) {
-      return {
-        ok: true,
-        user: {
-          id: demoUserId,
-          displayName: "Demo user",
-          source: "demo"
-        }
-      };
-    }
+    const demoUserId =
+      normalizeDemoUserId(typeof payload.demoUserId === "string" ? payload.demoUserId : null) ??
+      "demo";
+    return {
+      ok: true,
+      user: {
+        id: demoUserId,
+        displayName: "Demo user",
+        source: "demo"
+      }
+    };
   }
 
   return {

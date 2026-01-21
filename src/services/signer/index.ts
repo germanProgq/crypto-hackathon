@@ -308,6 +308,9 @@ function authorizeSigner(request: FastifyRequest, cfg: typeof config): boolean {
 }
 
 function isIpAllowed(request: FastifyRequest, cfg: typeof config): boolean {
+  if (cfg.signer.allowedIps.includes("*")) {
+    return true;
+  }
   const candidates = new Set(
     [request.ip, request.socket.remoteAddress]
       .map((value) => (value ? normalizeIp(value) : null))

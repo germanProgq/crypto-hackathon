@@ -339,6 +339,8 @@ const ruCatalog = {
   "web.detail.topBids.empty.body": "Станьте первым участником этого раунда.",
   "web.detail.timeline.title": "Лента повтора",
   "web.detail.timeline.refresh": "Обновить",
+  "web.detail.timeline.auto": "Автообновление",
+  "web.detail.timeline.manual": "Ручное обновление",
   "web.detail.timeline.start": "Раунд начался",
   "web.detail.timeline.bid": "{{user}} сделал ставку {{amount}}",
   "web.detail.timeline.origin.manual": "Вручную",

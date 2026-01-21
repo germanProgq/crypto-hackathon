@@ -1903,8 +1903,12 @@
           <div class="detail-card-actions">
             <select class="input detail-select" id="detail-round-select" onchange="handleRoundSelectChange(event)">
             </select>
+            <span class="detail-pill" id="detail-replay-status" data-i18n="web.detail.timeline.auto">
+              Live updates
+            </span>
             <button
               class="btn btn-secondary btn-small"
+              id="detail-replay-refresh"
               type="button"
               onclick="reloadReplay()"
               data-i18n="web.detail.timeline.refresh"
@@ -2224,6 +2228,7 @@
       renderWinners();
       renderProofDetails();
       renderWatchlistState();
+      updateReplayStatus();
     }
 
     function canUseHapticFeedback() {
@@ -2371,18 +2376,21 @@
         return;
       }
       realtimeState.socket = socket;
+      updateReplayStatus();
       socket.addEventListener('open', () => {
         realtimeState.reconnectDelay = 1000;
         realtimeState.subscribedAuctionIds.clear();
         flushRealtimeQueue();
         sendRealtimeAuth();
         syncAuctionSubscriptions();
+        updateReplayStatus();
       });
       socket.addEventListener('message', (event) => {
         handleRealtimeMessage(event.data);
       });
       socket.addEventListener('close', () => {
         realtimeState.socket = null;
+        updateReplayStatus();
         scheduleRealtimeReconnect();
       });
       socket.addEventListener('error', () => {
@@ -2433,6 +2441,18 @@
         initData: getTelegramInitData(),
         demoUserId: allowDemoUser ? getDemoUserId() : null
       });
+    }
+
+    function updateReplayStatus() {
+      const status = document.getElementById('detail-replay-status');
+      const refreshButton = document.getElementById('detail-replay-refresh');
+      if (!status || !refreshButton) return;
+      const connected =
+        realtimeState.socket && realtimeState.socket.readyState === WebSocket.OPEN;
+      status.textContent = connected
+        ? t('web.detail.timeline.auto')
+        : t('web.detail.timeline.manual');
+      refreshButton.style.display = connected ? 'none' : 'inline-flex';
     }
 
     function handleRealtimeMessage(raw) {

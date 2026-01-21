@@ -339,6 +339,8 @@ const enCatalog = {
   "web.detail.topBids.empty.body": "Be the first to bid in this round.",
   "web.detail.timeline.title": "Replay timeline",
   "web.detail.timeline.refresh": "Refresh",
+  "web.detail.timeline.auto": "Live updates",
+  "web.detail.timeline.manual": "Manual refresh",
   "web.detail.timeline.start": "Round started",
   "web.detail.timeline.bid": "{{user}} bid {{amount}}",
   "web.detail.timeline.origin.manual": "Manual",
