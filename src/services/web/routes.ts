@@ -290,6 +290,7 @@ export async function registerWebRoutes(
   const auctionSubscriptions = new Map<string, Set<string>>();
   const pendingAuctionBids = new Map<string, NodeJS.Timeout>();
   const pendingActiveBids = new Map<string, NodeJS.Timeout>();
+  const pendingBalanceUpdates = new Map<string, NodeJS.Timeout>();
   let pendingAuctionsTimer: NodeJS.Timeout | null = null;
   const auctionsResyncIntervalMs = 15000;
   const snapshotResyncIntervalMs = 5000;
@@ -302,19 +303,21 @@ export async function registerWebRoutes(
   let snapshotResyncInFlight = false;
   let bidsResyncInFlight = false;
   let activeBidsResyncInFlight = false;
-  const demoFinalizationThrottle = new Map<string, number>();
-  const demoFinalizationThrottleMs = 4000;
+  const allowFinalizationFallback = deps.config.env !== "production";
+  const finalizationFallbackThrottle = new Map<string, number>();
+  const finalizationFallbackThrottleMs = 4000;
 
-  async function maybeFinalizeDemoAuctions(userId: string, scanLimit: number): Promise<void> {
-    if (!deps.config.web.allowDemoUser) {
-      return;
-    }
+  function shouldRunFinalizationFallback(auth: AuthenticatedUser): boolean {
+    return allowFinalizationFallback || auth.source === "demo";
+  }
+
+  async function maybeFinalizeUserAuctions(userId: string, scanLimit: number): Promise<void> {
     const nowMs = Date.now();
-    const nextAllowed = demoFinalizationThrottle.get(userId) ?? 0;
+    const nextAllowed = finalizationFallbackThrottle.get(userId) ?? 0;
     if (nowMs < nextAllowed) {
       return;
     }
-    demoFinalizationThrottle.set(userId, nowMs + demoFinalizationThrottleMs);
+    finalizationFallbackThrottle.set(userId, nowMs + finalizationFallbackThrottleMs);
 
     const limit = Number.isFinite(scanLimit)
       ? Math.max(1, Math.min(100, Math.floor(scanLimit)))
@@ -636,6 +639,12 @@ export async function registerWebRoutes(
       for (const userId of event.userIds) {
         scheduleActiveBidsBroadcast(userId);
       }
+      return;
+    }
+    if (event.type === "balance.updated") {
+      for (const userId of event.userIds) {
+        scheduleBalanceBroadcast(userId, event.currency);
+      }
     }
   }
 
@@ -671,6 +680,17 @@ export async function registerWebRoutes(
     pendingActiveBids.set(userId, timer);
   }
 
+  function scheduleBalanceBroadcast(userId: string, currency?: string): void {
+    if (pendingBalanceUpdates.has(userId)) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      pendingBalanceUpdates.delete(userId);
+      void sendBalanceUpdateToUser(userId, currency);
+    }, 150);
+    pendingBalanceUpdates.set(userId, timer);
+  }
+
   async function sendActiveAuctionsToClient(client: RealtimeClient): Promise<void> {
     try {
       const auctions = await loadActiveAuctions(deps, auctionRepository);
@@ -703,6 +723,17 @@ export async function registerWebRoutes(
     } catch (error) {
       deps.logger.warn({ err: error }, "Failed to broadcast active bids");
     }
+  }
+
+  async function sendBalanceUpdateToUser(userId: string, currency?: string): Promise<void> {
+    const clientIds = userSubscriptions.get(userId);
+    if (!clientIds || clientIds.size === 0) {
+      return;
+    }
+    sendRealtimePayloadToClients(clientIds, {
+      type: "balance_updated",
+      currency: currency ?? null
+    });
   }
 
   function broadcastAuctionSnapshot(
@@ -1050,8 +1081,8 @@ export async function registerWebRoutes(
     }
     const query = request.query as { limit?: string };
     const limit = normalizeLimit(query.limit);
-    if (auth.source === "demo") {
-      await maybeFinalizeDemoAuctions(auth.id, limit * 4);
+    if (shouldRunFinalizationFallback(auth)) {
+      await maybeFinalizeUserAuctions(auth.id, limit * 4);
     }
     return loadActiveBidsForUser(deps, bids, auth.id, limit);
   });
@@ -1063,8 +1094,8 @@ export async function registerWebRoutes(
     }
     const query = request.query as { limit?: string };
     const limit = normalizeLimit(query.limit);
-    if (auth.source === "demo") {
-      await maybeFinalizeDemoAuctions(auth.id, limit * 4);
+    if (shouldRunFinalizationFallback(auth)) {
+      await maybeFinalizeUserAuctions(auth.id, limit * 4);
     }
     return loadBidHistoryForUser(deps, bids, auth.id, limit);
   });
@@ -1495,6 +1526,11 @@ export async function registerWebRoutes(
           metadata: { source: "demo" },
           audit
         });
+        void publishRealtimeEvent(deps.redis, {
+          type: "balance.updated",
+          userIds: [auth.id],
+          currency
+        });
         return reply.send({
           entryId: result.entry._id.toHexString(),
           balance: result.balance
@@ -1565,6 +1601,9 @@ export async function registerWebRoutes(
     }
     const userId = auth.id;
     const currency = query.currency || "USDT";
+    if (shouldRunFinalizationFallback(auth)) {
+      await maybeFinalizeUserAuctions(userId, 80);
+    }
     const balance = await ledgerRepository.getBalance(userId, currency);
     return balance;
   });
@@ -1580,6 +1619,9 @@ export async function registerWebRoutes(
       return reply.code(403).send({ error: "forbidden", message: "Access denied." });
     }
     const currency = query.currency || "USDT";
+    if (shouldRunFinalizationFallback(auth)) {
+      await maybeFinalizeUserAuctions(params.userId, 80);
+    }
     const balance = await ledgerRepository.getBalance(params.userId, currency);
     return balance;
   });

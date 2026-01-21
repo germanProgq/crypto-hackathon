@@ -1,6 +1,7 @@
 // Crypto gateway workflows for deposits and withdrawals.
 import { MongoServerError, ObjectId, type WithId } from "mongodb";
 import type { ServiceDependencies } from "../../shared/service.js";
+import { publishRealtimeEvent } from "../../shared/realtime/events.js";
 import { runMongoTransaction } from "../../shared/storage/mongoTransaction.js";
 import {
   mongoCollections,
@@ -84,6 +85,18 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
   const withdrawalPollIntervalMs = deps.config.crypto.withdrawal.pollIntervalMs;
   const withdrawalBroadcastIntervalMs = deps.config.crypto.withdrawal.broadcastIntervalMs;
   const idleDepositScanDelayMs = Math.max(depositPollIntervalMs, 15000);
+
+  const publishBalanceUpdate = async (userId: string, currency: string): Promise<void> => {
+    try {
+      await publishRealtimeEvent(deps.redis, {
+        type: "balance.updated",
+        userIds: [userId],
+        currency
+      });
+    } catch (error) {
+      deps.logger.warn({ err: error, userId, currency }, "Failed to publish balance update");
+    }
+  };
 
   async function getDepositDestination(
     userId: string,
@@ -232,6 +245,7 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
         ? await ledger.getBalance(record.userId, record.currency)
         : ledgerResult.balance;
 
+    void publishBalanceUpdate(record.userId, record.currency);
     return {
       withdrawal: updated,
       balance,
@@ -616,6 +630,8 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
       );
       return entry;
     });
+
+    void publishBalanceUpdate(userId, deposit.currency);
   }
 
   async function broadcastWithdrawal(record: WithId<CryptoWithdrawalDocument>): Promise<void> {
@@ -730,6 +746,8 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
       );
       return updated;
     });
+
+    void publishBalanceUpdate(record.userId, record.currency);
   }
 
   async function evaluateWithdrawalSafety(

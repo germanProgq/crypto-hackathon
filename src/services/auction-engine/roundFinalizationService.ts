@@ -272,6 +272,11 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
             type: "bids.active.updated",
             userIds: settlementUserIds
           });
+          await publishRealtimeEvent(deps.redis, {
+            type: "balance.updated",
+            userIds: settlementUserIds,
+            currency: auction.currency
+          });
         }
         await publishRealtimeEvent(deps.redis, {
           type: "auction.bids.updated",

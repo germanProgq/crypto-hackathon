@@ -627,6 +627,11 @@ export function createBidService(deps: ServiceDependencies) {
           publishRealtimeEvent(deps.redis, {
             type: "bids.active.updated",
             userIds: [result.bid.userId]
+          }),
+          publishRealtimeEvent(deps.redis, {
+            type: "balance.updated",
+            userIds: [result.bid.userId],
+            currency: result.auction.currency
           })
         ]);
       } catch (error) {

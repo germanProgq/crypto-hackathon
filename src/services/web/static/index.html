@@ -2541,6 +2541,10 @@
         maybeRefreshBalanceFromRealtime();
         return;
       }
+      if (message.type === 'balance_updated') {
+        maybeRefreshBalanceFromRealtime();
+        return;
+      }
       if (message.type === 'auction_snapshot') {
         if (message.data && typeof message.data.auctionId === 'string') {
           upsertAuctionSnapshot(message.data);

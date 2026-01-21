@@ -21,7 +21,8 @@ export type RealtimeEvent =
   | { type: "auction.list.updated"; reason?: string; auctionId?: string }
   | { type: "auction.snapshot.updated"; auctionId: string; snapshot: RealtimeAuctionSnapshot }
   | { type: "auction.bids.updated"; auctionId: string }
-  | { type: "bids.active.updated"; userIds: string[] };
+  | { type: "bids.active.updated"; userIds: string[] }
+  | { type: "balance.updated"; userIds: string[]; currency?: string };
 
 export function toRealtimeSnapshot(input: {
   auctionId: string;
