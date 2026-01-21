@@ -1,6 +1,6 @@
 # 🎯 Платформа аукционов Telegram Gift Auctions
 
-> Боевой Telegram-стек для многораундовых крипто-аукционов с криптографической проверяемостью, ledger-first финансами и мгновенными обновлениями.
+> Боевой Telegram-стек для многораундовых крипто-аукционов, рассчитанный на высокую конкуренцию ставок, прозрачные расчёты и мгновенные обновления.
 
 [![Node.js](https://img.shields.io/badge/Node.js-20+-green.svg)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.4-blue.svg)](https://www.typescriptlang.org/)
@@ -8,29 +8,110 @@
 [![Redis](https://img.shields.io/badge/Redis-7.2-red.svg)](https://redis.io/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-blue.svg)](https://docs.docker.com/compose/)
 
+Движок построен как **ledger-first** система с безопасной конкуренцией: одна активная ставка на аукцион, детерминированное ранжирование и автоматический перенос ставок между раундами.
+
+Это не просто витрина ставок, а полноразмерный расчётный контур: депозиты, блокировки, списания, возвраты и выводы проходят через проверяемый журнал операций с идемпотентностью и строгими контролями безопасности.
+
+Результаты раундов подписываются, строятся Merkle-корни ставок, а replay-эндпоинты позволяют проверить честность и восстановить полную картину раунда.
+
 ---
 
 ## 📋 Содержание
 
-- [Понимание механики Telegram Gift Auctions](#понимание-механики)
+- [Обзор](#обзор)
+- [Гарантии и свойства](#гарантии-и-свойства)
+- [Возможности](#возможности)
+- [Ключевые механики](#ключевые-механики)
 - [Архитектура системы](#архитектура-системы)
-- [Ключевые гарантии](#ключевые-гарантии)
-- [Потоки данных](#потоки-данных)
 - [Сервисы и порты](#сервисы-и-порты)
+- [Хранилища данных](#хранилища-данных)
 - [Доменные сущности](#доменные-сущности)
+- [Ключевые сценарии](#ключевые-сценарии)
 - [Быстрый старт](#быстрый-старт)
 - [API Reference](#api-reference)
-- [Нагрузочное тестирование](#нагрузочное-тестирование)
+- [Аутентификация и безопасность](#аутентификация-и-безопасность)
 - [Конфигурация](#конфигурация)
+- [Нагрузочное тестирование](#нагрузочное-тестирование)
+- [Наблюдаемость](#наблюдаемость)
+- [Диагностика проблем](#диагностика-проблем)
 
 ---
 
-<a id="понимание-механики"></a>
-## 🎮 Понимание механики Telegram Gift Auctions
+## Обзор
 
-### Как мы поняли механику
+В репозитории поставляется полный стек аукционов, разложенный на несколько Node-сервисов. Движок аукционов и журнал операций спроектированы детерминированно и идемпотентно. Крипто-шлюз соединяет депозиты и выводы со внешними наблюдателями и сервисами подписи. Минимальный web-UI и Telegram-бот дают пользователям доступ к опыту.
 
-Изучив работу Telegram Gift Auctions, мы выявили ключевые особенности, отличающие её от классических аукционов:
+Платформа закрывает полный жизненный цикл лота: настройка правил, торги, расчёты и выдача выигрыша. Подходит для цифровых активов, ролей и ключей доступа, NFT и любых артефактов, которые можно выдать подтверждением.
+
+Стек рассчитан на плотную конкуренцию ставок: быстрый для пользователя и железобетонный для денег.
+
+Кодовая база делает упор на явную валидацию, строгие схемы и аккуратный контроль конкуренции:
+- Все операции, двигающие деньги, пишутся в журнал только на добавление
+- Любое видимое клиенту состояние выводится из каноничных записей MongoDB и безопасно кэшируется в Redis
+- Все переходы состояния идемпотентны и безопасны к повторным попыткам
+
+---
+
+## Гарантии и свойства
+
+| Гарантия | Описание |
+|----------|----------|
+| **Детерминированность** | Одинаковые входные данные дают одинаковые итоги и ранжирование |
+| **Идемпотентность** | Повторный запрос не приводит к повторному списанию или hold |
+| **Полный аудит** | Журнал append-only позволяет восстановить историю по шагам |
+| **Проверяемость** | Подписи раундов и Merkle-корни дают независимую верификацию |
+| **Безопасная конкуренция** | Распределённые блокировки и лимиты исключают гонки |
+| **Устойчивость к сбоям** | Кэши и снапшоты помогают пересинхронизироваться |
+| **Изоляция доменов** | Сбой отдельного сервиса не ломает весь расчётный контур |
+
+---
+
+## Возможности
+
+### Честность и проверяемость
+- Подписанные результаты раундов
+- Merkle-корни ставок
+- Replay-эндпоинты для независимой проверки
+
+### Многораундовая динамика
+- Перенос ставок между раундами
+- Детерминированные правила разруливания равных ставок
+- Предсказуемые итоги
+
+### Антиснайпинг
+- Умные продления финала
+- Жёсткие лимиты на количество продлений
+- Защита от пинг-понга
+
+### Прокси-ставки
+- Максимум в эскроу
+- Авто-повышение по шагу
+- Прозрачная логика победы
+
+### Ledger-first финансы
+- Блокировки, списания и возвраты фиксируются append-only
+- Легко аудируемые операции
+- Идемпотентность всех денежных операций
+
+### Гибкие депозиты
+- Стратегии: address_pool, memo_tag, address_per_user (HD)
+- Точная атрибуция
+- Отслеживание подтверждений
+
+### Строгий вывод средств
+- Allowlist, cooldown, лимиты
+- Детектор аномалий
+- Ручное или авто-одобрение
+- Подпись и подтверждения
+
+### Realtime
+- WebSocket-ленты ставок
+- Мгновенные обновления web и бота
+- Outbid alerts
+
+---
+
+## Ключевые механики
 
 ```mermaid
 flowchart TD
@@ -51,15 +132,17 @@ flowchart TD
     style G fill:#FF9800,color:#fff
 ```
 
-### Наши допущения
+### Основные принципы
 
-| Аспект | Допущение | Обоснование |
-|--------|-----------|-------------|
-| **Одна ставка на пользователя** | Пользователь имеет одну активную ставку на аукцион | Упрощает UX и предотвращает самоперебивание |
-| **Перенос ставок** | Непобедившие ставки автоматически переносятся в следующий раунд | Снижает барьер для продолжения участия |
-| **Ранжирование** | Сумма DESC → Время ASC → ID ставки ASC | Детерминированный порядок, раннее время предпочтительнее |
-| **Anti-sniping** | Продление раунда при ставках в последние N секунд | Защита от ботов, ставящих в последнюю миллисекунду |
-| **Блокировка средств** | Сумма ставки блокируется сразу, списывается при победе | Гарантия платежеспособности победителей |
+| Механика | Описание |
+|----------|----------|
+| **Одна ставка на аукцион** | Конкурентные ставки сериализуются и остаются прозрачными |
+| **Многораундовое распределение** | Каждый раунд выбирает победителей, остальные переходят дальше |
+| **Тайминги раундов** | scheduled → live → closed с антиснайпинг-окнами |
+| **Антиснайпинг** | Ставки в последнем окне продлевают раунд с лимитами |
+| **Балансы на журнале** | hold/capture/release оформлены append-only записями |
+| **Детерминированное ранжирование** | Сумма DESC → createdAt ASC → ID ставки ASC |
+| **Прокси-ставки** | Эскроу максимума и авто-повышение |
 
 ### Жизненный цикл раунда
 
@@ -87,10 +170,9 @@ stateDiagram-v2
 
 ---
 
-<a id="архитектура-системы"></a>
-## 🏗️ Архитектура системы
+## Архитектура системы
 
-### Высокоуровневая архитектура
+Система разделена на специализированные сервисы, чтобы домены масштабировались независимо, а сбои локализовались. Ключевые контуры отделены друг от друга: аукционные операции, финансы и крипто-интеграции живут в своих сервисах.
 
 ```mermaid
 flowchart TB
@@ -162,88 +244,158 @@ flowchart TB
 
 ---
 
-<a id="ключевые-гарантии"></a>
-## 🛡️ Ключевые гарантии
+## Сервисы и порты
 
-### Криптографическая проверяемость
-
-```mermaid
-flowchart LR
-    subgraph "Раунд N"
-        B1[Ставка 1] --> HASH1[Hash]
-        B2[Ставка 2] --> HASH2[Hash]
-        B3[Ставка 3] --> HASH3[Hash]
-        BN[Ставка N] --> HASHN[Hash]
-    end
-    
-    HASH1 --> MERKLE[🌳 Merkle Root]
-    HASH2 --> MERKLE
-    HASH3 --> MERKLE
-    HASHN --> MERKLE
-    
-    MERKLE --> PAYLOAD[Round Payload]
-    PAYLOAD --> SIG[🔐 Подпись сервера]
-    
-    SIG --> VERIFY{Верификация}
-    VERIFY -->|✅| VALID[Честный раунд]
-    VERIFY -->|❌| INVALID[Манипуляция!]
-    
-    style MERKLE fill:#4CAF50,color:#fff
-    style SIG fill:#2196F3,color:#fff
-    style VALID fill:#4CAF50,color:#fff
-    style INVALID fill:#f44336,color:#fff
 ```
-
-### Финансовая модель (Ledger-first)
-
-```mermaid
-sequenceDiagram
-    participant User as 👤 Пользователь
-    participant Engine as ⚙️ Auction Engine
-    participant Ledger as 📒 Ledger
-    participant Redis as 🔴 Redis
-    
-    User->>Engine: POST /bids (amount: 100)
-    
-    activate Engine
-    Engine->>Redis: Проверка rate limit
-    Redis-->>Engine: OK
-    
-    Engine->>Redis: Distributed lock (userId + auctionId)
-    Redis-->>Engine: Lock acquired
-    
-    Engine->>Ledger: hold(userId, 100, idempotencyKey)
-    
-    activate Ledger
-    Note over Ledger: Append-only запись:<br/>type: "hold"<br/>amount: 100<br/>ref: bidId
-    Ledger-->>Engine: holdId
-    deactivate Ledger
-    
-    Engine->>Engine: Сохранить ставку в MongoDB
-    Engine->>Redis: ZADD ranking (score, bidId)
-    
-    Engine->>Redis: Release lock
-    Engine-->>User: 201 Created
-    deactivate Engine
-    
-    Note over Ledger: При победе: capture(holdId)<br/>При проигрыше: release(holdId)
+┌─────────────────────────────────────────────────────────────────┐
+│                     DOCKER COMPOSE STACK                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
+│  │ Auction      │  │ Ledger       │  │ Crypto       │           │
+│  │ Engine       │  │              │  │ Gateway      │           │
+│  │ :4001        │  │ :4002        │  │ :4003        │           │
+│  └──────────────┘  └──────────────┘  └──────────────┘           │
+│                                                                  │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
+│  │ Bot          │  │ Web UI       │  │ Workers      │           │
+│  │              │  │              │  │              │           │
+│  │ :4004        │  │ :4005        │  │ :4006        │           │
+│  └──────────────┘  └──────────────┘  └──────────────┘           │
+│                                                                  │
+│  ┌──────────────┐  ┌──────────────┐                             │
+│  │ Signer       │  │ Mock RPC     │                             │
+│  │              │  │              │                             │
+│  │ :4007        │  │ :9000        │                             │
+│  └──────────────┘  └──────────────┘                             │
+│                                                                  │
+│  ┌──────────────────────────────────────────────────┐           │
+│  │                   MongoDB :27017                  │           │
+│  │                   (Replica Set)                   │           │
+│  └──────────────────────────────────────────────────┘           │
+│                                                                  │
+│  ┌──────────────────────────────────────────────────┐           │
+│  │                   Redis :6379                     │           │
+│  │                   (Pub/Sub + Cache)               │           │
+│  └──────────────────────────────────────────────────┘           │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
 ```
-
-### Гарантии системы
-
-| Гарантия | Реализация |
-|----------|------------|
-| **Детерминированность** | Одинаковые входные данные → одинаковые результаты |
-| **Идемпотентность** | Все денежные операции используют idempotencyKey |
-| **Полный аудит** | Журнал append-only для восстановления истории |
-| **Проверяемость** | Merkle-корни и подписи раундов |
-| **Безопасная конкуренция** | Распределённые блокировки Redis |
-| **Изоляция сбоев** | Микросервисы независимы |
 
 ---
 
-<a id="потоки-данных"></a>
-## 🔄 Потоки данных
+## Хранилища данных
+
+### MongoDB
+Каноничный источник правды для:
+- Аукционов и раундов
+- Ставок
+- Записей журнала операций
+- Выводов
+- Уведомлений
+
+### Redis
+- Pub/sub в реальном времени
+- Ограничения частоты
+- Распределённые блокировки
+- Кэш ранжирования (Sorted Sets)
+- Краткоживущие снимки
+
+### Внешние зависимости
+- **Telegram**: init-данные WebApp для аутентификации, Bot API для уведомлений
+- **Крипто-наблюдатель**: внешний сервис, фиксирующий входящие транзакции
+- **Крипто-подписант**: внешний или внутренний сервис, подписывающий выводы
+
+---
+
+## Доменные сущности
+
+```mermaid
+erDiagram
+    AUCTION ||--o{ ROUND : contains
+    ROUND ||--o{ BID : contains
+    USER ||--o{ BID : places
+    USER ||--o{ LEDGER_ENTRY : has
+    AUCTION ||--o{ WINNER : determines
+    
+    AUCTION {
+        ObjectId id PK
+        string title
+        string currency
+        Date startsAt
+        Date endsAt
+        int totalItems
+        object antiSnipingConfig
+        string status
+    }
+    
+    ROUND {
+        ObjectId id PK
+        ObjectId auctionId FK
+        int roundNumber
+        int itemsToDistribute
+        Date startsAt
+        Date endsAt
+        string status
+        string merkleRoot
+        string signature
+    }
+    
+    BID {
+        ObjectId id PK
+        ObjectId auctionId FK
+        ObjectId roundId FK
+        string odUserId
+        int amount
+        Date createdAt
+        string idempotencyKey UK
+        string origin
+    }
+    
+    USER {
+        string odUserId PK
+        int balance
+        int frozenBalance
+        Date createdAt
+    }
+    
+    LEDGER_ENTRY {
+        ObjectId id PK
+        string userId FK
+        string type
+        int amount
+        string currency
+        string refType
+        ObjectId refId
+        string idempotencyKey UK
+        Date createdAt
+    }
+    
+    WINNER {
+        ObjectId id PK
+        ObjectId auctionId FK
+        ObjectId roundId FK
+        ObjectId bidId FK
+        string userId
+        int amount
+        Date createdAt
+    }
+```
+
+### Описание сущностей
+
+| Сущность | Описание |
+|----------|----------|
+| **Аукцион** | Конфигурация лота, расписание, правила ставок и антиснайпинга |
+| **Раунд** | Окно торгов, набор ставок, результаты и подпись раунда |
+| **Ставка** | Сумма, автор, время, ключ идемпотентности и признак происхождения |
+| **Запись журнала** | Депозит, hold, capture, release или этап вывода |
+| **Депозит** | Наблюдаемая транзакция, подтверждения и привязка к пользователю |
+| **Вывод** | Запрос, проверки безопасности, подпись, отправка и подтверждения |
+
+---
+
+## Ключевые сценарии
 
 ### Размещение ставки
 
@@ -326,11 +478,9 @@ sequenceDiagram
     Engine->>Mongo: Save round results
     Engine->>Redis: PUBLISH round-complete
     Engine->>Redis: DEL lock:finalize:round
-    
-    Note over Engine: Результаты подписаны<br/>и доступны для верификации
 ```
 
-### Депозиты и выводы
+### Депозиты
 
 ```mermaid
 flowchart TB
@@ -346,6 +496,13 @@ flowchart TB
         ATTR -->|Подтверждения ≥ N| LED2[Ledger: deposit]
     end
     
+    style OBS fill:#4CAF50,color:#fff
+```
+
+### Выводы
+
+```mermaid
+flowchart TB
     subgraph "Выводы"
         REQ[📤 Запрос вывода] --> VALID{Валидация}
         VALID -->|allowlist| CHECK1[✓]
@@ -367,132 +524,12 @@ flowchart TB
         BROADCAST --> CONFIRM[✅ Подтверждения]
     end
     
-    style OBS fill:#4CAF50,color:#fff
     style SIGN2 fill:#FF5722,color:#fff
 ```
 
 ---
 
-<a id="сервисы-и-порты"></a>
-## 🔌 Сервисы и порты
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     DOCKER COMPOSE STACK                         │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
-│  │ Auction      │  │ Ledger       │  │ Crypto       │           │
-│  │ Engine       │  │              │  │ Gateway      │           │
-│  │ :4001        │  │ :4002        │  │ :4003        │           │
-│  └──────────────┘  └──────────────┘  └──────────────┘           │
-│                                                                  │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
-│  │ Bot          │  │ Web UI       │  │ Workers      │           │
-│  │              │  │              │  │              │           │
-│  │ :4004        │  │ :4005        │  │ :4006        │           │
-│  └──────────────┘  └──────────────┘  └──────────────┘           │
-│                                                                  │
-│  ┌──────────────┐  ┌──────────────┐                             │
-│  │ Signer       │  │ Mock RPC     │                             │
-│  │              │  │              │                             │
-│  │ :4007        │  │ :9000        │                             │
-│  └──────────────┘  └──────────────┘                             │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────┐           │
-│  │                   MongoDB :27017                  │           │
-│  │                   (Replica Set)                   │           │
-│  └──────────────────────────────────────────────────┘           │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────┐           │
-│  │                   Redis :6379                     │           │
-│  │                   (Pub/Sub + Cache)               │           │
-│  └──────────────────────────────────────────────────┘           │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
----
-
-<a id="доменные-сущности"></a>
-## 📦 Доменные сущности
-
-```mermaid
-erDiagram
-    AUCTION ||--o{ ROUND : contains
-    ROUND ||--o{ BID : contains
-    USER ||--o{ BID : places
-    USER ||--o{ LEDGER_ENTRY : has
-    AUCTION ||--o{ WINNER : determines
-    
-    AUCTION {
-        ObjectId id PK
-        string title
-        string currency
-        Date startsAt
-        Date endsAt
-        int totalItems
-        object antiSnipingConfig
-        string status
-    }
-    
-    ROUND {
-        ObjectId id PK
-        ObjectId auctionId FK
-        int roundNumber
-        int itemsToDistribute
-        Date startsAt
-        Date endsAt
-        string status
-        string merkleRoot
-        string signature
-    }
-    
-    BID {
-        ObjectId id PK
-        ObjectId auctionId FK
-        ObjectId roundId FK
-        string odUserId
-        int amount
-        Date createdAt
-        string idempotencyKey UK
-        string origin
-    }
-    
-    USER {
-        string odUserId PK
-        int balance
-        int frozenBalance
-        Date createdAt
-    }
-    
-    LEDGER_ENTRY {
-        ObjectId id PK
-        string userId FK
-        string type
-        int amount
-        string currency
-        string refType
-        ObjectId refId
-        string idempotencyKey UK
-        Date createdAt
-    }
-    
-    WINNER {
-        ObjectId id PK
-        ObjectId auctionId FK
-        ObjectId roundId FK
-        ObjectId bidId FK
-        string userId
-        int amount
-        Date createdAt
-    }
-```
-
----
-
-<a id="быстрый-старт"></a>
-## 🚀 Быстрый старт
+## Быстрый старт
 
 ### Требования
 
@@ -504,7 +541,7 @@ erDiagram
 
 ```bash
 # 1. Клонирование репозитория
-git clone https://github.com/your-org/crypto-hackathon.git
+git clone https://github.com/germanProgq/crypto-hackathon.git
 cd crypto-hackathon
 
 # 2. Установка зависимостей
@@ -518,6 +555,13 @@ docker compose ps
 
 # 5. Открыть Web UI
 open http://localhost:4005
+```
+
+### Сборка и тесты
+
+```bash
+npm run build
+npm test
 ```
 
 ### Минимальный .env для разработки
@@ -561,20 +605,9 @@ curl -X POST http://localhost:4005/api/auctions \
 
 ---
 
-<a id="api-reference"></a>
-## 📚 API Reference
+## API Reference
 
-### Аутентификация
-
-| Метод | Заголовок | Описание |
-|-------|-----------|----------|
-| Service Token | `x-service-token: <CORE_API_TOKEN>` | Для межсервисных вызовов |
-| Telegram | `Authorization: TMA <initData>` | WebApp аутентификация |
-| Demo User | `x-demo-user-id: <userId>` | Только для разработки |
-
-### Основные эндпоинты
-
-#### Аукционы
+### Аукционы
 
 | Метод | Путь | Описание |
 |-------|------|----------|
@@ -585,14 +618,14 @@ curl -X POST http://localhost:4005/api/auctions \
 | `GET` | `/api/auctions/:id/leaderboard` | Топ ставок |
 | `GET` | `/api/auctions/:id/replay` | Replay раунда |
 
-#### Баланс
+### Баланс
 
 | Метод | Путь | Описание |
 |-------|------|----------|
 | `GET` | `/api/balance` | Текущий баланс пользователя |
 | `GET` | `/api/balance/history` | История операций |
 
-#### WebSocket события
+### WebSocket события
 
 ```javascript
 // Подключение
@@ -623,8 +656,136 @@ ws.onmessage = (event) => {
 
 ---
 
-<a id="нагрузочное-тестирование"></a>
-## ⚡ Нагрузочное тестирование
+## Аутентификация и безопасность
+
+### Методы аутентификации
+
+```mermaid
+flowchart LR
+    subgraph "Клиенты"
+        WEB[Web App]
+        TG[Telegram Mini App]
+        SVC[Сервисы]
+    end
+    
+    subgraph "Методы"
+        JWT[JWT Token]
+        TMA[TMA initData]
+        SRVTOKEN[Service Token]
+    end
+    
+    subgraph "Валидация"
+        HMAC[HMAC-SHA256]
+        EXPIRE[Проверка времени]
+        IP[IP Allowlist]
+    end
+    
+    WEB --> JWT --> HMAC
+    TG --> TMA --> HMAC
+    TG --> TMA --> EXPIRE
+    SVC --> SRVTOKEN --> IP
+```
+
+### Заголовки аутентификации
+
+| Контекст | Заголовок | Описание |
+|----------|-----------|----------|
+| Core сервисы | `x-service-token: <CORE_API_TOKEN>` | Межсервисные вызовы |
+| Telegram | `Authorization: TMA <initData>` | WebApp аутентификация |
+| Demo (dev only) | `x-demo-user-id: <userId>` | Для разработки |
+| Admin | `x-admin-token: <CRYPTO_ADMIN_TOKEN>` | Админ-операции |
+| Signer | `x-signer-token: <SIGNER_API_TOKEN>` | Подпись транзакций |
+
+### Защитные механизмы
+
+- ✅ **CSRF защита** — проверка Origin для небезопасных методов
+- ✅ **Rate Limiting** — на пользователя, аукцион и IP
+- ✅ **Distributed Locks** — предотвращение race conditions
+- ✅ **Idempotency Keys** — защита от дублирования операций
+- ✅ **IP Allowlist** — для критичных сервисов (Signer)
+- ✅ **KMS интеграция** — опциональное хранение ключей
+
+### Лимиты
+
+| Тип | Переменная | По умолчанию |
+|-----|------------|--------------|
+| На пользователя | `RATE_LIMIT_USER_PER_SECOND` | 5 |
+| На пользователя в аукционе | `RATE_LIMIT_AUCTION_USER_PER_SECOND` | 3 |
+| На IP | `RATE_LIMIT_IP_PER_SECOND` | 20 |
+
+---
+
+## Конфигурация
+
+### Core сервисы
+
+| Переменная | Описание | По умолчанию |
+|------------|----------|--------------|
+| `NODE_ENV` | development / test / production | development |
+| `SERVICE_NAME` | Имя сервиса | - |
+| `HTTP_HOST` | Host для биндинга | 0.0.0.0 |
+| `HTTP_PORT` | Порт | - |
+| `LOG_LEVEL` | fatal / error / warn / info / debug / trace | info |
+
+### Хранилища
+
+| Переменная | Описание |
+|------------|----------|
+| `MONGO_URI` | MongoDB connection string |
+| `MONGO_DB` | Имя базы данных |
+| `MONGO_POOL_MAX` | Размер пула подключений |
+| `REDIS_URL` | Redis connection string |
+| `REDIS_PREFIX` | Префикс ключей Redis |
+
+### Токены
+
+| Переменная | Описание |
+|------------|----------|
+| `CORE_API_TOKEN` | Обязателен для core сервисов |
+| `CRYPTO_ADMIN_TOKEN` | Админ-действия в крипто-шлюзе |
+| `SIGNER_API_TOKEN` | Токен подписанта |
+| `CRYPTO_SIGNER_TOKEN` | Токен для вызова подписанта |
+
+### Anti-Sniping
+
+| Переменная | Описание | По умолчанию |
+|------------|----------|--------------|
+| `ANTI_SNIPING_WINDOW_SECONDS` | Окно детекции | 30 |
+| `ANTI_SNIPING_EXTENSION_SECONDS` | Продление | 30 |
+| `ANTI_SNIPING_MAX_EXTENSIONS` | Максимум продлений | 5 |
+
+### Crypto Gateway
+
+| Переменная | Описание |
+|------------|----------|
+| `CRYPTO_SUPPORTED_CURRENCIES` | Список валют (USDT) |
+| `CRYPTO_WALLET_STRATEGY` | address_pool / memo_tag / address_per_user |
+| `CRYPTO_OBSERVER_URL` | URL наблюдателя или `mock` |
+| `CRYPTO_SIGNER_URL` | URL подписанта или `mock` |
+| `CRYPTO_USD_RATES` | Курсы валют (USDT:1) |
+
+### Выводы
+
+| Переменная | Описание |
+|------------|----------|
+| `CRYPTO_WITHDRAWAL_MIN_AMOUNT` | Минимальная сумма |
+| `CRYPTO_WITHDRAWAL_MAX_AMOUNT` | Максимальная сумма |
+| `CRYPTO_WITHDRAWAL_DAILY_LIMIT` | Дневной лимит |
+| `CRYPTO_WITHDRAWAL_COOLDOWN_SECONDS` | Cooldown между выводами |
+| `CRYPTO_WITHDRAWAL_ALLOWLIST_REQUIRED` | Требовать allowlist |
+| `CRYPTO_WITHDRAWAL_AUTO_AUTHORIZE_MAX_AMOUNT` | Порог авто-одобрения |
+
+### Хранение данных
+
+| Переменная | Описание | По умолчанию |
+|------------|----------|--------------|
+| `RETENTION_BIDS_DAYS` | TTL для ставок | 90 |
+| `RETENTION_LEDGER_DAYS` | TTL для журнала | 365 |
+| `RETENTION_NOTIFICATIONS_DAYS` | TTL для уведомлений | 30 |
+
+---
+
+## Нагрузочное тестирование
 
 ### Доступные сценарии
 
@@ -651,121 +812,11 @@ npm run load:perf
 | **anti-sniping** | Корректность продления раундов |
 | **reconcile** | Сходимость балансов после раундов |
 
-### Метрики
-
-После тестов проверьте:
-
-```bash
-# Prometheus метрики
-curl http://localhost:4001/metrics
-
-# Финансовая сверка
-npm run load:reconcile
-```
-
 ---
 
-<a id="конфигурация"></a>
-## ⚙️ Конфигурация
+## Наблюдаемость
 
-### Core сервисы
-
-| Переменная | Описание | По умолчанию |
-|------------|----------|--------------|
-| `NODE_ENV` | Окружение | `development` |
-| `SERVICE_NAME` | Имя сервиса | - |
-| `HTTP_PORT` | Порт | - |
-| `LOG_LEVEL` | Уровень логов | `info` |
-
-### Хранилища
-
-| Переменная | Описание |
-|------------|----------|
-| `MONGO_URI` | MongoDB connection string |
-| `MONGO_DB` | Имя базы данных |
-| `REDIS_URL` | Redis connection string |
-
-### Rate Limits
-
-| Переменная | Описание | По умолчанию |
-|------------|----------|--------------|
-| `RATE_LIMIT_USER_PER_SECOND` | Лимит на пользователя | `5` |
-| `RATE_LIMIT_AUCTION_USER_PER_SECOND` | Лимит на пользователя в аукционе | `3` |
-| `RATE_LIMIT_IP_PER_SECOND` | Лимит на IP | `20` |
-
-### Anti-Sniping
-
-| Переменная | Описание | По умолчанию |
-|------------|----------|--------------|
-| `ANTI_SNIPING_WINDOW_SECONDS` | Окно детекции | `30` |
-| `ANTI_SNIPING_EXTENSION_SECONDS` | Продление | `30` |
-| `ANTI_SNIPING_MAX_EXTENSIONS` | Максимум продлений | `5` |
-
-### Crypto Gateway
-
-| Переменная | Описание |
-|------------|----------|
-| `CRYPTO_SUPPORTED_CURRENCIES` | Список валют (USDT) |
-| `CRYPTO_WALLET_STRATEGY` | Стратегия: `address_pool`, `memo_tag`, `address_per_user` |
-| `CRYPTO_OBSERVER_URL` | URL наблюдателя или `mock` |
-| `CRYPTO_SIGNER_URL` | URL подписанта или `mock` |
-
-### Выводы
-
-| Переменная | Описание |
-|------------|----------|
-| `CRYPTO_WITHDRAWAL_MIN_AMOUNT` | Минимальная сумма |
-| `CRYPTO_WITHDRAWAL_MAX_AMOUNT` | Максимальная сумма |
-| `CRYPTO_WITHDRAWAL_DAILY_LIMIT` | Дневной лимит |
-| `CRYPTO_WITHDRAWAL_COOLDOWN_SECONDS` | Cooldown между выводами |
-| `CRYPTO_WITHDRAWAL_ALLOWLIST_REQUIRED` | Требовать allowlist |
-
----
-
-## 🔒 Безопасность
-
-### Модель аутентификации
-
-```mermaid
-flowchart LR
-    subgraph "Клиенты"
-        WEB[Web App]
-        TG[Telegram Mini App]
-        SVC[Сервисы]
-    end
-    
-    subgraph "Методы аутентификации"
-        JWT[JWT Token]
-        TMA[TMA initData]
-        SRVTOKEN[Service Token]
-    end
-    
-    subgraph "Валидация"
-        HMAC[HMAC-SHA256]
-        EXPIRE[Проверка времени]
-        IP[IP Allowlist]
-    end
-    
-    WEB --> JWT --> HMAC
-    TG --> TMA --> HMAC
-    TG --> TMA --> EXPIRE
-    SVC --> SRVTOKEN --> IP
-```
-
-### Защитные механизмы
-
-- ✅ **CSRF защита** — проверка Origin для небезопасных методов
-- ✅ **Rate Limiting** — на пользователя, аукцион и IP
-- ✅ **Distributed Locks** — предотвращение race conditions
-- ✅ **Idempotency Keys** — защита от дублирования операций
-- ✅ **IP Allowlist** — для критичных сервисов (Signer)
-- ✅ **KMS интеграция** — опциональное хранение ключей
-
----
-
-## 📈 Мониторинг
-
-Каждый сервис предоставляет:
+### Health Endpoints
 
 ```bash
 # Liveness probe
@@ -786,31 +837,63 @@ GET /metrics
 - `rounds_finalized_total` — завершённые раунды
 - `ledger_operations_total` — операции с балансами
 
+Логи в JSON с именем сервиса и окружением.
+
 ---
 
-## 🤝 Вклад в проект
+## Диагностика проблем
 
-1. Fork репозитория
-2. Создайте feature branch: `git checkout -b feature/amazing-feature`
-3. Commit изменений: `git commit -m 'Add amazing feature'`
-4. Push в branch: `git push origin feature/amazing-feature`
-5. Откройте Pull Request
+| Ошибка | Решение |
+|--------|---------|
+| `CORE_API_TOKEN must be set` | Задайте `CORE_API_TOKEN` в .env |
+| `CRYPTO_USD_RATES must include rates` | Задайте `CRYPTO_USD_RATES=USDT:1` |
+| `Deposit address pool exhausted` | Укажите `CRYPTO_DEPOSIT_ADDRESS_POOL` или используйте `memo_tag` |
+| `CRYPTO_SIGNER_TOKEN must be set` | Укажите `CRYPTO_SIGNER_TOKEN` |
+| `Signer token required` или `IP not allowed` | Проверьте `SIGNER_API_TOKEN` и `SIGNER_ALLOWED_IPS` |
+| Ошибка подключения к наблюдателю | Проверьте `CRYPTO_OBSERVER_URL` или используйте `mock` |
+
+---
+
+## Мокирование внешних сервисов
+
+### In-process моки
+
+```bash
+CRYPTO_OBSERVER_URL=mock
+CRYPTO_SIGNER_URL=mock
+```
+
+### Сетевой мок (Mock RPC)
+
+Запустите `mock-rpc` и настройте:
+
+```bash
+CRYPTO_OBSERVER_URL=http://mock-rpc:9000
+CRYPTO_SIGNER_URL=http://mock-rpc:9000
+```
+
+Создайте депозит:
+
+```bash
+POST http://localhost:9000/mock/observer/mint
+{ "currency": "USDT", "address": "ADDR1", "amount": 1 }
+```
+
+Увеличьте подтверждения:
+
+```bash
+POST http://localhost:9000/mock/observer/mine
+{ "blocks": 1 }
+```
 
 ---
 
 ## 📄 Лицензия
 
-MIT License — см. [LICENSE](LICENSE) для деталей.
-
----
-
-## 📞 Контакты
-
-- **Telegram**: [@your_username](https://t.me/your_username)
-- **Email**: your@email.com
+MIT License
 
 ---
 
 <div align="center">
-  <sub>Built with ❤️ for Telegram Gift Auctions Hackathon</sub>
+  <sub>Built with ❤️ for Telegram Gift Auctions</sub>
 </div>
