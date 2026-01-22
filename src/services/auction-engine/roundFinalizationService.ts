@@ -93,10 +93,12 @@ type DeliveryReceipt = {
 
 type HoldSettlementAction = "capture" | "release";
 
-type HoldSettlementInput = Pick<
-  WithId<BidDocument>,
-  "_id" | "userId"
-> & {
+type SettlementBidSnapshot = Pick<WithId<BidDocument>, "_id" | "userId" | "amount" | "createdAt">;
+
+type HoldSettlementInput = {
+  bidId: ObjectId;
+  userId: string;
+  amount: number;
   action: HoldSettlementAction;
 };
 
@@ -252,12 +254,18 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
         ? Array.from(new Set([...winnerUserIds, ...loserUserIds]))
         : winnerUserIds;
       const settlementBids = await loadUnsettledBids(auctionId, settlementUserIds);
-      const winnerBids = settlementBids.filter((bid) => winnerUsers.has(bid.userId));
-      const loserBids = isFinalRound
-        ? settlementBids.filter((bid) => !winnerUsers.has(bid.userId))
-        : [];
-
-      await settleRoundHolds(auction, roundIndex, winnerBids, loserBids);
+      const cutoffBid =
+        auction.pricingMode === "cutoff"
+          ? await resolveCutoffBid(auction, roundIndex)
+          : null;
+      await settleRoundHolds(
+        auction,
+        roundIndex,
+        settlementBids,
+        winners,
+        cutoffBid,
+        isFinalRound
+      );
       await markBidSettlement(auctionId, roundIndex, winnerUserIds, loserUserIds, isFinalRound);
       await updateRedisRankingAfterSettlement(
         auction,
@@ -382,6 +390,32 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
     }));
   }
 
+  async function resolveCutoffBid(
+    auction: WithId<AuctionDocument>,
+    roundIndex: number
+  ): Promise<MongoRankedBid | null> {
+    const roundConfig = findRoundConfig(auction.rounds, roundIndex);
+    const allocationSize = Math.max(0, Math.floor(roundConfig.allocationSize));
+    if (allocationSize <= 0) {
+      return null;
+    }
+
+    const limit = allocationSize + 1;
+    const redisTop = await loadRedisTopBids(deps, auction._id.toHexString(), limit);
+    const mongoTop = await loadMongoTopBids(auction._id, limit);
+    const redisBidIds = redisTop.map((entry) => entry.bidId);
+    const mongoBidIds = mongoTop.map((entry) => entry.bidId.toHexString());
+    const rankingMatch = rankingsMatch(redisTop, mongoTop);
+    if (!rankingMatch && redisBidIds.length > 0) {
+      deps.logger.warn(
+        { auctionId: auction._id.toHexString(), roundIndex, redisBidIds, mongoBidIds },
+        "Redis ranking mismatch detected; using MongoDB ordering."
+      );
+    }
+
+    return mongoTop.length > allocationSize ? mongoTop[allocationSize] : null;
+  }
+
   async function buildRoundProof(
     auction: WithId<AuctionDocument>,
     roundState: WithId<AuctionRoundStateDocument>,
@@ -498,7 +532,7 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
   async function loadUnsettledBids(
     auctionId: ObjectId,
     userIds: string[]
-  ): Promise<Array<Pick<WithId<BidDocument>, "_id" | "userId">>> {
+  ): Promise<SettlementBidSnapshot[]> {
     if (userIds.length === 0) {
       return [];
     }
@@ -509,21 +543,23 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
         userId: { $in: userIds },
         settledAt: { $exists: false }
       })
-      .project<Pick<WithId<BidDocument>, "_id" | "userId">>({
+      .project<SettlementBidSnapshot>({
         _id: 1,
-        userId: 1
+        userId: 1,
+        amount: 1,
+        createdAt: 1
       })
       .toArray();
   }
 
   async function loadMongoTopBids(
     auctionId: ObjectId,
-    allocationSize: number
+    limit: number
   ): Promise<MongoRankedBid[]> {
     const docs = await bids
       .find({ auctionId, active: true })
       .sort({ amount: -1, createdAt: 1, _id: 1, userId: 1 })
-      .limit(allocationSize)
+      .limit(limit)
       .project<Pick<WithId<BidDocument>, "_id" | "userId" | "amount" | "createdAt">>({
         _id: 1,
         userId: 1,
@@ -542,9 +578,9 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
   async function loadRedisTopBids(
     serviceDeps: ServiceDependencies,
     auctionId: string,
-    allocationSize: number
+    limit: number
   ): Promise<Array<{ bidId: string; amount: number }>> {
-    if (allocationSize <= 0) {
+    if (limit <= 0) {
       return [];
     }
 
@@ -554,7 +590,7 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
       entries = await serviceDeps.redis.zrevrange(
         rankingKey,
         0,
-        allocationSize - 1,
+        limit - 1,
         "WITHSCORES"
       );
     } catch (error) {
@@ -632,23 +668,151 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
     return deliveryRefByUser;
   }
 
-  // Settle holds for winners (capture) and optional losers (release) in batches.
   async function settleRoundHolds(
     auction: WithId<AuctionDocument>,
     roundIndex: number,
-    captureBids: Array<Pick<WithId<BidDocument>, "_id" | "userId">>,
-    releaseBids: Array<Pick<WithId<BidDocument>, "_id" | "userId">>
+    settlementBids: SettlementBidSnapshot[],
+    winners: RoundResultDocument["winners"],
+    cutoffBid: MongoRankedBid | null,
+    isFinalRound: boolean
   ): Promise<void> {
-    if (captureBids.length === 0 && releaseBids.length === 0) {
+    if (settlementBids.length === 0) {
       return;
     }
 
-    const settlements: HoldSettlementInput[] = [
-      ...captureBids.map((bid) => ({ ...bid, action: "capture" as const })),
-      ...releaseBids.map((bid) => ({ ...bid, action: "release" as const }))
-    ];
+    const settlements = await buildHoldSettlementPlan(
+      auction,
+      settlementBids,
+      winners,
+      cutoffBid,
+      isFinalRound
+    );
+    if (settlements.length === 0) {
+      return;
+    }
     const operations = await buildHoldSettlements(auction, settlements);
     await settleHoldOperations(auction, roundIndex, operations);
+  }
+
+  // Resolve per-bid hold allocations so winners pay the correct price and escrow is fully released.
+  async function buildHoldSettlementPlan(
+    auction: WithId<AuctionDocument>,
+    settlementBids: SettlementBidSnapshot[],
+    winners: RoundResultDocument["winners"],
+    cutoffBid: MongoRankedBid | null,
+    isFinalRound: boolean
+  ): Promise<HoldSettlementInput[]> {
+    if (settlementBids.length === 0) {
+      return [];
+    }
+
+    const holdIds = settlementBids.map((bid) => buildHoldId(bid._id.toHexString()));
+    const holdEntries = await loadHoldEntries(holdIds);
+    const bidsByUser = new Map<
+      string,
+      Array<{ bid: SettlementBidSnapshot; holdId: string; holdAmount: number }>
+    >();
+
+    for (const bid of settlementBids) {
+      const holdId = buildHoldId(bid._id.toHexString());
+      const holdEntry = holdEntries.get(holdId);
+      if (!holdEntry) {
+        throw new Error(`Hold entry missing for bid ${bid._id.toHexString()}.`);
+      }
+      if (holdEntry.userId !== bid.userId) {
+        throw new Error(`Hold user mismatch for bid ${bid._id.toHexString()}.`);
+      }
+      if (holdEntry.currency !== auction.currency) {
+        throw new Error(`Hold currency mismatch for bid ${bid._id.toHexString()}.`);
+      }
+
+      const existing = bidsByUser.get(bid.userId);
+      const entry = {
+        bid,
+        holdId,
+        holdAmount: holdEntry.amount
+      };
+      if (existing) {
+        existing.push(entry);
+      } else {
+        bidsByUser.set(bid.userId, [entry]);
+      }
+    }
+
+    const winnersByUser = new Map(
+      winners.map((winner) => [winner.userId, winner] as const)
+    );
+    const minIncrement = normalizeNonNegative(auction.minIncrement);
+    const cutoffPrice =
+      auction.pricingMode === "cutoff" && cutoffBid
+        ? normalizeNonNegative(cutoffBid.amount + minIncrement)
+        : null;
+    const settlements: HoldSettlementInput[] = [];
+
+    for (const [userId, bids] of bidsByUser) {
+      const winner = winnersByUser.get(userId) ?? null;
+      if (!winner) {
+        if (!isFinalRound) {
+          continue;
+        }
+        for (const entry of bids) {
+          if (entry.holdAmount > 0) {
+            settlements.push({
+              bidId: entry.bid._id,
+              userId,
+              amount: entry.holdAmount,
+              action: "release"
+            });
+          }
+        }
+        continue;
+      }
+
+      const targetCharge =
+        cutoffPrice !== null
+          ? Math.min(normalizeNonNegative(winner.amount), cutoffPrice)
+          : normalizeNonNegative(winner.amount);
+      const totalHold = bids.reduce((sum, entry) => sum + entry.holdAmount, 0);
+      if (targetCharge > totalHold + 1e-9) {
+        throw new Error(`Hold total below required charge for user ${userId}.`);
+      }
+
+      const ordered = [...bids].sort((left, right) => {
+        const timeDelta = left.bid.createdAt.getTime() - right.bid.createdAt.getTime();
+        if (timeDelta !== 0) {
+          return timeDelta;
+        }
+        return left.bid._id.toHexString().localeCompare(right.bid._id.toHexString());
+      });
+      let remaining = targetCharge;
+      for (const entry of ordered) {
+        const captureAmount = remaining > 0 ? Math.min(remaining, entry.holdAmount) : 0;
+        const releaseAmount = entry.holdAmount - captureAmount;
+        if (captureAmount > 1e-9) {
+          settlements.push({
+            bidId: entry.bid._id,
+            userId,
+            amount: normalizeSettlementAmount(captureAmount),
+            action: "capture"
+          });
+        }
+        if (releaseAmount > 1e-9) {
+          settlements.push({
+            bidId: entry.bid._id,
+            userId,
+            amount: normalizeSettlementAmount(releaseAmount),
+            action: "release"
+          });
+        }
+        remaining -= captureAmount;
+      }
+
+      if (remaining > 1e-6) {
+        throw new Error(`Hold allocation incomplete for user ${userId}.`);
+      }
+    }
+
+    return settlements;
   }
 
   async function buildHoldSettlements(
@@ -659,41 +823,59 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
       return [];
     }
 
-    const holdIds: string[] = [];
-    const bidsByHoldId = new Map<string, HoldSettlementInput>();
+    const holdIds = new Set<string>();
+    const totalsByHoldId = new Map<string, number>();
+    const bidsByHoldKey = new Map<string, HoldSettlementInput>();
     for (const bid of bidsForSettlement) {
-      const holdId = buildHoldId(bid._id.toHexString());
-      if (bidsByHoldId.has(holdId)) {
-        throw new Error(`Duplicate hold settlement requested for ${holdId}.`);
+      const holdId = buildHoldId(bid.bidId.toHexString());
+      const key = `${holdId}:${bid.action}`;
+      if (bidsByHoldKey.has(key)) {
+        throw new Error(`Duplicate hold settlement requested for ${key}.`);
       }
-      bidsByHoldId.set(holdId, bid);
-      holdIds.push(holdId);
+      bidsByHoldKey.set(key, bid);
+      holdIds.add(holdId);
+      totalsByHoldId.set(holdId, (totalsByHoldId.get(holdId) ?? 0) + bid.amount);
     }
-    const holdEntries = await loadHoldEntries(holdIds);
+    const holdEntries = await loadHoldEntries(Array.from(holdIds));
     const settlements: HoldSettlement[] = [];
 
-    for (const [holdId, bid] of bidsByHoldId) {
+    for (const bid of bidsByHoldKey.values()) {
+      const holdId = buildHoldId(bid.bidId.toHexString());
       const holdEntry = holdEntries.get(holdId);
       if (!holdEntry) {
-        throw new Error(`Hold entry missing for bid ${bid._id.toHexString()}.`);
+        throw new Error(`Hold entry missing for bid ${bid.bidId.toHexString()}.`);
       }
 
       if (holdEntry.userId !== bid.userId) {
-        throw new Error(`Hold user mismatch for bid ${bid._id.toHexString()}.`);
+        throw new Error(`Hold user mismatch for bid ${bid.bidId.toHexString()}.`);
       }
 
       if (holdEntry.currency !== auction.currency) {
-        throw new Error(`Hold currency mismatch for bid ${bid._id.toHexString()}.`);
+        throw new Error(`Hold currency mismatch for bid ${bid.bidId.toHexString()}.`);
+      }
+
+      if (bid.amount > holdEntry.amount + 1e-9) {
+        throw new Error(`Hold settlement exceeds hold amount for ${holdId}.`);
       }
 
       settlements.push({
         holdId,
-        bidId: bid._id,
+        bidId: bid.bidId,
         userId: bid.userId,
-        amount: holdEntry.amount,
+        amount: bid.amount,
         currency: holdEntry.currency,
         action: bid.action
       });
+    }
+
+    for (const [holdId, total] of totalsByHoldId) {
+      const holdEntry = holdEntries.get(holdId);
+      if (!holdEntry) {
+        continue;
+      }
+      if (Math.abs(total - holdEntry.amount) > 1e-6) {
+        throw new Error(`Hold settlement incomplete for ${holdId}.`);
+      }
     }
 
     return settlements;
@@ -766,16 +948,17 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
           metadata: 1
         })
         .toArray();
-      const existingByHoldId = new Map<string, HoldResolutionEntry>();
+      const existingByHoldKey = new Map<string, HoldResolutionEntry>();
       for (const entry of existingResolutions) {
         const holdId = extractHoldId(entry.metadata);
         if (!holdId) {
           continue;
         }
-        if (existingByHoldId.has(holdId)) {
-          throw new Error(`Hold resolved multiple times for ${holdId}.`);
+        const key = `${holdId}:${entry.entryType}`;
+        if (existingByHoldKey.has(key)) {
+          throw new Error(`Hold resolved multiple times for ${key}.`);
         }
-        existingByHoldId.set(holdId, entry);
+        existingByHoldKey.set(key, entry);
       }
 
       const now = new Date();
@@ -799,7 +982,7 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
           settlement.action,
           settlement.holdId
         );
-        const existing = existingByHoldId.get(settlement.holdId);
+        const existing = existingByHoldKey.get(`${settlement.holdId}:${entryType}`);
         if (existing) {
           assertHoldResolutionMatches(existing, settlement, entryType, idempotencyKey);
           continue;
@@ -1212,6 +1395,18 @@ function buildReplayUrl(
 
 function normalizeBaseUrl(value: string): string {
   return value.endsWith("/") ? value.slice(0, -1) : value;
+}
+
+function normalizeNonNegative(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return value < 0 ? 0 : value;
+}
+
+function normalizeSettlementAmount(value: number): number {
+  const scaled = Math.round(value * 1e8);
+  return scaled / 1e8;
 }
 
 function rankingsMatch(

@@ -42,3 +42,19 @@ export function buildIpRateLimitKey(ip: string): string {
 export function buildActiveAuctionListKey(): string {
   return "auction:list:active";
 }
+
+export function buildBidSyncQueueKey(): string {
+  return "bids:sync";
+}
+
+export function buildFastBidActiveKey(auctionId: string, userId: string): string {
+  return `bid:active:${auctionId}:${userId}`;
+}
+
+export function buildFastBidRecordKey(bidId: string): string {
+  return `bid:record:${bidId}`;
+}
+
+export function buildFastBidIdempotencyKey(idempotencyKey: string): string {
+  return `idempotency:bid:fast:${idempotencyKey}`;
+}

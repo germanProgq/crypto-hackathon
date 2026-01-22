@@ -356,7 +356,9 @@ async function handleBalanceCommand(deps: ServiceDependencies, context: BotConte
   await clearConversationState(deps, context.userId);
 
   const ledger = createLedgerRepository(deps.mongo, {
-    retentionDays: deps.config.dataRetention.ledgerDays
+    retentionDays: deps.config.dataRetention.ledgerDays,
+    redis: deps.redis,
+    logger: deps.logger
   });
   const currency = resolveDefaultCurrency(deps);
   const balance = await ledger.getBalance(context.userId, currency);
@@ -507,7 +509,9 @@ async function handleCreateCommand(
 
 async function handleWithdrawCommand(deps: ServiceDependencies, context: BotContext): Promise<void> {
   const ledger = createLedgerRepository(deps.mongo, {
-    retentionDays: deps.config.dataRetention.ledgerDays
+    retentionDays: deps.config.dataRetention.ledgerDays,
+    redis: deps.redis,
+    logger: deps.logger
   });
   const currency = resolveDefaultCurrency(deps);
   const balance = await ledger.getBalance(context.userId, currency);
@@ -1198,6 +1202,9 @@ async function finalizeCreateAuction(
     title,
     status,
     currency,
+    pricingMode: "first-price",
+    minBid: 0,
+    minIncrement: deps.config.bids.minIncrement,
     startsAt: startAt,
     endsAt,
     rounds,

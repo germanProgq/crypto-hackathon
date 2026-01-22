@@ -22,6 +22,9 @@ export const auctionConfigSchema = z
     title: z.string().min(1),
     description: z.string().optional(),
     currency: z.string().min(1),
+    pricingMode: z.enum(["first-price", "cutoff"]).optional(),
+    minBid: z.coerce.number().nonnegative().optional(),
+    minIncrement: z.coerce.number().nonnegative().optional(),
     deliveryType: z.enum(["access_code", "telegram_role", "nft_mint"]).optional(),
     startsAt: z.coerce.date(),
     endsAt: z.coerce.date(),
@@ -94,11 +97,32 @@ export function validateAuctionTiming(config: AuctionConfig): {
   return { ok: issues.length === 0, issues };
 }
 
-export function parseAuctionConfig(input: unknown): AuctionConfig {
+export function parseAuctionConfig(
+  input: unknown,
+  defaults?: {
+    pricingMode?: "first-price" | "cutoff";
+    minBid?: number;
+    minIncrement?: number;
+  }
+): AuctionConfig {
   const parsed = auctionConfigSchema.parse(input);
-  const timing = validateAuctionTiming(parsed);
+  const resolved: AuctionConfig = {
+    ...parsed,
+    pricingMode: parsed.pricingMode ?? defaults?.pricingMode ?? "first-price",
+    minBid: normalizeNonNegative(parsed.minBid ?? defaults?.minBid ?? 0),
+    minIncrement: normalizeNonNegative(parsed.minIncrement ?? defaults?.minIncrement ?? 0)
+  };
+
+  const timing = validateAuctionTiming(resolved);
   if (!timing.ok) {
     throw new Error(`Invalid auction timing: ${timing.issues.join(", ")}`);
   }
-  return parsed;
+  return resolved;
+}
+
+function normalizeNonNegative(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return value < 0 ? 0 : value;
 }

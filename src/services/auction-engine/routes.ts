@@ -14,6 +14,7 @@ import {
 } from "../../shared/storage/mongoSchemas.js";
 import { LedgerError } from "../ledger/ledgerStore.js";
 import { parseAuctionConfig, type AuctionConfig } from "./auctionConfig.js";
+import { buildAuctionDocument } from "./auctionCreation.js";
 import {
   invalidateActiveAuctionListCache,
   readAuctionSnapshotFromRedis,
@@ -24,6 +25,7 @@ import {
   type RoundStateCache
 } from "./auctionCache.js";
 import { BidError, createBidService } from "./bidService.js";
+import { ensureAuctionRoundProgress } from "./auctionProgress.js";
 import { createAuctionRepository } from "./auctionStore.js";
 import { publishRealtimeEvent } from "../../shared/realtime/events.js";
 import {
@@ -87,6 +89,46 @@ const bidBodySchema = {
     audit: auditSchema
   },
   required: ["amount", "idempotencyKey"],
+  additionalProperties: false
+} as const;
+
+const auctionRoundSchema = {
+  type: "object",
+  properties: {
+    index: { type: "integer", minimum: 0 },
+    allocationSize: { type: "integer", minimum: 1 },
+    startAt: { type: "string" },
+    endAt: { type: "string" },
+    antiSniping: {
+      type: "object",
+      properties: {
+        triggerWindowSeconds: { type: "integer", minimum: 0 },
+        extensionSeconds: { type: "integer", minimum: 0 },
+        maxExtensions: { type: "integer", minimum: 0 }
+      },
+      required: ["triggerWindowSeconds", "extensionSeconds", "maxExtensions"],
+      additionalProperties: false
+    }
+  },
+  required: ["index", "allocationSize", "startAt", "endAt", "antiSniping"],
+  additionalProperties: false
+} as const;
+
+const auctionBodySchema = {
+  type: "object",
+  properties: {
+    title: { type: "string", minLength: 1 },
+    description: { type: "string" },
+    currency: { type: "string", minLength: 1 },
+    pricingMode: { type: "string", enum: ["first-price", "cutoff"] },
+    minBid: { type: "number", minimum: 0 },
+    minIncrement: { type: "number", minimum: 0 },
+    deliveryType: { type: "string", enum: ["access_code", "telegram_role", "nft_mint"] },
+    startsAt: { type: "string" },
+    endsAt: { type: "string" },
+    rounds: { type: "array", minItems: 1, items: auctionRoundSchema }
+  },
+  required: ["title", "currency", "startsAt", "endsAt", "rounds"],
   additionalProperties: false
 } as const;
 
@@ -177,20 +219,29 @@ export async function registerAuctionRoutes(
   const auctions = deps.mongo.db.collection<AuctionDocument>(mongoCollections.auctions);
   const bids = deps.mongo.db.collection<BidDocument>(mongoCollections.bids);
 
-  app.post("/auctions", async (request, reply) => {
+  app.post("/auctions", { schema: { body: auctionBodySchema } }, async (request, reply) => {
     if (!requireServiceAuth(request, reply, deps)) {
       return;
     }
     let config: AuctionConfig;
     try {
-      config = parseAuctionConfig(request.body);
+      config = parseAuctionConfig(request.body, {
+        minIncrement: deps.config.bids.minIncrement
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid auction payload.";
+      return reply.code(400).send({ error: "invalid_request", message });
+    }
+
+    let auction: WithId<AuctionDocument>;
+    try {
+      auction = buildAuctionDocument(config, deps.config.crypto.supportedCurrencies);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Invalid auction payload.";
       return reply.code(400).send({ error: "invalid_request", message });
     }
 
     try {
-      const auction = buildAuctionDocument(config, deps.config.crypto.supportedCurrencies);
       const created = await runMongoTransaction(deps.mongo, async (session) => {
         await auctions.insertOne(auction, { session });
         await auctionRepository.ensureRoundStates(auction, session);
@@ -291,6 +342,15 @@ export async function registerAuctionRoutes(
       const auctionId = new ObjectId(params.auctionId);
 
       try {
+        const now = new Date();
+        try {
+          await ensureAuctionRoundProgress(deps, auctionRepository, auctionId, now);
+        } catch (error) {
+          deps.logger.warn(
+            { err: error, auctionId: params.auctionId },
+            "Failed to refresh auction snapshot"
+          );
+        }
         const snapshot = await resolveAuctionSnapshot(
           deps.redis,
           auctions,
@@ -317,6 +377,15 @@ export async function registerAuctionRoutes(
       const roundIndex = Number(params.roundIndex);
 
       try {
+        const now = new Date();
+        try {
+          await ensureAuctionRoundProgress(deps, auctionRepository, auctionId, now);
+        } catch (error) {
+          deps.logger.warn(
+            { err: error, auctionId: params.auctionId, roundIndex },
+            "Failed to refresh round state"
+          );
+        }
         const state = await resolveRoundState(
           deps.redis,
           auctions,
@@ -324,7 +393,6 @@ export async function registerAuctionRoutes(
           auctionId,
           roundIndex
         );
-        const now = new Date();
         return reply.send({ state: buildRoundStateResponse(state, now) });
       } catch (error) {
         return handleAuctionError(reply, error);
@@ -426,6 +494,9 @@ function serializeAuctionSummary(auction: WithId<AuctionDocument>) {
     description: auction.description ?? null,
     status: auction.status,
     currency: auction.currency,
+    pricingMode: auction.pricingMode ?? "first-price",
+    minBid: Number.isFinite(auction.minBid) ? auction.minBid : 0,
+    minIncrement: Number.isFinite(auction.minIncrement) ? auction.minIncrement : 0,
     deliveryType: auction.deliveryType ?? null,
     startsAt: auction.startsAt,
     endsAt: auction.endsAt,
@@ -438,7 +509,12 @@ function serializeAuctionSummary(auction: WithId<AuctionDocument>) {
   };
 }
 
-function serializeRoundState(state: WithId<AuctionRoundStateDocument>) {
+function serializeRoundState(
+  state: Pick<
+    AuctionRoundStateDocument,
+    "status" | "roundIndex" | "scheduledStartAt" | "scheduledEndAt" | "effectiveEndAt" | "extensionCount" | "lastBidAt"
+  >
+) {
   return {
     status: state.status,
     roundIndex: state.roundIndex,
@@ -448,81 +524,6 @@ function serializeRoundState(state: WithId<AuctionRoundStateDocument>) {
     extensionCount: state.extensionCount,
     lastBidAt: state.lastBidAt ?? null
   };
-}
-
-function buildAuctionDocument(
-  config: AuctionConfig,
-  supportedCurrencies: string[]
-): WithId<AuctionDocument> {
-  const title = normalizeRequiredText(config.title, "title");
-  const currency = normalizeCurrency(config.currency, supportedCurrencies);
-  const description = normalizeOptionalText(config.description);
-  const deliveryType = config.deliveryType;
-  const rounds = normalizeRounds(config.rounds);
-  const firstRound = rounds[0] ?? null;
-  const now = new Date();
-
-  const auction: WithId<AuctionDocument> = {
-    _id: new ObjectId(),
-    title,
-    status: "draft",
-    currency,
-    deliveryType,
-    startsAt: config.startsAt,
-    endsAt: config.endsAt,
-    rounds,
-    currentRoundIndex: firstRound?.index ?? null,
-    roundStatus: firstRound ? "scheduled" : null,
-    roundEffectiveEndAt: firstRound?.endAt ?? null,
-    roundLastBidAt: null,
-    lastBidAmount: null,
-    createdAt: now,
-    updatedAt: now
-  };
-  if (description) {
-    auction.description = description;
-  }
-  return auction;
-}
-
-function normalizeRequiredText(value: string, field: string): string {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) {
-    throw new AuctionApiError("invalid_request", `${field} is required.`, 400);
-  }
-  return trimmed;
-}
-
-function normalizeOptionalText(value?: string): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function normalizeCurrency(value: string, supportedCurrencies: string[]): string {
-  const normalized = value.trim().toUpperCase();
-  if (!supportedCurrencies.includes(normalized)) {
-    throw new AuctionApiError("invalid_request", "Unsupported currency.", 400);
-  }
-  return normalized;
-}
-
-function normalizeRounds(rounds: AuctionRoundConfig[]): AuctionRoundConfig[] {
-  return [...rounds]
-    .sort((left, right) => left.index - right.index)
-    .map((round) => ({
-      index: round.index,
-      allocationSize: round.allocationSize,
-      startAt: round.startAt,
-      endAt: round.endAt,
-      antiSniping: {
-        triggerWindowSeconds: round.antiSniping.triggerWindowSeconds,
-        extensionSeconds: round.antiSniping.extensionSeconds,
-        maxExtensions: round.antiSniping.maxExtensions
-      }
-    }));
 }
 
 function resolveListingSpec(status: "active" | "upcoming" | "closed"): ListingSpec {
@@ -613,6 +614,9 @@ function buildSnapshotFromAuctionDoc(
     status: auction.status,
     title: auction.title,
     currency: auction.currency,
+    pricingMode: auction.pricingMode ?? "first-price",
+    minBid: Number.isFinite(auction.minBid) ? auction.minBid : 0,
+    minIncrement: Number.isFinite(auction.minIncrement) ? auction.minIncrement : 0,
     currentRoundIndex: auction.currentRoundIndex,
     roundStatus: auction.roundStatus,
     roundEffectiveEndAt: auction.roundEffectiveEndAt,
@@ -677,6 +681,9 @@ async function resolveAuctionSnapshot(
     status: auction.status,
     title: auction.title,
     currency: auction.currency,
+    pricingMode: auction.pricingMode ?? "first-price",
+    minBid: Number.isFinite(auction.minBid) ? auction.minBid : 0,
+    minIncrement: Number.isFinite(auction.minIncrement) ? auction.minIncrement : 0,
     currentRoundIndex: current?.roundIndex ?? null,
     roundStatus: current?.status ?? null,
     roundEffectiveEndAt: current?.effectiveEndAt ?? null,
@@ -735,6 +742,9 @@ async function resolveRoundState(
     scheduledEndAt: roundState.scheduledEndAt,
     effectiveEndAt: roundState.effectiveEndAt,
     extensionCount: roundState.extensionCount,
+    antiSnipingTriggerWindowSeconds: roundConfig.antiSniping.triggerWindowSeconds,
+    antiSnipingExtensionSeconds: roundConfig.antiSniping.extensionSeconds,
+    antiSnipingMaxExtensions: roundConfig.antiSniping.maxExtensions,
     lastBidAt: roundState.lastBidAt ?? null,
     startedAt: roundState.startedAt ?? null,
     closedAt: roundState.closedAt ?? null,

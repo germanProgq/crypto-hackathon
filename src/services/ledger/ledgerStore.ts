@@ -1,7 +1,9 @@
 // Ledger operations, balance derivation, and reconciliation helpers.
 import { isDeepStrictEqual } from "node:util";
 import { type ClientSession, type Collection, type Document, type WithId } from "mongodb";
+import type { Logger } from "pino";
 import type { MongoDependencies } from "../../shared/storage/mongo.js";
+import type { RedisClient } from "../../shared/storage/redis.js";
 import { runMongoTransaction } from "../../shared/storage/mongoTransaction.js";
 import { computeExpiresAt, resolveRetentionMs } from "../../shared/storage/retention.js";
 import {
@@ -10,6 +12,7 @@ import {
   type LedgerEntryDocument,
   type LedgerEntryType
 } from "../../shared/storage/mongoSchemas.js";
+import { applyBalanceDelta } from "../../shared/ledgerBalanceCache.js";
 
 export type LedgerTotals = Record<LedgerEntryType, number>;
 type LedgerAccountTotals = Partial<Record<LedgerEntryType, number>>;
@@ -118,11 +121,13 @@ const mutationEntryTypes = new Set<LedgerEntryType>([
 
 export function createLedgerRepository(
   mongo: MongoDependencies,
-  options: { retentionDays?: number } = {}
+  options: { retentionDays?: number; redis?: RedisClient; logger?: Logger } = {}
 ) {
   const ledgerEntries = mongo.db.collection<LedgerEntryDocument>(mongoCollections.ledgerEntries);
   const ledgerAccounts = mongo.db.collection<LedgerAccountDocument>(mongoCollections.ledgerAccounts);
   const retentionMs = resolveRetentionMs(options.retentionDays ?? 0);
+  const cacheRedis = options.redis;
+  const cacheLogger = options.logger;
 
   async function getBalance(userId: string, currency: string): Promise<LedgerBalance> {
     const totals = await getAccountTotals(ledgerEntries, ledgerAccounts, userId, currency);
@@ -190,7 +195,20 @@ export function createLedgerRepository(
   }
 
   async function createEntry(input: LedgerEntryInput): Promise<LedgerMutationResult> {
-    return runMongoTransaction(mongo, (session) => createEntryWithSession(input, session));
+    const result = await runMongoTransaction(mongo, (session) =>
+      createEntryWithSession(input, session)
+    );
+    await updateBalanceCache(
+      {
+        userId: input.userId,
+        currency: input.currency,
+        amount: input.amount,
+        entryType: input.entryType,
+        idempotencyKey: input.idempotencyKey
+      },
+      result.entry.createdAt ?? new Date()
+    );
+    return result;
   }
 
   async function createEntryInSession(
@@ -258,7 +276,20 @@ export function createLedgerRepository(
   }
 
   async function createHold(input: HoldOperationInput): Promise<LedgerMutationResult> {
-    return runMongoTransaction(mongo, (session) => createHoldWithSession(input, session));
+    const result = await runMongoTransaction(mongo, (session) =>
+      createHoldWithSession(input, session)
+    );
+    await updateBalanceCache(
+      {
+        userId: input.userId,
+        currency: input.currency,
+        amount: input.amount,
+        entryType: "hold_created",
+        idempotencyKey: input.idempotencyKey
+      },
+      result.entry.createdAt ?? new Date()
+    );
+    return result;
   }
 
   async function createHoldInSession(
@@ -337,17 +368,51 @@ export function createLedgerRepository(
   }
 
   async function releaseHold(input: HoldOperationInput): Promise<LedgerMutationResult> {
-    return resolveHold(input, "hold_released");
+    const result = await resolveHold(input, "hold_released");
+    await updateBalanceCache(
+      {
+        userId: input.userId,
+        currency: input.currency,
+        amount: input.amount,
+        entryType: "hold_released",
+        idempotencyKey: input.idempotencyKey
+      },
+      result.entry.createdAt ?? new Date()
+    );
+    return result;
   }
 
   async function captureHold(input: HoldOperationInput): Promise<LedgerMutationResult> {
-    return resolveHold(input, "hold_captured");
+    const result = await resolveHold(input, "hold_captured");
+    await updateBalanceCache(
+      {
+        userId: input.userId,
+        currency: input.currency,
+        amount: input.amount,
+        entryType: "hold_captured",
+        idempotencyKey: input.idempotencyKey
+      },
+      result.entry.createdAt ?? new Date()
+    );
+    return result;
   }
 
   async function requestWithdrawal(input: WithdrawalOperationInput): Promise<LedgerMutationResult> {
     validateWithdrawalInput(input);
-
-    return runMongoTransaction(mongo, (session) => requestWithdrawalWithSession(input, session));
+    const result = await runMongoTransaction(mongo, (session) =>
+      requestWithdrawalWithSession(input, session)
+    );
+    await updateBalanceCache(
+      {
+        userId: input.userId,
+        currency: input.currency,
+        amount: input.amount,
+        entryType: "withdrawal_requested",
+        idempotencyKey: input.idempotencyKey
+      },
+      result.entry.createdAt ?? new Date()
+    );
+    return result;
   }
 
   async function requestWithdrawalInSession(
@@ -493,9 +558,20 @@ export function createLedgerRepository(
   }
 
   async function confirmWithdrawal(input: WithdrawalOperationInput): Promise<LedgerMutationResult> {
-    return runMongoTransaction(mongo, (session) =>
+    const result = await runMongoTransaction(mongo, (session) =>
       resolveWithdrawalWithSession(input, "withdrawal_confirmed", session)
     );
+    await updateBalanceCache(
+      {
+        userId: input.userId,
+        currency: input.currency,
+        amount: input.amount,
+        entryType: "withdrawal_confirmed",
+        idempotencyKey: input.idempotencyKey
+      },
+      result.entry.createdAt ?? new Date()
+    );
+    return result;
   }
 
   async function confirmWithdrawalInSession(
@@ -506,9 +582,20 @@ export function createLedgerRepository(
   }
 
   async function failWithdrawal(input: WithdrawalOperationInput): Promise<LedgerMutationResult> {
-    return runMongoTransaction(mongo, (session) =>
+    const result = await runMongoTransaction(mongo, (session) =>
       resolveWithdrawalWithSession(input, "withdrawal_failed", session)
     );
+    await updateBalanceCache(
+      {
+        userId: input.userId,
+        currency: input.currency,
+        amount: input.amount,
+        entryType: "withdrawal_failed",
+        idempotencyKey: input.idempotencyKey
+      },
+      result.entry.createdAt ?? new Date()
+    );
+    return result;
   }
 
   async function failWithdrawalInSession(
@@ -516,6 +603,28 @@ export function createLedgerRepository(
     session: ClientSession
   ): Promise<LedgerMutationResult> {
     return resolveWithdrawalWithSession(input, "withdrawal_failed", session);
+  }
+
+  async function updateBalanceCache(
+    input: {
+      userId: string;
+      currency: string;
+      amount: number;
+      entryType: LedgerEntryType;
+      idempotencyKey: string;
+    },
+    updatedAt: Date
+  ): Promise<void> {
+    if (!cacheRedis) {
+      return;
+    }
+    try {
+      await applyBalanceDelta(cacheRedis, { ...input, updatedAt });
+    } catch (error) {
+      if (cacheLogger) {
+        cacheLogger.warn({ err: error }, "Ledger balance cache update failed");
+      }
+    }
   }
 
   async function resolveHold(
@@ -538,20 +647,27 @@ export function createLedgerRepository(
         throw new LedgerError("hold_not_found", "Hold not found.", 404);
       }
 
-      if (holdEntry.amount !== input.amount) {
-        throw new LedgerError("invalid_request", "Hold amount mismatch.", 409);
+      if (input.amount > holdEntry.amount) {
+        throw new LedgerError("invalid_request", "Hold amount exceeds hold total.", 409);
       }
 
-      const resolved = await findHoldResolution(
-        ledgerEntries,
-        input.userId,
-        input.currency,
-        input.holdId,
-        session
+      const metadata = mergeReferenceMetadata("holdId", input.holdId, input.metadata);
+      const expectedEntry: LedgerEntryDocument = {
+        userId: input.userId,
+        entryType,
+        amount: input.amount,
+        currency: input.currency,
+        createdAt: new Date(),
+        idempotencyKey: input.idempotencyKey,
+        metadata,
+        audit: input.audit
+      };
+      const existingByIdempotency = await ledgerEntries.findOne(
+        { idempotencyKey: input.idempotencyKey },
+        { session }
       );
-
-      if (resolved) {
-        if (resolved.entryType === entryType && resolved.idempotencyKey === input.idempotencyKey) {
+      if (existingByIdempotency) {
+        if (matchesIdempotentEntry(existingByIdempotency, expectedEntry)) {
           const balance = await getBalanceWithSession(
             ledgerEntries,
             ledgerAccounts,
@@ -559,10 +675,25 @@ export function createLedgerRepository(
             input.currency,
             session
           );
-          return { entry: resolved, balance };
+          return { entry: existingByIdempotency, balance };
         }
+        throw new LedgerError("idempotency_conflict", "Idempotency mismatch.", 409);
+      }
 
+      const resolved = await findHoldResolutions(
+        ledgerEntries,
+        input.userId,
+        input.currency,
+        input.holdId,
+        session
+      );
+
+      const resolvedTotal = resolved.reduce((sum, entry) => sum + entry.amount, 0);
+      if (resolvedTotal >= holdEntry.amount - 1e-9) {
         throw new LedgerError("hold_resolved", "Hold already resolved.", 409);
+      }
+      if (resolvedTotal + input.amount > holdEntry.amount + 1e-9) {
+        throw new LedgerError("invalid_request", "Hold amount exceeds remaining.", 409);
       }
 
       const balance = await getBalanceWithSession(
@@ -586,7 +717,7 @@ export function createLedgerRepository(
           amount: input.amount,
           currency: input.currency,
           idempotencyKey: input.idempotencyKey,
-          metadata: mergeReferenceMetadata("holdId", input.holdId, input.metadata),
+          metadata,
           audit: input.audit
         },
         session,
@@ -1067,22 +1198,24 @@ async function findHoldEntry(
   );
 }
 
-async function findHoldResolution(
+async function findHoldResolutions(
   ledgerEntries: Collection<LedgerEntryDocument>,
   userId: string,
   currency: string,
   holdId: string,
   session: ClientSession
-): Promise<WithId<LedgerEntryDocument> | null> {
-  return ledgerEntries.findOne(
-    {
-      userId,
-      currency,
-      entryType: { $in: ["hold_released", "hold_captured"] },
-      "metadata.holdId": holdId
-    },
-    { session }
-  );
+): Promise<Array<WithId<LedgerEntryDocument>>> {
+  return ledgerEntries
+    .find(
+      {
+        userId,
+        currency,
+        entryType: { $in: ["hold_released", "hold_captured"] },
+        "metadata.holdId": holdId
+      },
+      { session }
+    )
+    .toArray();
 }
 
 async function findWithdrawalEntry(

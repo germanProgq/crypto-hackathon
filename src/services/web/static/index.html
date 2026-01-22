@@ -1612,6 +1612,38 @@
                 <input class="input" id="create-currency" type="text" value="USDT" autocomplete="off">
               </div>
               <div class="field-group">
+                <label class="field-label" for="create-pricing-mode" data-i18n="web.create.pricingModeLabel">
+                  Pricing mode
+                </label>
+                <select class="input" id="create-pricing-mode">
+                  <option value="first-price" data-i18n="web.create.pricingMode.firstPrice">
+                    First-price
+                  </option>
+                  <option value="cutoff" data-i18n="web.create.pricingMode.cutoff">
+                    Cutoff pricing
+                  </option>
+                </select>
+              </div>
+              <div class="field-group">
+                <label class="field-label" for="create-min-bid" data-i18n="web.create.minBidLabel">
+                  Minimum bid
+                </label>
+                <input class="input" id="create-min-bid" type="number" min="0" step="0.01" placeholder="0">
+              </div>
+              <div class="field-group">
+                <label class="field-label" for="create-min-increment" data-i18n="web.create.minIncrementLabel">
+                  Min increment
+                </label>
+                <input
+                  class="input"
+                  id="create-min-increment"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="0"
+                >
+              </div>
+              <div class="field-group">
                 <label class="field-label" for="create-rounds" data-i18n="web.create.roundsLabel">
                   Rounds
                 </label>
@@ -1865,6 +1897,18 @@
           <div class="detail-stat">
             <span class="detail-stat-label" data-i18n="web.detail.stats.delivery">Delivery</span>
             <span class="detail-stat-value" id="detail-delivery">--</span>
+          </div>
+          <div class="detail-stat">
+            <span class="detail-stat-label" data-i18n="web.detail.stats.pricing">Pricing</span>
+            <span class="detail-stat-value" id="detail-pricing-mode">--</span>
+          </div>
+          <div class="detail-stat">
+            <span class="detail-stat-label" data-i18n="web.detail.stats.minBid">Min bid</span>
+            <span class="detail-stat-value" id="detail-min-bid">--</span>
+          </div>
+          <div class="detail-stat">
+            <span class="detail-stat-label" data-i18n="web.detail.stats.minIncrement">Min increment</span>
+            <span class="detail-stat-value" id="detail-min-increment">--</span>
           </div>
         </div>
       </div>

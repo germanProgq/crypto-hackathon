@@ -1,6 +1,6 @@
 // Bid placement workflow with locking, ledger holds, and Redis caching.
 import { randomUUID } from "node:crypto";
-import { ObjectId, type WithId } from "mongodb";
+import { ObjectId, type ClientSession, type WithId } from "mongodb";
 import type { ServiceDependencies } from "../../shared/service.js";
 import { runMongoTransaction } from "../../shared/storage/mongoTransaction.js";
 import { acquireRedisLock, releaseRedisLock, type RedisLock } from "../../shared/storage/redisLock.js";
@@ -17,6 +17,8 @@ import {
 } from "../../shared/storage/mongoSchemas.js";
 import {
   createLedgerRepository,
+  LedgerError,
+  type LedgerErrorCode,
   type LedgerBalance,
   type HoldOperationInput
 } from "../ledger/ledgerStore.js";
@@ -43,9 +45,11 @@ import {
 import { ensureAuctionRoundProgress } from "./auctionProgress.js";
 import { createAuctionRepository } from "./auctionStore.js";
 import { buildRankingMember } from "./bidRanking.js";
+import { FastBidError, FastBidProcessor, type FastBidPlacement } from "./fastBidProcessor.js";
 import { createRoundFinalizationService } from "./roundFinalizationService.js";
 import { applyAntiSnipingExtension } from "./roundStateMachine.js";
 import { publishRealtimeEvent, toRealtimeSnapshot } from "../../shared/realtime/events.js";
+import { writeBalanceCache } from "../../shared/ledgerBalanceCache.js";
 
 const bidLockTtlMs = 8000;
 const topSetTtlSeconds = 10;
@@ -252,7 +256,7 @@ export interface BidPlacementInput {
 export interface BidPlacementResult {
   bid: WithId<BidDocument>;
   balance: LedgerBalance;
-  roundState: WithId<AuctionRoundStateDocument>;
+  roundState: RoundStateView;
   extended: boolean;
   idempotent: boolean;
 }
@@ -262,6 +266,18 @@ type BidTransactionResult = BidPlacementResult & {
   roundConfig: AuctionRoundConfig;
   previousBid?: WithId<BidDocument> | null;
   updateRanking: boolean;
+};
+
+type RoundStateView = {
+  status: AuctionRoundStateDocument["status"];
+  roundIndex: number;
+  scheduledStartAt: Date;
+  scheduledEndAt: Date;
+  effectiveEndAt: Date;
+  extensionCount: number;
+  lastBidAt?: Date | null;
+  startedAt?: Date | null;
+  closedAt?: Date | null;
 };
 
 type TopBidSnapshot = Pick<
@@ -288,7 +304,9 @@ type BidLock = { type: "redis"; lock: RedisLock } | { type: "local"; lock: Local
 export function createBidService(deps: ServiceDependencies) {
   const auctionRepository = createAuctionRepository(deps.mongo);
   const ledger = createLedgerRepository(deps.mongo, {
-    retentionDays: deps.config.dataRetention.ledgerDays
+    retentionDays: deps.config.dataRetention.ledgerDays,
+    redis: deps.redis,
+    logger: deps.logger
   });
   const bids = deps.mongo.db.collection<BidDocument>(mongoCollections.bids);
   const watchlist = deps.mongo.db.collection<AuctionWatchlistDocument>(
@@ -302,7 +320,15 @@ export function createBidService(deps: ServiceDependencies) {
   );
   const finalizationService = createRoundFinalizationService(deps);
   const bidRetentionMs = resolveRetentionMs(deps.config.dataRetention.bidsDays);
+  const bidRetentionSeconds = toSeconds(bidRetentionMs);
   const notificationRetentionMs = resolveRetentionMs(deps.config.dataRetention.notificationsDays);
+  const fastBidProcessor = new FastBidProcessor(deps.redis, {
+    balanceTtlSeconds: 3600,
+    activeTtlSeconds: bidRetentionSeconds,
+    bidRecordTtlSeconds: bidRetentionSeconds,
+    idempotencyTtlSeconds: 86400,
+    topSetTtlSeconds
+  });
   const localRateLimits = new Map<string, LocalRateLimitState>();
   const localBidLocks = new Map<string, LocalLockState>();
   let rateLimitFallbackLogged = false;
@@ -324,6 +350,63 @@ export function createBidService(deps: ServiceDependencies) {
     }
     lockFallbackLogged = true;
     deps.logger.warn({ err: error }, "Redis lock unavailable; using local fallback");
+  };
+
+  const allowFastPath = deps.config.bids.mode !== "safe";
+
+  const shouldUseFastPath = (input: BidPlacementInput): boolean => {
+    if (!allowFastPath) {
+      return false;
+    }
+    if (deps.config.bids.proxyAutoRaise) {
+      return false;
+    }
+    if (input.maxAmount !== undefined) {
+      return false;
+    }
+    if (input.origin === "auto") {
+      return false;
+    }
+    return true;
+  };
+
+  const primeBalanceCache = async (userId: string, currency: string): Promise<void> => {
+    const balance = await ledger.getBalance(userId, currency);
+    await writeBalanceCache(deps.redis, {
+      ...balance,
+      updatedAt: new Date()
+    });
+  };
+
+  const publishFastBidEvents = async (placement: FastBidPlacement): Promise<void> => {
+    const snapshot = placement.snapshot;
+    await Promise.all([
+      publishRealtimeEvent(deps.redis, {
+        type: "auction.snapshot.updated",
+        auctionId: snapshot.auctionId,
+        snapshot: toRealtimeSnapshot({ ...snapshot, serverTime: new Date() })
+      }),
+      publishRealtimeEvent(deps.redis, {
+        type: "auction.bids.updated",
+        auctionId: snapshot.auctionId
+      }),
+      publishRealtimeEvent(deps.redis, {
+        type: "bids.active.updated",
+        userIds: [placement.bid.userId]
+      }),
+      publishRealtimeEvent(deps.redis, {
+        type: "balance.updated",
+        userIds: [placement.bid.userId],
+        currency: placement.balance.currency
+      })
+    ]);
+  };
+
+  const rethrowFastBidError = (error: FastBidError): never => {
+    if (error.kind === "ledger") {
+      throw new LedgerError(error.code as LedgerErrorCode, error.message, error.status);
+    }
+    throw new BidError(error.code as BidErrorCode, error.message, error.status);
   };
 
   const kickFinalizationIfNeeded = async (auctionId: ObjectId): Promise<void> => {
@@ -365,6 +448,42 @@ export function createBidService(deps: ServiceDependencies) {
       );
     }
 
+    void kickFinalizationIfNeeded(input.auctionId);
+
+    if (shouldUseFastPath(input)) {
+      let fastOutcome = await fastBidProcessor.placeBid(input);
+      if (fastOutcome.status === "fallback" && fastOutcome.reason === "balance_missing") {
+        try {
+          const auction = await auctionRepository.getAuctionById(input.auctionId);
+          if (auction) {
+            await primeBalanceCache(input.userId, auction.currency);
+            fastOutcome = await fastBidProcessor.placeBid(input);
+          }
+        } catch (error) {
+          deps.logger.warn({ err: error }, "Failed to prime balance cache for fast bid");
+        }
+      }
+
+      if (fastOutcome.status === "success") {
+        try {
+          await publishFastBidEvents(fastOutcome.value);
+        } catch (error) {
+          deps.logger.warn({ err: error }, "Failed to publish fast bid updates");
+        }
+        return {
+          bid: fastOutcome.value.bid,
+          balance: fastOutcome.value.balance,
+          roundState: fastOutcome.value.roundState,
+          extended: fastOutcome.value.extended,
+          idempotent: fastOutcome.value.idempotent
+        };
+      }
+
+      if (fastOutcome.status === "error") {
+        rethrowFastBidError(fastOutcome.error);
+      }
+    }
+
     try {
       await ensureAuctionRoundProgress(deps, auctionRepository, input.auctionId);
     } catch (error) {
@@ -373,7 +492,6 @@ export function createBidService(deps: ServiceDependencies) {
         "Failed to catch up auction rounds before bid"
       );
     }
-    void kickFinalizationIfNeeded(input.auctionId);
 
     let previousTop: TopBidSnapshot | null = null;
     try {
@@ -477,6 +595,18 @@ export function createBidService(deps: ServiceDependencies) {
             sort: { createdAt: -1, _id: -1 }
           }
         );
+
+        const minBid = normalizeNonNegative(auction.minBid);
+        const minIncrement = normalizeNonNegative(auction.minIncrement);
+        const currentTop = await loadTopBidInSession(input.auctionId, session);
+        const minRequired = resolveMinimumBidAmount(
+          minBid,
+          minIncrement,
+          currentTop?.amount ?? 0
+        );
+        if (input.amount < minRequired) {
+          throw new BidError("bid_too_low", "Bid must meet the minimum increment.", 409);
+        }
 
         const origin = input.origin ?? (input.maxAmount !== undefined ? "proxy" : "manual");
         const resolvedMaxAmount = resolveMaxAmount(input);
@@ -719,7 +849,11 @@ export function createBidService(deps: ServiceDependencies) {
     input: BidPlacementInput
   ): Promise<boolean> {
     const candidates = await loadTopProxyCandidates(result.auction._id);
-    const target = resolveAutoRaiseTarget(candidates, deps.config.bids.minIncrement, input.userId);
+    const target = resolveAutoRaiseTarget(
+      candidates,
+      normalizeNonNegative(result.auction.minIncrement),
+      input.userId
+    );
     if (!target) {
       return false;
     }
@@ -769,8 +903,9 @@ export function createBidService(deps: ServiceDependencies) {
     const now = new Date();
     const auctionId = result.auction._id.toHexString();
     const roundIndex = result.roundState.roundIndex;
+    const minIncrement = normalizeNonNegative(result.auction.minIncrement);
     const rebidAmount = normalizeBidAmount(
-      currentTop.amount + Math.max(0, deps.config.bids.minIncrement)
+      currentTop.amount + Math.max(0, minIncrement)
     );
     const payload: Record<string, unknown> = {
       auctionId,
@@ -817,6 +952,24 @@ export function createBidService(deps: ServiceDependencies) {
       { $setOnInsert: update },
       { upsert: true }
     );
+  }
+
+  async function loadTopBidInSession(
+    auctionId: ObjectId,
+    session: ClientSession
+  ): Promise<TopBidSnapshot | null> {
+    return bids
+      .find({ auctionId, active: true }, { session })
+      .sort({ amount: -1, createdAt: 1, _id: 1 })
+      .project<TopBidSnapshot>({
+        _id: 1,
+        userId: 1,
+        amount: 1,
+        maxAmount: 1,
+        createdAt: 1
+      })
+      .limit(1)
+      .next();
   }
 
   async function loadTopBid(auctionId: ObjectId): Promise<TopBidSnapshot | null> {
@@ -905,6 +1058,9 @@ async function updateRedisCaches(
     scheduledEndAt: result.roundState.scheduledEndAt,
     effectiveEndAt: result.roundState.effectiveEndAt,
     extensionCount: result.roundState.extensionCount,
+    antiSnipingTriggerWindowSeconds: result.roundConfig.antiSniping.triggerWindowSeconds,
+    antiSnipingExtensionSeconds: result.roundConfig.antiSniping.extensionSeconds,
+    antiSnipingMaxExtensions: result.roundConfig.antiSniping.maxExtensions,
     lastBidAt,
     startedAt: result.roundState.startedAt ?? null,
     closedAt: result.roundState.closedAt ?? null,
@@ -916,6 +1072,9 @@ async function updateRedisCaches(
     status: result.auction.status,
     title: result.auction.title,
     currency: result.auction.currency,
+    pricingMode: result.auction.pricingMode ?? "first-price",
+    minBid: Number.isFinite(result.auction.minBid) ? result.auction.minBid : 0,
+    minIncrement: Number.isFinite(result.auction.minIncrement) ? result.auction.minIncrement : 0,
     currentRoundIndex: result.roundState.roundIndex,
     roundStatus: result.roundState.status,
     roundEffectiveEndAt: result.roundState.effectiveEndAt,
@@ -1091,6 +1250,33 @@ function resolveAutoRaiseTarget(
 function normalizeBidAmount(value: number): number {
   const scaled = Math.round(value * 1e8);
   return scaled / 1e8;
+}
+
+function normalizeNonNegative(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return value < 0 ? 0 : value;
+}
+
+function resolveMinimumBidAmount(
+  minBid: number,
+  minIncrement: number,
+  topAmount: number
+): number {
+  const resolvedMinBid = normalizeNonNegative(minBid);
+  const resolvedTop = normalizeNonNegative(topAmount);
+  if (resolvedTop <= 0) {
+    return resolvedMinBid;
+  }
+  return Math.max(resolvedMinBid, resolvedTop + normalizeNonNegative(minIncrement));
+}
+
+function toSeconds(durationMs: number): number {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    return 0;
+  }
+  return Math.max(1, Math.floor(durationMs / 1000));
 }
 
 function buildOutbidIdempotencyKey(

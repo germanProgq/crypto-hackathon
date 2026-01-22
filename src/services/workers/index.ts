@@ -1,6 +1,7 @@
 // Purpose: worker service entrypoint.
 import { startService } from "../../shared/service.js";
 import { registerWorkerTasks as registerRoundScheduler } from "./auctionRoundScheduler.js";
+import { registerBidSyncWorker } from "./bidSyncWorker.js";
 import { registerRoundFinalizer } from "./roundFinalizer.js";
 
 void startService({
@@ -8,6 +9,7 @@ void startService({
   defaultPort: 4006,
   registerRoutes: async (app, deps) => {
     await registerRoundScheduler(app, deps);
+    await registerBidSyncWorker(app, deps);
     await registerRoundFinalizer(app, deps);
   }
 });

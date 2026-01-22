@@ -56,6 +56,9 @@ export type AuctionSnapshotCache = {
   status: AuctionStatus;
   title: string;
   currency: string;
+  pricingMode: "first-price" | "cutoff";
+  minBid: number;
+  minIncrement: number;
   currentRoundIndex: number | null;
   roundStatus: AuctionRoundStatus | null;
   roundEffectiveEndAt: Date | null;
@@ -71,6 +74,9 @@ export type RoundStateCache = {
   scheduledEndAt: Date;
   effectiveEndAt: Date;
   extensionCount: number;
+  antiSnipingTriggerWindowSeconds: number;
+  antiSnipingExtensionSeconds: number;
+  antiSnipingMaxExtensions: number;
   lastBidAt: Date | null;
   startedAt: Date | null;
   closedAt: Date | null;
@@ -164,6 +170,9 @@ export async function readAuctionSnapshotFromRedis(
       const updatedAt = parseRedisDate(data.updatedAt);
       const title = parseRedisText(data.title);
       const currency = parseRedisText(data.currency);
+      const pricingMode = parsePricingMode(data.pricingMode) ?? "first-price";
+      const minBid = normalizeNonNegative(parseRedisNumber(data.minBid));
+      const minIncrement = normalizeNonNegative(parseRedisNumber(data.minIncrement));
       if (
         !status ||
         !roundStatus ||
@@ -187,6 +196,9 @@ export async function readAuctionSnapshotFromRedis(
         status,
         title,
         currency,
+        pricingMode,
+        minBid,
+        minIncrement,
         currentRoundIndex,
         roundStatus,
         roundEffectiveEndAt,
@@ -240,6 +252,15 @@ export async function readRoundStateFromRedis(
       const effectiveEndAt = parseRedisDate(data.effectiveEndAt);
       const extensionCount = parseRedisInt(data.extensionCount);
       const allocationSize = parseRedisInt(data.allocationSize);
+      const antiSnipingTriggerWindowSeconds = normalizeNonNegative(
+        parseRedisInt(data.antiSnipingTriggerWindowSeconds)
+      );
+      const antiSnipingExtensionSeconds = normalizeNonNegative(
+        parseRedisInt(data.antiSnipingExtensionSeconds)
+      );
+      const antiSnipingMaxExtensions = normalizeNonNegative(
+        parseRedisInt(data.antiSnipingMaxExtensions)
+      );
 
       if (
         !status ||
@@ -261,6 +282,9 @@ export async function readRoundStateFromRedis(
         scheduledEndAt,
         effectiveEndAt,
         extensionCount,
+        antiSnipingTriggerWindowSeconds,
+        antiSnipingExtensionSeconds,
+        antiSnipingMaxExtensions,
         lastBidAt: parseRedisDate(data.lastBidAt),
         startedAt: null,
         closedAt: null,
@@ -323,6 +347,9 @@ export function buildAuctionSnapshotFields(
     status: snapshot.status,
     title: snapshot.title,
     currency: snapshot.currency,
+    pricingMode: snapshot.pricingMode,
+    minBid: snapshot.minBid.toString(),
+    minIncrement: snapshot.minIncrement.toString(),
     updatedAt: snapshot.updatedAt.toISOString()
   };
 
@@ -334,9 +361,11 @@ export function buildAuctionSnapshotFields(
   }
   if (snapshot.roundEffectiveEndAt) {
     fields.roundEffectiveEndAt = snapshot.roundEffectiveEndAt.toISOString();
+    fields.roundEffectiveEndAtMs = snapshot.roundEffectiveEndAt.getTime().toString();
   }
   if (snapshot.roundLastBidAt) {
     fields.roundLastBidAt = snapshot.roundLastBidAt.toISOString();
+    fields.roundLastBidAtMs = snapshot.roundLastBidAt.getTime().toString();
   }
   if (snapshot.lastBidAmount !== null) {
     fields.lastBidAmount = snapshot.lastBidAmount.toString();
@@ -356,12 +385,20 @@ export function buildRoundStateFields(
     scheduledEndAt: state.scheduledEndAt.toISOString(),
     effectiveEndAt: state.effectiveEndAt.toISOString(),
     extensionCount: state.extensionCount.toString(),
+    antiSnipingTriggerWindowSeconds: state.antiSnipingTriggerWindowSeconds.toString(),
+    antiSnipingExtensionSeconds: state.antiSnipingExtensionSeconds.toString(),
+    antiSnipingMaxExtensions: state.antiSnipingMaxExtensions.toString(),
     allocationSize: state.allocationSize.toString(),
-    updatedAt: updatedAt.toISOString()
+    updatedAt: updatedAt.toISOString(),
+    updatedAtMs: updatedAt.getTime().toString(),
+    scheduledStartAtMs: state.scheduledStartAt.getTime().toString(),
+    scheduledEndAtMs: state.scheduledEndAt.getTime().toString(),
+    effectiveEndAtMs: state.effectiveEndAt.getTime().toString()
   };
 
   if (state.lastBidAt) {
     fields.lastBidAt = state.lastBidAt.toISOString();
+    fields.lastBidAtMs = state.lastBidAt.getTime().toString();
   }
 
   return fields;
@@ -371,7 +408,17 @@ function parseRedisDate(value?: string): Date | null {
   if (!value) {
     return null;
   }
-  const parsed = new Date(value);
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) {
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric)) {
+      const numericDate = new Date(numeric);
+      if (!Number.isNaN(numericDate.getTime())) {
+        return numericDate;
+      }
+    }
+  }
+  const parsed = new Date(trimmed);
   if (Number.isNaN(parsed.getTime())) {
     return null;
   }
@@ -409,6 +456,16 @@ function parseAuctionStatus(value?: string): AuctionStatus | null {
   return isAuctionStatus(value) ? value : null;
 }
 
+function parsePricingMode(value?: string): "first-price" | "cutoff" | null {
+  if (!value) {
+    return null;
+  }
+  if (value === "first-price" || value === "cutoff") {
+    return value;
+  }
+  return null;
+}
+
 function parseRoundStatus(value?: string): AuctionRoundStatus | null {
   return isRoundStatus(value) ? value : null;
 }
@@ -419,4 +476,11 @@ function isAuctionStatus(value?: string): value is AuctionStatus {
 
 function isRoundStatus(value?: string): value is AuctionRoundStatus {
   return value === "scheduled" || value === "live" || value === "closed";
+}
+
+function normalizeNonNegative(value: number | null): number {
+  if (value === null || !Number.isFinite(value)) {
+    return 0;
+  }
+  return value < 0 ? 0 : value;
 }

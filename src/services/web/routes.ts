@@ -14,6 +14,7 @@ import type { ServiceDependencies } from "../../shared/service.js";
 import { canonicalize } from "../../shared/crypto/canonicalize.js";
 import { buildMerkleRootFromPayloads } from "../../shared/crypto/merkle.js";
 import type { RoundProofPayload, SignedRoundProof } from "../../shared/auctionProof.js";
+import { runMongoTransaction } from "../../shared/storage/mongoTransaction.js";
 import {
   mongoCollections,
   type AuctionWatchlistDocument,
@@ -31,6 +32,8 @@ import {
   readActiveAuctionListFromRedis,
   writeActiveAuctionListToRedis
 } from "../auction-engine/auctionCache.js";
+import { parseAuctionConfig } from "../auction-engine/auctionConfig.js";
+import { buildAuctionDocument } from "../auction-engine/auctionCreation.js";
 import { parseRankingMember } from "../auction-engine/bidRanking.js";
 import { BidError, createBidService } from "../auction-engine/bidService.js";
 import { ensureAuctionRoundProgress } from "../auction-engine/auctionProgress.js";
@@ -99,6 +102,9 @@ const createAuctionSchema = {
     title: { type: "string", minLength: 1 },
     description: { type: "string" },
     currency: { type: "string", minLength: 1 },
+    pricingMode: { type: "string", enum: ["first-price", "cutoff"] },
+    minBid: { type: "number", minimum: 0 },
+    minIncrement: { type: "number", minimum: 0 },
     deliveryType: { type: "string", enum: ["access_code", "telegram_role", "nft_mint"] },
     rounds: { type: "integer", minimum: 1, maximum: 20 },
     allocationSize: { type: "integer", minimum: 1, maximum: 500 },
@@ -178,6 +184,9 @@ type ActiveAuctionPayload = {
   description?: string;
   status: AuctionStatus;
   currency: string;
+  pricingMode: AuctionDocument["pricingMode"];
+  minBid: number;
+  minIncrement: number;
   deliveryType?: AuctionDocument["deliveryType"] | null;
   startsAt: Date;
   endsAt: Date;
@@ -264,7 +273,9 @@ export async function registerWebRoutes(
 ): Promise<void> {
   const auctionRepository = createAuctionRepository(deps.mongo);
   const ledgerRepository = createLedgerRepository(deps.mongo, {
-    retentionDays: deps.config.dataRetention.ledgerDays
+    retentionDays: deps.config.dataRetention.ledgerDays,
+    redis: deps.redis,
+    logger: deps.logger
   });
   const cryptoGatewayService = createCryptoGatewayService(deps);
   const bidService = createBidService(deps);
@@ -1291,36 +1302,51 @@ export async function registerWebRoutes(
           }
         };
       });
-      const firstRound = rounds[0] ?? null;
       const endsAt = rounds[rounds.length - 1]?.endAt ?? startAt;
-      const status: AuctionStatus = startAt.getTime() <= now.getTime() ? "live" : "draft";
-      const auction: AuctionDocument = {
-        title: body.title,
-        status,
-        currency: body.currency ?? "USDT",
-        startsAt: startAt,
-        endsAt,
-        rounds,
-        currentRoundIndex: firstRound?.index ?? null,
-        roundStatus: firstRound ? "scheduled" : null,
-        roundEffectiveEndAt: firstRound?.endAt ?? null,
-        roundLastBidAt: null,
-        lastBidAmount: null,
-        createdAt: now,
-        updatedAt: now
-      };
-      if (body.description && body.description.trim().length > 0) {
-        auction.description = body.description.trim();
+      let config;
+      try {
+        config = parseAuctionConfig({
+          title: body.title,
+          description: body.description,
+          currency: body.currency ?? "USDT",
+          pricingMode: body.pricingMode,
+          minBid: body.minBid,
+          minIncrement: body.minIncrement,
+          deliveryType: body.deliveryType,
+          startsAt: startAt,
+          endsAt,
+          rounds
+        }, {
+          minIncrement: deps.config.bids.minIncrement
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Invalid auction payload.";
+        return reply.code(400).send({ error: "invalid_request", message });
       }
-      if (body.deliveryType) {
-        auction.deliveryType = body.deliveryType;
+
+      let auction: WithId<AuctionDocument>;
+      try {
+        auction = buildAuctionDocument(config, deps.config.crypto.supportedCurrencies);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Invalid auction payload.";
+        return reply.code(400).send({ error: "invalid_request", message });
       }
 
       const auctions = deps.mongo.db.collection<AuctionDocument>(mongoCollections.auctions);
-      const inserted = await auctions.insertOne(auction);
-      const stored = await auctions.findOne({ _id: inserted.insertedId });
-      if (stored) {
-        await auctionRepository.ensureRoundStates(stored);
+      const created = await runMongoTransaction(deps.mongo, async (session) => {
+        await auctions.insertOne(auction, { session });
+        await auctionRepository.ensureRoundStates(auction, session);
+        return auction;
+      });
+      let stored = created;
+      try {
+        await ensureAuctionRoundProgress(deps, auctionRepository, created._id, now);
+        const refreshed = await auctionRepository.getAuctionById(created._id);
+        if (refreshed) {
+          stored = refreshed;
+        }
+      } catch (error) {
+        deps.logger.warn({ err: error }, "Failed to sync auction rounds after creation");
       }
 
       try {
@@ -1331,14 +1357,14 @@ export async function registerWebRoutes(
       try {
         await publishRealtimeEvent(deps.redis, {
           type: "auction.list.updated",
-          auctionId: inserted.insertedId.toHexString(),
+          auctionId: stored._id.toHexString(),
           reason: "created"
         });
       } catch (error) {
         deps.logger.warn({ err: error }, "Failed to publish auction list update");
       }
 
-      return reply.code(201).send({ _id: inserted.insertedId.toHexString(), status });
+      return reply.code(201).send({ _id: stored._id.toHexString(), status: stored.status });
     }
   );
 
@@ -1357,6 +1383,9 @@ export async function registerWebRoutes(
       description: auction.description,
       status: auction.status,
       currency: auction.currency,
+      pricingMode: auction.pricingMode ?? "first-price",
+      minBid: Number.isFinite(auction.minBid) ? auction.minBid : 0,
+      minIncrement: Number.isFinite(auction.minIncrement) ? auction.minIncrement : 0,
       deliveryType: auction.deliveryType ?? null,
       startsAt: auction.startsAt,
       endsAt: auction.endsAt,
@@ -2024,6 +2053,9 @@ async function loadActiveAuctions(
     description: auction.description,
     status: auction.status,
     currency: auction.currency,
+    pricingMode: auction.pricingMode ?? "first-price",
+    minBid: Number.isFinite(auction.minBid) ? auction.minBid : 0,
+    minIncrement: Number.isFinite(auction.minIncrement) ? auction.minIncrement : 0,
     deliveryType: auction.deliveryType ?? null,
     startsAt: auction.startsAt,
     endsAt: auction.endsAt,

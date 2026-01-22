@@ -25,6 +25,7 @@ export const mongoCollections = {
 
 export type AuctionStatus = "draft" | "live" | "closed";
 export type AuctionRoundStatus = "scheduled" | "live" | "closed";
+export type AuctionPricingMode = "first-price" | "cutoff";
 export type LedgerEntryType =
   | "deposit_confirmed"
   | "hold_created"
@@ -61,6 +62,9 @@ export interface AuctionDocument {
   description?: string;
   status: AuctionStatus;
   currency: string;
+  pricingMode: AuctionPricingMode;
+  minBid: number;
+  minIncrement: number;
   deliveryType?: "access_code" | "telegram_role" | "nft_mint";
   startsAt: Date;
   endsAt: Date;
@@ -447,6 +451,9 @@ const auctionValidator: Document = {
       description: { bsonType: "string" },
       status: { bsonType: "string", enum: ["draft", "live", "closed"] },
       currency: { bsonType: "string" },
+      pricingMode: { bsonType: "string", enum: ["first-price", "cutoff"] },
+      minBid: { bsonType: bsonNumber },
+      minIncrement: { bsonType: bsonNumber },
       deliveryType: { bsonType: "string", enum: ["access_code", "telegram_role", "nft_mint"] },
       startsAt: { bsonType: "date" },
       endsAt: { bsonType: "date" },

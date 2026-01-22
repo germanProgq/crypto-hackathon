@@ -69,7 +69,9 @@ export async function registerLedgerRoutes(
   deps: ServiceDependencies
 ): Promise<void> {
   const ledger = createLedgerRepository(deps.mongo, {
-    retentionDays: deps.config.dataRetention.ledgerDays
+    retentionDays: deps.config.dataRetention.ledgerDays,
+    redis: deps.redis,
+    logger: deps.logger
   });
 
   app.get("/ledger/:userId/balance", async (request, reply) => {

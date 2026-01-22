@@ -57,6 +57,9 @@ export interface AppConfig {
   bids: {
     minIncrement: number;
     proxyAutoRaise: boolean;
+    mode: "safe" | "fast" | "auto";
+    fastSyncIntervalMs: number;
+    fastSyncBatchSize: number;
   };
   crypto: {
     supportedCurrencies: string[];
@@ -301,6 +304,9 @@ function createEnvSchema(defaultPort: number) {
       .refine((value) => isOptionalHttpUrl(value), "WEB_PUBLIC_URL must be http(s) or empty"),
     BID_MIN_INCREMENT: z.coerce.number().min(0).default(0.01),
     BID_PROXY_AUTO_RAISE: z.string().optional(),
+    BID_MODE: z.enum(["safe", "fast", "auto"]).default("safe"),
+    BID_FAST_SYNC_INTERVAL_MS: z.coerce.number().int().min(50).default(1000),
+    BID_FAST_SYNC_BATCH_SIZE: z.coerce.number().int().min(1).max(1000).default(100),
     CRYPTO_SUPPORTED_CURRENCIES: z.string().default("USDT"),
     CRYPTO_WALLET_STRATEGY: z.enum(walletStrategyValues).default("address_pool"),
     CRYPTO_OBSERVER_URL: z
@@ -523,7 +529,10 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
     },
     bids: {
       minIncrement: parsed.BID_MIN_INCREMENT,
-      proxyAutoRaise
+      proxyAutoRaise,
+      mode: parsed.BID_MODE,
+      fastSyncIntervalMs: parsed.BID_FAST_SYNC_INTERVAL_MS,
+      fastSyncBatchSize: parsed.BID_FAST_SYNC_BATCH_SIZE
     },
     crypto: {
       supportedCurrencies,
