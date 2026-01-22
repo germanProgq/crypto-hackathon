@@ -3,6 +3,8 @@ services:
   mongo:
     image: mongo:7.0
     command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27017:27017"
     healthcheck:
       test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ ping: 1 }).ok"]
       interval: 5s
@@ -35,6 +37,8 @@ services:
           exit 1;
   redis:
     image: redis:7.2-alpine
+    ports:
+      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s

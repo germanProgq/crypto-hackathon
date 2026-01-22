@@ -37,7 +37,8 @@
     "sdk:build": "cd sdk && npm install && npm run build",
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",
-    "docker:logs": "docker compose logs -f"
+    "docker:logs": "docker compose logs -f",
+    "dev:all": "concurrently -n observer,auction-engine,ledger,crypto-gateway,signer,workers,web -c blue,green,yellow,magenta,cyan,white,red \"npm:dev:observer\" \"npm:dev:auction-engine\" \"npm:dev:ledger\" \"npm:dev:crypto-gateway\" \"npm:dev:signer\" \"npm:dev:workers\" \"npm:dev:web\""
   },
   "dependencies": {
     "@fastify/swagger": "^9.6.1",
@@ -53,6 +54,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.0.7",
+    "concurrently": "^8.2.2",
     "tsx": "^4.7.0",
     "typescript": "^5.4.2",
     "vitest": "^4.0.17"

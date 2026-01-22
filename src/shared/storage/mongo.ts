@@ -132,6 +132,21 @@ export function buildLocalMongoUri(uri: string, port: number): string {
   return applyReplicaSetParams(updateLocalMongoUriPort(uri, port));
 }
 
+async function isMongoAvailable(uri: string): Promise<boolean> {
+  try {
+    const client = new MongoClient(uri, {
+      serverSelectionTimeoutMS: 2000,
+      connectTimeoutMS: 2000
+    });
+    await client.connect();
+    await client.db().command({ ping: 1 });
+    await client.close();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function ensureLocalMongo(
   uri: string,
   logger: Logger
@@ -139,6 +154,17 @@ async function ensureLocalMongo(
   const target = resolveLocalMongoTarget(uri);
   if (!target) {
     return null;
+  }
+
+  // Check if MongoDB is already available (e.g., via docker-compose)
+  const directUri = buildLocalMongoUri(uri, target.port);
+  if (await isMongoAvailable(directUri)) {
+    logger.info({ port: target.port }, "MongoDB already available, skipping Docker setup");
+    return {
+      uri: directUri,
+      port: target.port,
+      fallback: false
+    };
   }
 
   const port = await ensureDockerMongo(target.port, logger);

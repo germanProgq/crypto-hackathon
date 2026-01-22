@@ -8,3 +8,9 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# SSL certificates (development)
+ssl/
+*.key
+*.crt
+*.pem
