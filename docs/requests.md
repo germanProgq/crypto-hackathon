@@ -1,108 +1,136 @@
-# Request Reference
+# Справочник запросов
 
-This document lists all HTTP and WebSocket requests exposed by the services in this repo, including
-inputs, outputs, auth requirements, and common error cases.
+Этот документ перечисляет все HTTP и WebSocket запросы, предоставляемые сервисами репозитория, включая входные/выходные данные, требования аутентификации и типичные ошибки.
 
-## Service map (default Docker ports)
-- Auction engine: http://127.0.0.1:4001
-- Ledger: http://127.0.0.1:4002
-- Crypto gateway: http://127.0.0.1:4003
-- Bot: http://127.0.0.1:4004
-- Web: http://127.0.0.1:4005
-- Workers: http://127.0.0.1:4006
-- Signer: http://127.0.0.1:4007
-- Mock RPC: http://127.0.0.1:9000
+## Карта сервисов (порты Docker по умолчанию)
 
-## Conventions
-- JSON requests/responses use `Content-Type: application/json`.
-- All timestamps are ISO 8601 strings in responses.
-- Object IDs are 24 hex character strings unless otherwise noted.
-- Error responses generally look like:
-  - `{ "error": "code", "message": "Human readable message" }`
-- Idempotency:
-  - Many write operations take `idempotencyKey`. If a request is retried with the same key and the
-    same payload, the previous result is returned. A different payload with the same key returns 409.
+| Сервис | URL | Описание |
+|--------|-----|----------|
+| Auction Engine | http://127.0.0.1:4001 | Движок аукционов |
+| Ledger | http://127.0.0.1:4002 | Журнал операций |
+| Crypto Gateway | http://127.0.0.1:4003 | Крипто-шлюз |
+| Bot | http://127.0.0.1:4004 | Telegram бот |
+| Web | http://127.0.0.1:4005 | Web интерфейс |
+| Workers | http://127.0.0.1:4006 | Фоновые воркеры |
+| Signer | http://127.0.0.1:4007 | Подписант транзакций |
+| Mock RPC | http://127.0.0.1:9000 | Мок-сервер для разработки |
 
-## Authentication
-Core auth (auction-engine, ledger, crypto-gateway):
-- Service token:
-  - `x-service-token: <CORE_API_TOKEN>` or `Authorization: Bearer <CORE_API_TOKEN>`
-- User token (Telegram):
-  - `x-telegram-init-data: <initData>` or `x-telegram-web-app-data: <initData>` or
-    `Authorization: TMA <initData>`
-- Demo user (non-production only, when enabled):
-  - `x-demo-user-id: <userId>`
+## Соглашения
 
-Crypto admin auth (crypto-gateway admin endpoints):
-- `x-admin-token: <CRYPTO_ADMIN_TOKEN>`
+- JSON запросы/ответы используют `Content-Type: application/json`
+- Все временные метки — строки ISO 8601 в ответах
+- Object ID — 24-символьные hex строки, если не указано иное
+- Формат ответов с ошибками:
+  - `{ "error": "код", "message": "Человекочитаемое сообщение" }`
+- Идемпотентность:
+  - Многие операции записи принимают `idempotencyKey`. При повторном запросе с тем же ключом и payload возвращается предыдущий результат. Другой payload с тем же ключом возвращает 409.
 
-Signer auth:
-- `x-signer-token: <SIGNER_API_TOKEN>`
-- IP allowlist enforced (see `SIGNER_ALLOWED_IPS`).
+---
 
-Web CSRF/CORS:
-- Unsafe methods (POST/PUT/PATCH/DELETE) require `Origin` to be present and allowed.
-- Requests with missing/invalid Origin return `403` with `error: "csrf_failed"` or `cors_rejected`.
+## Аутентификация
 
-## Common endpoints (all services)
+### Core auth (auction-engine, ledger, crypto-gateway)
+
+| Метод | Заголовок |
+|-------|-----------|
+| Сервисный токен | `x-service-token: <CORE_API_TOKEN>` или `Authorization: Bearer <CORE_API_TOKEN>` |
+| Telegram пользователь | `x-telegram-init-data: <initData>` или `Authorization: TMA <initData>` |
+| Demo пользователь (только dev) | `x-demo-user-id: <userId>` |
+
+### Crypto admin auth (crypto-gateway admin endpoints)
+
+| Метод | Заголовок |
+|-------|-----------|
+| Админ токен | `x-admin-token: <CRYPTO_ADMIN_TOKEN>` |
+
+### Signer auth
+
+| Метод | Заголовок |
+|-------|-----------|
+| Signer токен | `x-signer-token: <SIGNER_API_TOKEN>` |
+| IP allowlist | Проверяется по `SIGNER_ALLOWED_IPS` |
+
+### Web CSRF/CORS
+
+- Небезопасные методы (POST/PUT/PATCH/DELETE) требуют заголовок `Origin`
+- Запросы с отсутствующим/невалидным Origin возвращают `403` с `error: "csrf_failed"` или `cors_rejected`
+
+---
+
+## Общие эндпоинты (все сервисы)
+
 ### GET /health/live
-Response 200:
-```
-{ "status": "ok", "service": "service-name", "timestamp": "2026-01-01T00:00:00.000Z" }
+Ответ 200:
+```json
+{
+  "status": "ok",
+  "service": "service-name",
+  "timestamp": "2026-01-22T00:00:00.000Z"
+}
 ```
 
 ### GET /health/ready
-Response 200 (or 503 if any dependency fails):
-```
+Ответ 200 (или 503 если зависимость недоступна):
+```json
 {
-  "status": "ok" | "degraded",
+  "status": "ok | degraded",
   "service": "service-name",
-  "timestamp": "2026-01-01T00:00:00.000Z",
-  "checks": [ { "name": "mongo|redis|...", "ok": true, "detail": "..." } ]
+  "timestamp": "2026-01-22T00:00:00.000Z",
+  "checks": [
+    { "name": "mongo|redis|...", "ok": true, "detail": "..." }
+  ]
 }
 ```
 
 ### GET /metrics
-Prometheus metrics text.
+Prometheus метрики в текстовом формате.
 
 ---
 
 ## Auction Engine (4001)
-Auth:
-- Read endpoints: core auth (service token or user auth).
-- Create auctions: service token required.
+
+### Аутентификация
+- Чтение: core auth (сервисный токен или пользовательская auth)
+- Создание аукционов: требуется сервисный токен
 
 ### GET /auctions
-Query:
-- `status`: `active | upcoming | closed` (default `active`)
-- `limit`: integer 1..100
-- `cursor`: `"<ISO time>|<objectId>"`
+Получение списка аукционов.
 
-Response 200:
-```
+**Query параметры:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `status` | string | `active`, `upcoming`, `closed` (по умолчанию `active`) |
+| `limit` | integer | 1..100 |
+| `cursor` | string | `"<ISO time>|<objectId>"` |
+
+**Ответ 200:**
+```json
 {
   "items": [AuctionSummary],
-  "nextCursor": "2026-01-01T00:00:00.000Z|<objectId>" | null
+  "nextCursor": "2026-01-22T00:00:00.000Z|<objectId>" | null
 }
 ```
 
 ### POST /auctions
-Auth: service token required.
+Создание нового аукциона.
 
-Body (strict):
-```
+**Auth:** требуется сервисный токен
+
+**Body:**
+```json
 {
   "title": "string",
   "description": "string?",
   "currency": "string",
-  "startsAt": "ISO date or number",
-  "endsAt": "ISO date or number",
+  "startsAt": "ISO date или number",
+  "endsAt": "ISO date или number",
+  "pricingMode": "first_price | cutoff",
   "rounds": [
     {
       "index": 0,
       "allocationSize": 5,
-      "startAt": "ISO date or number",
-      "endAt": "ISO date or number",
+      "startAt": "ISO date или number",
+      "endAt": "ISO date или number",
       "antiSniping": {
         "triggerWindowSeconds": 10,
         "extensionSeconds": 15,
@@ -113,45 +141,53 @@ Body (strict):
 }
 ```
 
-Response 201:
-```
+**Ответ 201:**
+```json
 { "auction": Auction }
 ```
 
 ### GET /auctions/:auctionId
-Auth: core auth required.
+Получение деталей аукциона.
 
-Response 200:
-```
+**Auth:** требуется core auth
+
+**Ответ 200:**
+```json
 { "auction": Auction }
 ```
 
 ### GET /auctions/:auctionId/snapshot
-Auth: core auth required.
+Получение снапшота аукциона.
 
-Response 200:
-```
+**Auth:** требуется core auth
+
+**Ответ 200:**
+```json
 { "snapshot": AuctionSnapshot }
 ```
 
 ### GET /auctions/:auctionId/rounds/:roundIndex/state
-Auth: core auth required.
+Получение состояния раунда.
 
-Response 200:
-```
+**Auth:** требуется core auth
+
+**Ответ 200:**
+```json
 { "state": RoundStateResponse }
 ```
 
 ### POST /auctions/:auctionId/bids
-Auth: core auth required.
+Размещение ставки.
 
-Body (strict):
-```
+**Auth:** требуется core auth
+
+**Body:**
+```json
 {
-  "userId": "string?",          // only for service auth
+  "userId": "string?",
   "amount": 123.45,
   "idempotencyKey": "string",
-  "metadata": { "any": "object" },
+  "metadata": { "любой": "объект" },
   "audit": {
     "requestId": "string?",
     "source": "string?",
@@ -162,8 +198,8 @@ Body (strict):
 }
 ```
 
-Response 200:
-```
+**Ответ 200:**
+```json
 {
   "bid": Bid,
   "balance": LedgerBalance,
@@ -173,293 +209,278 @@ Response 200:
 }
 ```
 
-### Auction Engine schemas
-AuctionSummary:
-- `_id`: string
-- `title`: string
-- `description`: string | null
-- `status`: `draft | live | closed`
-- `currency`: string
-- `startsAt`: ISO string
-- `endsAt`: ISO string
-- `roundCount`: number
-- `currentRoundIndex`: number | null
-- `roundStatus`: `scheduled | live | closed` | null
-- `roundEffectiveEndAt`: ISO string | null
-- `roundLastBidAt`: ISO string | null
-- `lastBidAmount`: number | null
+### GET /auctions/:auctionId/rounds/:roundIndex/leaderboard
+Получение лидерборда раунда.
 
-Auction:
-- `_id`: string
-- `title`: string
-- `description`: string | null
-- `status`: `draft | live | closed`
-- `currency`: string
-- `startsAt`: ISO string
-- `endsAt`: ISO string
-- `rounds`: array of `AuctionRoundConfig`
-- `currentRoundIndex`: number | null
-- `roundStatus`: `scheduled | live | closed` | null
-- `roundEffectiveEndAt`: ISO string | null
-- `roundLastBidAt`: ISO string | null
-- `lastBidAmount`: number | null
-- `createdAt`: ISO string
-- `updatedAt`: ISO string
+**Auth:** требуется core auth
 
-AuctionRoundConfig:
-- `index`: number
-- `allocationSize`: number
-- `startAt`: ISO string
-- `endAt`: ISO string
-- `antiSniping.triggerWindowSeconds`: number
-- `antiSniping.extensionSeconds`: number
-- `antiSniping.maxExtensions`: number
+**Query параметры:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `limit` | integer | 1..100 (по умолчанию 20) |
 
-AuctionSnapshot:
-- `auctionId`: string
-- `status`: `draft | live | closed`
-- `title`: string
-- `currency`: string
-- `currentRoundIndex`: number | null
-- `roundStatus`: `scheduled | live | closed` | null
-- `roundEffectiveEndAt`: ISO string | null
-- `roundLastBidAt`: ISO string | null
-- `updatedAt`: ISO string
-- `lastBidAmount`: number | null
+**Ответ 200:**
+```json
+{
+  "roundIndex": 0,
+  "leaderboard": [
+    { "rank": 1, "userId": "...", "amount": 100.00, "createdAt": "ISO" }
+  ]
+}
+```
 
-RoundState (bid response):
-- `status`: `scheduled | live | closed`
-- `roundIndex`: number
-- `scheduledStartAt`: ISO string
-- `scheduledEndAt`: ISO string
-- `effectiveEndAt`: ISO string
-- `extensionCount`: number
-- `lastBidAt`: ISO string | null
+### GET /auctions/:auctionId/replay
+Replay раунда для верификации.
 
-RoundStateDetail (round state endpoint):
-- All fields from `RoundState`, plus:
-- `startedAt`: ISO string | null
-- `closedAt`: ISO string | null
-- `allocationSize`: number
+**Auth:** требуется core auth
 
-RoundStateResponse:
-- All fields from `RoundStateDetail`, plus:
-- `timers.now`: ISO string
-- `timers.untilStartMs`: number
-- `timers.untilScheduledEndMs`: number
-- `timers.untilEffectiveEndMs`: number
+**Ответ 200:**
+```json
+{
+  "auctionId": "...",
+  "roundIndex": 0,
+  "bids": [...],
+  "winners": [...],
+  "merkleRoot": "...",
+  "signature": "..."
+}
+```
 
-Bid:
-- `_id`: string
-- `auctionId`: string
-- `roundIndex`: number | null
-- `userId`: string
-- `amount`: number
-- `createdAt`: ISO string
-- `idempotencyKey`: string
-- `active`: boolean
+### Схемы Auction Engine
 
-### Auction Engine error codes
-- `invalid_request`, `auction_not_found`, `round_not_found`
-- Bid errors: `auction_not_found`, `auction_not_live`, `round_not_found`, `round_not_live`,
-  `bid_too_low`, `round_locked`, `rate_limited`, `idempotency_conflict`, `invalid_request`
-- Ledger errors may surface on bid placement (see Ledger section).
+**AuctionSummary:**
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `_id` | string | Идентификатор аукциона |
+| `title` | string | Название |
+| `description` | string | null | Описание |
+| `status` | string | `draft`, `live`, `closed` |
+| `currency` | string | Валюта |
+| `startsAt` | ISO string | Время начала |
+| `endsAt` | ISO string | Время окончания |
+| `roundCount` | number | Количество раундов |
+| `currentRoundIndex` | number | null | Текущий раунд |
+| `roundStatus` | string | null | `scheduled`, `live`, `closed` |
+| `roundEffectiveEndAt` | ISO string | null | Эффективное время окончания |
+| `lastBidAmount` | number | null | Последняя ставка |
+
+**Bid:**
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `_id` | string | Идентификатор ставки |
+| `auctionId` | string | Идентификатор аукциона |
+| `roundIndex` | number | null | Индекс раунда |
+| `userId` | string | Идентификатор пользователя |
+| `amount` | number | Сумма ставки |
+| `createdAt` | ISO string | Время создания |
+| `idempotencyKey` | string | Ключ идемпотентности |
+| `active` | boolean | Активна ли ставка |
+
+### Коды ошибок Auction Engine
+
+| Код | Описание |
+|-----|----------|
+| `invalid_request` | Некорректный запрос |
+| `auction_not_found` | Аукцион не найден |
+| `auction_not_live` | Аукцион не активен |
+| `round_not_found` | Раунд не найден |
+| `round_not_live` | Раунд не активен |
+| `bid_too_low` | Ставка ниже минимума |
+| `round_locked` | Раунд заблокирован |
+| `rate_limited` | Превышен лимит запросов |
+| `idempotency_conflict` | Конфликт идемпотентности |
 
 ---
 
 ## Ledger (4002)
-Auth:
-- GET endpoints: core auth.
-- POST endpoints: service token required.
+
+### Аутентификация
+- GET эндпоинты: core auth
+- POST эндпоинты: требуется сервисный токен
 
 ### GET /ledger/:userId/balance
-Query:
-- `currency` (required)
+Получение баланса пользователя.
 
-Response 200:
-```
-LedgerBalance
+**Query:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `currency` | string | Валюта (обязательно) |
+
+**Ответ 200:**
+```json
+{
+  "userId": "...",
+  "currency": "USDT",
+  "available": 100.00,
+  "held": 50.00,
+  "spent": 25.00,
+  "current": 150.00,
+  "asOf": "2026-01-22T00:00:00.000Z"
+}
 ```
 
 ### GET /ledger/:userId/history
-Query:
-- `currency` (required)
-- `limit` (optional, default 50, max 200)
-- `before` (optional ISO date)
+Получение истории операций.
 
-Response 200:
-```
+**Query:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `currency` | string | Валюта (обязательно) |
+| `limit` | integer | По умолчанию 50, max 200 |
+| `before` | ISO date | Фильтр по времени |
+
+**Ответ 200:**
+```json
 [LedgerEntry]
 ```
 
-### GET /ledger/:userId/reconcile
-Query:
-- `currency` (required)
-
-Response 200:
-```
-LedgerReconciliation
-```
-
 ### POST /ledger/entries
-Body:
-```
+Создание записи в журнале.
+
+**Body:**
+```json
 {
   "userId": "string",
-  "entryType": "deposit_confirmed|withdrawal_requested|withdrawal_broadcasted|withdrawal_confirmed|withdrawal_failed",
+  "entryType": "deposit_confirmed|withdrawal_requested|...",
   "amount": 123.45,
   "currency": "string",
   "idempotencyKey": "string",
   "withdrawalId": "string?",
-  "metadata": { "any": "object" },
-  "audit": { "requestId": "...?", "source": "...?", "ip": "...?", "userAgent": "...?", "actorId": "...?" }
+  "metadata": { "любой": "объект" },
+  "audit": { ... }
 }
 ```
 
-Response 200:
-```
+**Ответ 200:**
+```json
 { "entry": LedgerEntry, "balance": LedgerBalance }
 ```
 
 ### POST /ledger/holds
-Body:
-```
+Создание холда.
+
+**Body:**
+```json
 {
   "userId": "string",
   "amount": 123.45,
   "currency": "string",
   "holdId": "string",
   "idempotencyKey": "string",
-  "metadata": { "any": "object" },
+  "metadata": { ... },
   "audit": { ... }
 }
 ```
 
-Response 200:
-```
+**Ответ 200:**
+```json
 { "entry": LedgerEntry, "balance": LedgerBalance }
 ```
 
 ### POST /ledger/holds/release
-Same body as `/ledger/holds`.
+Освобождение холда.
 
-Response 200:
-```
+**Body:** То же, что `/ledger/holds`
+
+**Ответ 200:**
+```json
 { "entry": LedgerEntry, "balance": LedgerBalance }
 ```
 
 ### POST /ledger/holds/capture
-Same body as `/ledger/holds`.
+Списание холда.
 
-Response 200:
-```
+**Body:** То же, что `/ledger/holds`
+
+**Ответ 200:**
+```json
 { "entry": LedgerEntry, "balance": LedgerBalance }
 ```
 
-### POST /ledger/withdrawals/request
-Body:
-```
-{
-  "userId": "string",
-  "amount": 123.45,
-  "currency": "string",
-  "withdrawalId": "string",
-  "idempotencyKey": "string",
-  "metadata": { "any": "object" },
-  "audit": { ... }
-}
-```
+### Схемы Ledger
 
-Response 200:
-```
-{ "entry": LedgerEntry, "balance": LedgerBalance }
-```
+**LedgerBalance:**
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `userId` | string | Идентификатор пользователя |
+| `currency` | string | Валюта |
+| `available` | number | Доступный баланс |
+| `held` | number | Заблокировано |
+| `spent` | number | Потрачено |
+| `current` | number | Общий баланс (available + held) |
+| `asOf` | ISO string | Время актуальности |
 
-### POST /ledger/withdrawals/broadcast
-Same body as `/ledger/withdrawals/request`.
+**LedgerEntry:**
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `_id` | string | Идентификатор записи |
+| `userId` | string | Идентификатор пользователя |
+| `entryType` | string | Тип операции |
+| `amount` | number | Сумма |
+| `currency` | string | Валюта |
+| `createdAt` | ISO string | Время создания |
+| `idempotencyKey` | string | Ключ идемпотентности |
 
-Response 200:
-```
-{ "entry": LedgerEntry }
-```
+**Типы операций (`entryType`):**
+- `deposit_confirmed` — подтверждённый депозит
+- `hold_created` — создан холд
+- `hold_released` — холд освобождён
+- `hold_captured` — холд списан
+- `withdrawal_requested` — запрос на вывод
+- `withdrawal_broadcasted` — вывод отправлен
+- `withdrawal_confirmed` — вывод подтверждён
+- `withdrawal_failed` — вывод не удался
 
-### POST /ledger/withdrawals/confirm
-Same body as `/ledger/withdrawals/request`.
+### Коды ошибок Ledger
 
-Response 200:
-```
-{ "entry": LedgerEntry, "balance": LedgerBalance }
-```
-
-### POST /ledger/withdrawals/fail
-Same body as `/ledger/withdrawals/request`.
-
-Response 200:
-```
-{ "entry": LedgerEntry, "balance": LedgerBalance }
-```
-
-### Ledger schemas
-LedgerBalance:
-- `userId`: string
-- `currency`: string
-- `available`: number
-- `held`: number
-- `spent`: number
-- `current`: number
-- `asOf`: ISO string
-
-LedgerEntry:
-- `_id`: string
-- `userId`: string
-- `entryType`: `deposit_confirmed | hold_created | hold_released | hold_captured |
-  withdrawal_requested | withdrawal_broadcasted | withdrawal_confirmed | withdrawal_failed`
-- `amount`: number
-- `currency`: string
-- `createdAt`: ISO string
-- `idempotencyKey`: string
-- `expiresAt`: ISO string | null
-- `metadata`: object | null
-- `audit`: object | null
-
-LedgerReconciliation:
-- `userId`: string
-- `currency`: string
-- `totals`: object keyed by entryType
-- `balance`: LedgerBalance
-- `expectedCurrent`: number
-- `balanceMatches`: boolean
-- `issues`: string[]
-
-### Ledger error codes
-- `invalid_request`, `invalid_amount`, `insufficient_funds`, `idempotency_conflict`
-- `hold_exists`, `hold_not_found`, `hold_resolved`
-- `withdrawal_exists`, `withdrawal_not_found`, `withdrawal_resolved`
+| Код | Описание |
+|-----|----------|
+| `invalid_request` | Некорректный запрос |
+| `invalid_amount` | Некорректная сумма |
+| `insufficient_funds` | Недостаточно средств |
+| `idempotency_conflict` | Конфликт идемпотентности |
+| `hold_exists` | Холд уже существует |
+| `hold_not_found` | Холд не найден |
+| `hold_resolved` | Холд уже разрешён |
 
 ---
 
 ## Crypto Gateway (4003)
-Auth:
-- Core auth for user routes.
-- Admin token required for admin routes.
+
+### Аутентификация
+- Пользовательские маршруты: core auth
+- Админ маршруты: требуется админ токен
 
 ### GET /crypto/:userId/deposit-address
-Auth: core auth required.
-Query:
-- `currency` (required)
+Получение адреса для депозита.
 
-Response 200:
-```
-DepositDestination
+**Auth:** требуется core auth
+
+**Query:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `currency` | string | Валюта (обязательно) |
+
+**Ответ 200:**
+```json
+{
+  "userId": "...",
+  "currency": "USDT",
+  "address": "...",
+  "memo": "string | null",
+  "strategy": "address_pool | memo_tag | address_per_user"
+}
 ```
 
 ### POST /crypto/withdrawals/request
-Auth: core auth required.
+Запрос на вывод средств.
 
-Body:
-```
+**Auth:** требуется core auth
+
+**Body:**
+```json
 {
-  "userId": "string?",             // only for service auth
+  "userId": "string?",
   "currency": "string",
   "amount": 123.45,
   "destinationAddress": "string",
@@ -468,136 +489,111 @@ Body:
 }
 ```
 
-Response 200:
-```
+**Ответ 200:**
+```json
 {
   "withdrawal": CryptoWithdrawal,
   "balance": LedgerBalance,
   "decision": "approve|review|reject",
   "flags": [ "string" ],
-  "violations": [ "string" ]
+  "violations": [ "string" ],
+  "anomalyScore": 25
 }
 ```
 
 ### POST /crypto/withdrawals/:withdrawalId/authorize
-Auth: admin token required.
+Авторизация вывода (админ).
 
-Body:
-```
+**Auth:** требуется админ токен
+
+**Body:**
+```json
 { "actorId": "string?" }
 ```
 
-Response 200:
-```
+**Ответ 200:**
+```json
 { "withdrawal": CryptoWithdrawal }
 ```
 
 ### GET /crypto/withdrawals/:withdrawalId
-Auth: admin token required.
+Получение статуса вывода.
 
-Response 200:
-```
+**Auth:** требуется админ токен
+
+**Ответ 200:**
+```json
 { "withdrawal": CryptoWithdrawal }
 ```
 
-### POST /crypto/withdrawals/allowlist
-Auth: admin token required.
+### Схемы Crypto Gateway
 
-Body:
-```
-{
-  "userId": "string",
-  "currency": "string",
-  "address": "string",
-  "label": "string?"
-}
-```
+**CryptoWithdrawal:**
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `_id` | string | Идентификатор вывода |
+| `userId` | string | Идентификатор пользователя |
+| `currency` | string | Валюта |
+| `amount` | number | Сумма |
+| `destinationAddress` | string | Адрес назначения |
+| `memo` | string | null | Memo/tag |
+| `status` | string | Статус вывода |
+| `txId` | string | null | ID транзакции в блокчейне |
+| `requestedAt` | ISO string | Время запроса |
+| `flags` | string[] | Флаги безопасности |
+| `reviewRequired` | boolean | Требуется ручной review |
 
-Response 200:
-```
-{ "allowlist": CryptoWithdrawalAllowlist }
-```
+**Статусы вывода:**
+- `requested` — запрошен
+- `authorized` — авторизован
+- `broadcasted` — отправлен в сеть
+- `confirmed` — подтверждён
+- `failed` — не удался
 
-### Crypto Gateway schemas
-DepositDestination:
-- `userId`: string
-- `currency`: string
-- `address`: string
-- `memo`: string | null
-- `strategy`: `address_pool | memo_tag | address_per_user`
+### Коды ошибок Crypto Gateway
 
-CryptoWithdrawal:
-- `_id`: string
-- `userId`: string
-- `currency`: string
-- `amount`: number
-- `destinationAddress`: string
-- `memo`: string | null
-- `status`: `requested | authorized | broadcasted | confirmed | failed`
-- `idempotencyKey`: string
-- `requestedAt`: ISO string
-- `authorizedAt`: ISO string | null
-- `broadcastedAt`: ISO string | null
-- `confirmedAt`: ISO string | null
-- `failedAt`: ISO string | null
-- `txId`: string | null
-- `nextPollAt`: ISO string | null
-- `flags`: string[] | null
-- `reviewRequired`: boolean | null
-- `failureReason`: string | null
-- `authorizedBy`: string | null
-- `createdAt`: ISO string
-- `updatedAt`: ISO string
-
-CryptoWithdrawalAllowlist:
-- `_id`: string
-- `userId`: string
-- `currency`: string
-- `address`: string
-- `label`: string | null
-- `createdAt`: ISO string
-- `updatedAt`: ISO string
-
-### Crypto Gateway error codes
-- `invalid_request`, `unsupported_currency`, `withdrawal_not_found`, `withdrawal_conflict`,
-  `idempotency_conflict`
-- Ledger errors may surface on withdrawal creation (see Ledger section).
+| Код | Описание |
+|-----|----------|
+| `invalid_request` | Некорректный запрос |
+| `unsupported_currency` | Неподдерживаемая валюта |
+| `withdrawal_not_found` | Вывод не найден |
+| `withdrawal_conflict` | Конфликт вывода |
+| `anomaly_detected` | Обнаружена аномалия (ML) |
+| `address_not_allowed` | Адрес не в allowlist |
 
 ---
 
 ## Web (4005)
-Auth: Telegram init data or demo user header.
+
+### Аутентификация
+Telegram init data или demo user заголовок.
 
 ### GET /
-Returns HTML. Optional `?lang=<locale>` controls locale selection.
+Возвращает HTML. Опциональный `?lang=<locale>` для выбора локали.
 
 ### GET /api/session
-Response 200:
-```
+Получение текущей сессии.
+
+**Ответ 200:**
+```json
 { "user": WebUser | null }
 ```
 
 ### GET /api/auctions
-Response 200:
-```
+Получение списка аукционов.
+
+**Ответ 200:**
+```json
 [ActiveAuctionPayload]
 ```
 
-### GET /api/bids/active
-Auth required.
-Query:
-- `limit` (optional, default 20, max 50)
-
-Response 200:
-```
-[ActiveBidPayload]
-```
-
 ### POST /api/auctions
-Auth required. Origin required.
+Создание аукциона.
 
-Body (strict):
-```
+**Auth:** требуется. Origin требуется.
+
+**Body:**
+```json
 {
   "title": "string",
   "description": "string?",
@@ -614,51 +610,23 @@ Body (strict):
 }
 ```
 
-Response 201:
-```
+**Ответ 201:**
+```json
 { "_id": "<auctionId>", "status": "draft|live" }
 ```
 
-### GET /api/auctions/:auctionId
-Response 200:
-```
-{
-  "_id": "<auctionId>",
-  "title": "string",
-  "description": "string|undefined",
-  "status": "draft|live|closed",
-  "currency": "string",
-  "startsAt": "ISO",
-  "endsAt": "ISO",
-  "rounds": [ { "index": number, "allocationSize": number, "startAt": "ISO", "endAt": "ISO" } ]
-}
-```
-
-### GET /api/auctions/:auctionId/snapshot
-Response 200:
-```
-RealtimeAuctionSnapshot
-```
-
-### GET /api/auctions/:auctionId/bids
-Query:
-- `limit` (optional, default 20, max 50)
-
-Response 200:
-```
-[ { "_id": "string", "userId": "string", "amount": number, "createdAt": "ISO" } ]
-```
-
 ### POST /api/auctions/:auctionId/bids
-Auth required. Origin required.
+Размещение ставки.
 
-Body (strict):
-```
+**Auth:** требуется. Origin требуется.
+
+**Body:**
+```json
 { "amount": 123.45, "idempotencyKey": "string?" }
 ```
 
-Response 200:
-```
+**Ответ 200:**
+```json
 {
   "bid": Bid,
   "balance": LedgerBalance,
@@ -668,21 +636,28 @@ Response 200:
 }
 ```
 
-### GET /api/crypto/deposit-address
-Auth required.
-Query:
-- `currency` (optional, default "USDT")
+### GET /api/balance
+Получение баланса.
 
-Response 200:
-```
-{ "currency": "string", "address": "string", "memo": "string|null", "strategy": "address_pool|memo_tag|address_per_user" }
+**Auth:** требуется
+
+**Query:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `currency` | string | По умолчанию "USDT" |
+
+**Ответ 200:**
+```json
+LedgerBalance
 ```
 
 ### POST /api/crypto/withdrawals
-Auth required. Origin required.
+Запрос на вывод.
 
-Body (strict):
-```
+**Auth:** требуется. Origin требуется.
+
+**Body:**
+```json
 {
   "amount": 123.45,
   "currency": "string?",
@@ -692,101 +667,67 @@ Body (strict):
 }
 ```
 
-Response 200:
-```
+**Ответ 200:**
+```json
 {
   "withdrawal": CryptoWithdrawal,
   "balance": LedgerBalance,
   "decision": "approve|review|reject",
-  "flags": [ "string" ],
-  "violations": [ "string" ]
+  "flags": [ "string" ]
 }
 ```
 
-### GET /api/balance
-Auth required.
-Query:
-- `currency` (optional, default "USDT")
+### GET /graphql
+GraphQL API endpoint.
 
-Response 200:
-```
-LedgerBalance
-```
+### GET /graphiql
+GraphQL IDE интерфейс.
 
-### GET /api/balance/:userId
-Auth required. Must match the authenticated user.
-Query:
-- `currency` (optional, default "USDT")
+### GET /live-metrics
+Дашборд метрик реального времени.
 
-Response 200:
-```
-LedgerBalance
-```
+---
 
-### GET /api/profile/:userId
-No auth required.
+## WebSocket /ws
 
-Response 200:
-```
-{
-  "userId": "string",
-  "auctionsCreated": number,
-  "bidsPlaced": number,
-  "balance": LedgerBalance,
-  "auctions": [PublicAuction],
-  "activeAuctions": [ParticipationAuction],
-  "participatedAuctions": [ParticipationAuction]
-}
+### Клиент → Сервер
+
+```json
+{ "type": "ping" }
+{ "type": "auth", "initData": "<telegram init data>" }
+{ "type": "auth", "demoUserId": "string" }
+{ "type": "subscribe", "auctionId": "<id>" }
+{ "type": "unsubscribe", "auctionId": "<id>" }
+{ "type": "place_bid", "requestId": "uuid", "auctionId": "<id>", "amount": 100, "idempotencyKey": "..." }
 ```
 
-PublicAuction:
-- `_id`, `title`, `description`, `status`, `currency`, `startsAt`, `endsAt`, `createdAt`
-- `rounds`: [ { index, allocationSize, startAt, endAt } ]
+### Сервер → Клиент
 
-ParticipationAuction = PublicAuction plus:
-- `bidsCount`: number
-- `lastBidAt`: ISO string | null
-- `placement`: number | null
-
-### WebSocket /ws
-Client -> server messages (JSON):
-- `{ "type": "ping" }`
-- `{ "type": "auth", "initData": "<telegram init data>" }`
-- `{ "type": "auth", "demoUserId": "string" }` (demo mode only)
-- `{ "type": "subscribe", "auctionId": "<id>" }` or `{ "type": "subscribe", "auctionIds": ["<id>"] }`
-- `{ "type": "unsubscribe", "auctionId": "<id>" }` or `{ "type": "unsubscribe", "auctionIds": ["<id>"] }`
-
-Server -> client messages (JSON):
-- `{ "type": "pong" }`
-- `{ "type": "auth", "ok": true, "user": WebUser }`
-- `{ "type": "auth", "ok": false, "code": "auth_required|telegram_invalid|telegram_not_configured", "message": "..." }`
-- `{ "type": "auctions", "data": [ActiveAuctionPayload] }`
-- `{ "type": "auction_snapshot", "data": RealtimeAuctionSnapshot }`
-- `{ "type": "auction_bids", "auctionId": "<id>", "data": [ { _id, userId, amount, createdAt } ] }`
-- `{ "type": "active_bids", "data": [ActiveBidPayload] }`
-
-WebUser:
-- `id`, `displayName`, `username`, `firstName`, `lastName`, `languageCode`, `source`
-
-ActiveAuctionPayload:
-- Same fields as `AuctionSummary`, plus `rounds` (index, allocationSize, startAt, endAt).
-
-ActiveBidPayload:
-- `id`, `auctionId`, `amount`, `createdAt`, `roundIndex`, `roundsCount`,
-  `auctionTitle`, `auctionStatus`, `currency`
-
-RealtimeAuctionSnapshot:
-- `auctionId`, `status`, `title`, `currency`, `currentRoundIndex`, `roundStatus`,
-  `roundEffectiveEndAt`, `roundLastBidAt`, `lastBidAmount`, `updatedAt`, `serverTime`
+```json
+{ "type": "pong" }
+{ "type": "auth", "ok": true, "user": WebUser }
+{ "type": "auth", "ok": false, "code": "auth_required", "message": "..." }
+{ "type": "auctions", "data": [ActiveAuctionPayload] }
+{ "type": "auction_snapshot", "data": RealtimeAuctionSnapshot }
+{ "type": "bid_placed", "auctionId": "...", "userId": "...", "amount": 100, "rank": 5 }
+{ "type": "outbid", "auctionId": "...", "yourBid": 100, "newTopBid": 150, "yourRank": 4 }
+{ "type": "leaderboard_update", "auctionId": "...", "topBids": [...] }
+{ "type": "anti_sniping_extension", "auctionId": "...", "newEndAt": "ISO", "extensionCount": 2 }
+{ "type": "balance_update", "userId": "...", "available": 100, "held": 50, "current": 150 }
+{ "type": "bid_result", "requestId": "uuid", "success": true, "rank": 5, "latencyMs": 5 }
+```
 
 ---
 
 ## Signer (4007)
-Auth: `x-signer-token` and IP allowlist.
+
+**Auth:** `x-signer-token` и IP allowlist.
 
 ### POST /signer/sign
-Body:
-```
+Подпись транзакции вывода.
+
+**Body:**
+```json
 {
   "withdrawalId": "string",
   "currency": "string",
@@ -798,145 +739,80 @@ Body:
 }
 ```
 
-Response 200:
-```
+**Ответ 200:**
+```json
 {
   "signedPayload": {
     "payload": { ... },
     "signature": "base64",
     "publicKey": "base64",
     "algorithm": "ed25519",
-    "signedAt": "ISO",
-    "cosignatures": [ { "signature": "base64", "publicKey": "base64", "algorithm": "ed25519" } ]?
+    "signedAt": "ISO"
   }
 }
 ```
 
-Errors:
-- 403 forbidden (token missing/invalid or IP not allowed)
-- 400 invalid_request (bad payload or requestedAt)
-
 ---
 
 ## Mock RPC (9000)
-Used for external mock observer/signer flows.
+
+Используется для мок-наблюдателя/подписанта.
 
 ### GET /observer/transactions
-Query:
-- `currency`: string (optional, uppercased)
-- `addresses`: comma-separated list (optional)
-- `after`: integer cursor (optional, default 0)
-- `limit`: integer 1..200 (optional, default 100)
+Получение транзакций.
 
-Response 200:
-```
-{
-  "nextCursor": "number" | null,
-  "transactions": [
-    {
-      "txId": "string",
-      "currency": "string",
-      "address": "string",
-      "memo": "string?",
-      "amount": number,
-      "confirmations": number,
-      "observedAt": "ISO",
-      "blockHeight": number?
-    }
-  ]
-}
-```
-
-### GET /observer/transactions/:txId
-Query:
-- `currency`: string (optional)
-
-Response 200:
-```
-{ txId, currency, address, memo?, amount, confirmations, observedAt, blockHeight? }
-```
-404 if not found or currency mismatch.
-
-### POST /observer/transactions/broadcast
-Body:
-```
-{
-  "currency": "string",
-  "signedPayload": SignedPayload,
-  "clientReference": "string?"
-}
-```
-
-Response 200:
-```
-{ "txId": "string" }
-```
-Errors:
-- 400 invalid_request
-- 400 invalid_signature (only when `MOCK_RPC_STRICT_SIGNATURES=true`)
-
-### POST /signer/sign
-Body:
-```
-WithdrawalSigningPayload
-```
-Response 200:
-```
-{ "signedPayload": SignedPayload }
-```
+**Query:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `currency` | string | Валюта (опционально) |
+| `addresses` | string | Адреса через запятую |
+| `after` | integer | Курсор (по умолчанию 0) |
+| `limit` | integer | 1..200 (по умолчанию 100) |
 
 ### POST /mock/observer/mint
-Body:
-```
+Создание тестового депозита.
+
+**Body:**
+```json
 {
   "currency": "string",
   "address": "string",
   "memo": "string?",
-  "amount": number,
-  "txId": "string?",
-  "observedAt": "ISO?",
-  "blockHeight": number?
+  "amount": 100
 }
 ```
 
-Response 200:
-```
+**Ответ 200:**
+```json
 { "txId": "string" }
 ```
 
 ### POST /mock/observer/mine
-Body:
-```
-{ "blocks": number? }
+Добавление блоков (увеличение подтверждений).
+
+**Body:**
+```json
+{ "blocks": 1 }
 ```
 
-Response 200:
-```
-{ "blockHeight": number }
+**Ответ 200:**
+```json
+{ "blockHeight": 12345 }
 ```
 
 ### POST /mock/observer/reset
-Response 200:
-```
+Сброс состояния мока.
+
+**Ответ 200:**
+```json
 { "ok": true }
 ```
 
-### Mock RPC schemas
-WithdrawalSigningPayload:
-- `withdrawalId`, `currency`, `amount`, `fromAddress`, `toAddress`, `requestedAt`, `memo?`
-
-SignedPayload:
-- `payload`: WithdrawalSigningPayload
-- `signature`: base64
-- `publicKey`: base64
-- `algorithm`: `ed25519`
-- `signedAt`: ISO string
-- `cosignatures`: array of `{ signature, publicKey, algorithm }` (optional)
-
 ---
 
-## Bot (4004) and Workers (4006)
-No custom HTTP routes. Only the common endpoints:
-- GET /health/live
-- GET /health/ready
-- GET /metrics
+## Bot (4004) и Workers (4006)
+
+Без кастомных HTTP маршрутов. Только общие эндпоинты:
+- `GET /health/live`
+- `GET /health/ready`
+- `GET /metrics`

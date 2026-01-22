@@ -1,0 +1,485 @@
+asyncapi: 2.6.0
+info:
+  title: WebSocket API платформы Crypto Auction
+  version: 2.0.0
+  description: |
+    Real-time WebSocket события для платформы крипто-аукционов.
+
+    Возможности:
+    - Обновления ставок с изменениями лидерборда
+    - Уведомления о продлении anti-sniping
+    - Алерты об изменении баланса
+    - Уведомления о перебитии ставки
+    - Переходы статуса раунда
+    - Turbo Mode для ставок с минимальной латентностью
+    
+    Производительность: 30,000+ сообщений/секунда с латентностью <5ms.
+
+servers:
+  development:
+    url: ws://localhost:4005/ws
+    protocol: ws
+    description: Локальный сервер разработки
+  
+  production:
+    url: wss://api.crypto-auction.example.com/ws
+    protocol: wss
+    description: Продакшен WebSocket сервер
+
+defaultContentType: application/json
+
+channels:
+  # ============ Каналы аукциона ============
+  
+  auction/{auctionId}/bids:
+    description: Обновления ставок в реальном времени для конкретного аукциона
+    parameters:
+      auctionId:
+        description: MongoDB ObjectId аукциона
+        schema:
+          type: string
+          format: objectid
+    subscribe:
+      operationId: onBidUpdate
+      summary: Получение уведомлений о размещении ставок
+      message:
+        $ref: '#/components/messages/BidPlaced'
+
+  auction/{auctionId}/leaderboard:
+    description: Топ-N участников с обновлением рейтинга в реальном времени
+    parameters:
+      auctionId:
+        description: Идентификатор аукциона
+        schema:
+          type: string
+    subscribe:
+      operationId: onLeaderboardUpdate
+      summary: Получение изменений лидерборда
+      message:
+        $ref: '#/components/messages/LeaderboardUpdate'
+
+  auction/{auctionId}/anti-sniping:
+    description: Уведомления о продлении anti-sniping
+    parameters:
+      auctionId:
+        description: Идентификатор аукциона
+        schema:
+          type: string
+    subscribe:
+      operationId: onAntiSnipingExtension
+      summary: Получение уведомлений о продлении раунда при срабатывании anti-sniping
+      message:
+        $ref: '#/components/messages/AntiSnipingExtension'
+
+  auction/{auctionId}/round-status:
+    description: События изменения статуса раунда
+    parameters:
+      auctionId:
+        description: Идентификатор аукциона
+        schema:
+          type: string
+    subscribe:
+      operationId: onRoundStatusChange
+      summary: Получение уведомлений при изменении статуса раунда (scheduled → live → closed)
+      message:
+        $ref: '#/components/messages/RoundStatusChange'
+
+  # ============ Пользовательские каналы ============
+
+  user/{userId}/balance:
+    description: Уведомления об изменении баланса пользователя
+    parameters:
+      userId:
+        description: Идентификатор пользователя
+        schema:
+          type: string
+    subscribe:
+      operationId: onBalanceUpdate
+      summary: Получение уведомлений об изменении баланса (депозиты, холды, списания, освобождения)
+      message:
+        $ref: '#/components/messages/BalanceUpdate'
+
+  user/{userId}/outbid:
+    description: Алерты о перебитии, когда пользователь теряет топовую позицию
+    parameters:
+      userId:
+        description: Идентификатор пользователя
+        schema:
+          type: string
+    subscribe:
+      operationId: onOutbid
+      summary: Получение алертов при перебитии другим пользователем
+      message:
+        $ref: '#/components/messages/OutbidAlert'
+
+  user/{userId}/notifications:
+    description: Общие уведомления пользователя
+    parameters:
+      userId:
+        description: Идентификатор пользователя
+        schema:
+          type: string
+    subscribe:
+      operationId: onUserNotification
+      summary: Получение общих уведомлений (результаты раунда, победы и т.д.)
+      message:
+        $ref: '#/components/messages/UserNotification'
+
+  # ============ Каналы ставок (Turbo Mode) ============
+
+  turbo/bid:
+    description: Прямой путь ставок через WebSocket для минимальной латентности
+    publish:
+      operationId: placeTurboBid
+      summary: Размещение ставки через WebSocket (минуя HTTP для снижения латентности)
+      message:
+        $ref: '#/components/messages/TurboBidRequest'
+    subscribe:
+      operationId: onTurboBidResult
+      summary: Получение результата ставки
+      message:
+        $ref: '#/components/messages/TurboBidResponse'
+
+components:
+  messages:
+    BidPlaced:
+      name: BidPlaced
+      title: Событие размещения ставки
+      summary: Генерируется при размещении новой ставки на аукционе
+      contentType: application/json
+      payload:
+        type: object
+        required:
+          - type
+          - auctionId
+          - userId
+          - amount
+          - rank
+          - timestamp
+        properties:
+          type:
+            type: string
+            const: bid_placed
+            description: Тип события
+          auctionId:
+            type: string
+            format: objectid
+            description: Идентификатор аукциона
+          userId:
+            type: string
+            description: Пользователь, разместивший ставку
+          amount:
+            type: number
+            format: double
+            description: Сумма ставки
+          maxAmount:
+            type: number
+            format: double
+            description: Максимальная сумма авто-ставки (при прокси-ставках)
+          rank:
+            type: integer
+            minimum: 1
+            description: Текущая позиция в лидерборде
+          roundIndex:
+            type: integer
+            description: Индекс раунда, в котором размещена ставка
+          timestamp:
+            type: string
+            format: date-time
+            description: Временная метка ISO 8601
+
+    LeaderboardUpdate:
+      name: LeaderboardUpdate
+      title: Событие обновления лидерборда
+      summary: Генерируется при изменении лидерборда
+      payload:
+        type: object
+        required:
+          - type
+          - auctionId
+          - roundIndex
+          - topBids
+        properties:
+          type:
+            type: string
+            const: leaderboard_update
+            description: Тип события
+          auctionId:
+            type: string
+            description: Идентификатор аукциона
+          roundIndex:
+            type: integer
+            description: Индекс раунда
+          topBids:
+            type: array
+            description: Массив топовых ставок
+            items:
+              type: object
+              properties:
+                rank:
+                  type: integer
+                  description: Позиция в рейтинге
+                userId:
+                  type: string
+                  description: Идентификатор пользователя
+                amount:
+                  type: number
+                  description: Сумма ставки
+                isCurrentUser:
+                  type: boolean
+                  description: Является ли текущим пользователем
+
+    AntiSnipingExtension:
+      name: AntiSnipingExtension
+      title: Событие продления Anti-Sniping
+      summary: Генерируется при продлении раунда из-за ставки в последний момент
+      payload:
+        type: object
+        required:
+          - type
+          - auctionId
+          - roundIndex
+          - previousEndAt
+          - newEndAt
+          - extensionCount
+          - maxExtensions
+        properties:
+          type:
+            type: string
+            const: anti_sniping_extension
+            description: Тип события
+          auctionId:
+            type: string
+            description: Идентификатор аукциона
+          roundIndex:
+            type: integer
+            description: Индекс раунда
+          previousEndAt:
+            type: string
+            format: date-time
+            description: Предыдущее время окончания до продления
+          newEndAt:
+            type: string
+            format: date-time
+            description: Новое время окончания после продления
+          extensionCount:
+            type: integer
+            description: Количество применённых продлений
+          maxExtensions:
+            type: integer
+            description: Максимально допустимое количество продлений
+
+    RoundStatusChange:
+      name: RoundStatusChange
+      title: Событие изменения статуса раунда
+      summary: Генерируется при переходе раунда между состояниями
+      payload:
+        type: object
+        required:
+          - type
+          - auctionId
+          - roundIndex
+          - previousStatus
+          - newStatus
+        properties:
+          type:
+            type: string
+            const: round_status_change
+            description: Тип события
+          auctionId:
+            type: string
+            description: Идентификатор аукциона
+          roundIndex:
+            type: integer
+            description: Индекс раунда
+          previousStatus:
+            type: string
+            enum: [scheduled, live, closed]
+            description: Предыдущий статус
+          newStatus:
+            type: string
+            enum: [scheduled, live, closed]
+            description: Новый статус
+          effectiveEndAt:
+            type: string
+            format: date-time
+            description: Эффективное время окончания
+
+    BalanceUpdate:
+      name: BalanceUpdate
+      title: Событие обновления баланса
+      summary: Генерируется при изменении баланса пользователя
+      payload:
+        type: object
+        required:
+          - type
+          - userId
+          - currency
+          - available
+          - held
+          - current
+        properties:
+          type:
+            type: string
+            const: balance_update
+            description: Тип события
+          userId:
+            type: string
+            description: Идентификатор пользователя
+          currency:
+            type: string
+            description: Валюта
+          available:
+            type: number
+            description: Доступный баланс
+          held:
+            type: number
+            description: Заблокировано для отложенных операций
+          current:
+            type: number
+            description: Общий баланс (available + held)
+          changeType:
+            type: string
+            enum: [deposit, hold, capture, release, withdrawal]
+            description: Тип изменения
+          changeAmount:
+            type: number
+            description: Сумма изменения
+
+    OutbidAlert:
+      name: OutbidAlert
+      title: Событие алерта о перебитии
+      summary: Генерируется при перебитии пользователя
+      payload:
+        type: object
+        required:
+          - type
+          - auctionId
+          - roundIndex
+          - yourBid
+          - newTopBid
+          - yourRank
+          - winnersCount
+        properties:
+          type:
+            type: string
+            const: outbid
+            description: Тип события
+          auctionId:
+            type: string
+            description: Идентификатор аукциона
+          roundIndex:
+            type: integer
+            description: Индекс раунда
+          yourBid:
+            type: number
+            description: Ваша текущая сумма ставки
+          newTopBid:
+            type: number
+            description: Новая топовая ставка, которая вас перебила
+          yourRank:
+            type: integer
+            description: Ваша новая позиция в лидерборде
+          winnersCount:
+            type: integer
+            description: Количество победителей для этого раунда
+
+    UserNotification:
+      name: UserNotification
+      title: Событие уведомления пользователя
+      summary: События общих уведомлений
+      payload:
+        type: object
+        required:
+          - type
+          - notificationType
+          - message
+        properties:
+          type:
+            type: string
+            const: notification
+            description: Тип события
+          notificationType:
+            type: string
+            enum: [round_win, round_loss, deposit_confirmed, withdrawal_completed]
+            description: Тип уведомления
+          message:
+            type: string
+            description: Текст сообщения
+          data:
+            type: object
+            additionalProperties: true
+            description: Дополнительные данные
+
+    TurboBidRequest:
+      name: TurboBidRequest
+      title: Запрос Turbo ставки
+      summary: Размещение ставки через WebSocket для минимальной латентности
+      payload:
+        type: object
+        required:
+          - type
+          - requestId
+          - auctionId
+          - amount
+          - idempotencyKey
+        properties:
+          type:
+            type: string
+            const: place_bid
+            description: Тип запроса
+          requestId:
+            type: string
+            format: uuid
+            description: Клиентский ID запроса для корреляции
+          auctionId:
+            type: string
+            description: Идентификатор аукциона
+          amount:
+            type: number
+            description: Сумма ставки
+          idempotencyKey:
+            type: string
+            description: Уникальный ключ для идемпотентного retry
+
+    TurboBidResponse:
+      name: TurboBidResponse
+      title: Ответ Turbo ставки
+      summary: Результат запроса turbo ставки
+      payload:
+        type: object
+        required:
+          - type
+          - requestId
+          - success
+          - latencyMs
+        properties:
+          type:
+            type: string
+            const: bid_result
+            description: Тип ответа
+          requestId:
+            type: string
+            format: uuid
+            description: ID запроса для корреляции
+          success:
+            type: boolean
+            description: Успешность операции
+          bidId:
+            type: string
+            description: ID созданной ставки (при успехе)
+          rank:
+            type: integer
+            description: Позиция в лидерборде (при успехе)
+          amount:
+            type: number
+            description: Сумма ставки (при успехе)
+          error:
+            type: string
+            description: Код ошибки (при неудаче)
+          duplicate:
+            type: boolean
+            description: True если это идемпотентный дубликат
+          latencyMs:
+            type: number
+            description: Время обработки на сервере в миллисекундах

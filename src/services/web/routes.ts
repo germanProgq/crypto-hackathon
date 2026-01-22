@@ -41,6 +41,9 @@ import { createRoundFinalizationService } from "../auction-engine/roundFinalizat
 import { createAuctionRepository } from "../auction-engine/auctionStore.js";
 import { CryptoGatewayError, createCryptoGatewayService } from "../crypto-gateway/cryptoGatewayService.js";
 import { createLedgerRepository, LedgerError } from "../ledger/ledgerStore.js";
+import { ConnectionPool } from "./wsConnectionPool.js";
+import { TurboBidHandler, type WsBidRequest } from "./wsBidHandler.js";
+import { registerOpenAPI } from "../../shared/openapi/spec.js";
 import {
   publishRealtimeEvent,
   realtimeEventChannel,
@@ -53,6 +56,8 @@ import {
   type TelegramWebUser,
   verifyTelegramInitData
 } from "../../shared/auth/telegram.js";
+import { registerPublicMetricsRoutes } from "./routes/publicMetrics.js";
+import { registerGraphQL } from "./graphql.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const webCatalogs: Record<Locale, Catalog> = {
@@ -64,6 +69,9 @@ type CreateAuctionBody = {
   title: string;
   description?: string;
   currency?: string;
+  pricingMode?: AuctionDocument["pricingMode"];
+  minBid?: number;
+  minIncrement?: number;
   deliveryType?: AuctionDocument["deliveryType"];
   rounds?: number;
   allocationSize?: number;
@@ -256,21 +264,39 @@ type SocketMessage = string | Buffer | ArrayBuffer | Buffer[];
 type RealtimeSocket = {
   on(event: "message", listener: (data: SocketMessage) => void): void;
   on(event: "close" | "error", listener: () => void): void;
-  send(data: string): void;
+  send(data: string | Buffer): void;
   close(code?: number, reason?: string): void;
+  readyState?: number;
+  binaryType?: string;
 };
 
 type RealtimeClient = {
   id: string;
-  socket: RealtimeSocket;
   userId: string | null;
-  auctionIds: Set<string>;
+  ip: string;
+  userAgent?: string;
 };
 
 export async function registerWebRoutes(
   app: FastifyInstance,
   deps: ServiceDependencies
 ): Promise<void> {
+  // Register OpenAPI/Swagger documentation
+  await registerOpenAPI(app);
+
+  // Register public metrics dashboard
+  registerPublicMetricsRoutes(app, {
+    redis: deps.redis,
+    db: deps.mongo.db
+  });
+
+  // Register GraphQL API
+  registerGraphQL(app, {
+    db: deps.mongo.db,
+    redis: deps.redis,
+    logger: deps.logger
+  });
+
   const auctionRepository = createAuctionRepository(deps.mongo);
   const ledgerRepository = createLedgerRepository(deps.mongo, {
     retentionDays: deps.config.dataRetention.ledgerDays,
@@ -296,9 +322,17 @@ export async function registerWebRoutes(
 
   await app.register(websocket);
 
+  const realtimePool = new ConnectionPool();
+  const turboBidHandler = new TurboBidHandler({
+    bidService,
+    redis: deps.redis,
+    logger: deps.logger
+  });
+  const auctionRoomPrefix = "auction:";
+  const userRoomPrefix = "user:";
+  const auctionRoom = (auctionId: string) => `${auctionRoomPrefix}${auctionId}`;
+  const userRoom = (userId: string) => `${userRoomPrefix}${userId}`;
   const realtimeClients = new Map<string, RealtimeClient>();
-  const userSubscriptions = new Map<string, Set<string>>();
-  const auctionSubscriptions = new Map<string, Set<string>>();
   const pendingAuctionBids = new Map<string, NodeJS.Timeout>();
   const pendingActiveBids = new Map<string, NodeJS.Timeout>();
   const pendingBalanceUpdates = new Map<string, NodeJS.Timeout>();
@@ -457,16 +491,8 @@ export async function registerWebRoutes(
       clearTimeout(timer);
     }
     pendingActiveBids.clear();
-    for (const client of realtimeClients.values()) {
-      try {
-        client.socket.close();
-      } catch {
-        // ignore close errors
-      }
-    }
+    realtimePool.closeAll(1001, "service_shutdown");
     realtimeClients.clear();
-    userSubscriptions.clear();
-    auctionSubscriptions.clear();
     if (realtimeSubscriber) {
       await realtimeSubscriber.quit();
     }
@@ -486,13 +512,17 @@ export async function registerWebRoutes(
       }
     }
 
+    const userAgentHeader = request.headers["user-agent"];
+    const userAgent = Array.isArray(userAgentHeader) ? userAgentHeader[0] : userAgentHeader;
     const client: RealtimeClient = {
       id: randomUUID(),
-      socket,
       userId: null,
-      auctionIds: new Set()
+      ip: request.ip,
+      userAgent:
+        typeof userAgent === "string" && userAgent.trim().length > 0 ? userAgent : undefined
     };
 
+    realtimePool.add(client.id, socket);
     realtimeClients.set(client.id, client);
     void sendActiveAuctionsToClient(client);
 
@@ -536,7 +566,9 @@ export async function registerWebRoutes(
       return;
     }
     if (message.type === "ping") {
-      sendRealtimePayload(client, { type: "pong" });
+      if (!realtimePool.sendPong(client.id)) {
+        cleanupRealtimeClient(client);
+      }
       return;
     }
     if (message.type === "auth") {
@@ -567,6 +599,30 @@ export async function registerWebRoutes(
       void sendActiveBidsToUser(resolved.user.id);
       return;
     }
+    if (message.type === "place_bid") {
+      void handleRealtimeBid(client, message as WsBidRequest);
+      return;
+    }
+    if (message.type === "join_room") {
+      const room = typeof message.room === "string" ? message.room.trim() : "";
+      if (room.startsWith(auctionRoomPrefix)) {
+        const auctionId = room.slice(auctionRoomPrefix.length);
+        if (auctionId) {
+          attachAuctionSubscription(client, auctionId);
+        }
+      }
+      return;
+    }
+    if (message.type === "leave_room") {
+      const room = typeof message.room === "string" ? message.room.trim() : "";
+      if (room.startsWith(auctionRoomPrefix)) {
+        const auctionId = room.slice(auctionRoomPrefix.length);
+        if (auctionId) {
+          detachAuctionSubscription(client, auctionId);
+        }
+      }
+      return;
+    }
     if (message.type === "subscribe") {
       const auctionIds = normalizeAuctionIds(message.auctionIds ?? message.auctionId);
       if (auctionIds.length === 0) {
@@ -586,6 +642,46 @@ export async function registerWebRoutes(
         detachAuctionSubscription(client, auctionId);
       }
       return;
+    }
+  }
+
+  async function handleRealtimeBid(
+    client: RealtimeClient,
+    request: WsBidRequest
+  ): Promise<void> {
+    const requestId =
+      typeof request.requestId === "string" && request.requestId.trim().length > 0
+        ? request.requestId
+        : randomUUID();
+    if (!client.userId) {
+      sendRealtimePayload(client, {
+        type: "bid_result",
+        requestId,
+        success: false,
+        error: "auth_required",
+        message: "Authentication required.",
+        latencyMs: 0
+      });
+      return;
+    }
+    try {
+      const response = await turboBidHandler.handleBid({
+        userId: client.userId,
+        ip: client.ip,
+        userAgent: client.userAgent,
+        request
+      });
+      sendRealtimePayload(client, response);
+    } catch (error) {
+      deps.logger.error({ err: error, userId: client.userId }, "WebSocket bid handler failed");
+      sendRealtimePayload(client, {
+        type: "bid_result",
+        requestId,
+        success: false,
+        error: "internal_error",
+        message: "Internal error.",
+        latencyMs: 0
+      });
     }
   }
 
@@ -724,24 +820,24 @@ export async function registerWebRoutes(
   }
 
   async function sendActiveBidsToUser(userId: string): Promise<void> {
-    const clientIds = userSubscriptions.get(userId);
-    if (!clientIds || clientIds.size === 0) {
+    const room = userRoom(userId);
+    if (!realtimePool.hasRoom(room)) {
       return;
     }
     try {
       const bidsPayload = await loadActiveBidsForUser(deps, bids, userId, 20);
-      sendRealtimePayloadToClients(clientIds, { type: "active_bids", data: bidsPayload });
+      sendRealtimePayloadToRoom(room, { type: "active_bids", data: bidsPayload });
     } catch (error) {
       deps.logger.warn({ err: error }, "Failed to broadcast active bids");
     }
   }
 
   async function sendBalanceUpdateToUser(userId: string, currency?: string): Promise<void> {
-    const clientIds = userSubscriptions.get(userId);
-    if (!clientIds || clientIds.size === 0) {
+    const room = userRoom(userId);
+    if (!realtimePool.hasRoom(room)) {
       return;
     }
-    sendRealtimePayloadToClients(clientIds, {
+    sendRealtimePayloadToRoom(room, {
       type: "balance_updated",
       currency: currency ?? null
     });
@@ -751,11 +847,11 @@ export async function registerWebRoutes(
     auctionId: string,
     snapshot: RealtimeAuctionSnapshot
   ): void {
-    const clientIds = auctionSubscriptions.get(auctionId);
-    if (!clientIds || clientIds.size === 0) {
+    const room = auctionRoom(auctionId);
+    if (!realtimePool.hasRoom(room)) {
       return;
     }
-    sendRealtimePayloadToClients(clientIds, { type: "auction_snapshot", data: snapshot });
+    sendRealtimePayloadToRoom(room, { type: "auction_snapshot", data: snapshot });
   }
 
   async function broadcastAuctionSnapshotFromSource(auctionId: string): Promise<void> {
@@ -771,13 +867,13 @@ export async function registerWebRoutes(
   }
 
   async function broadcastAuctionBids(auctionId: string): Promise<void> {
-    const clientIds = auctionSubscriptions.get(auctionId);
-    if (!clientIds || clientIds.size === 0) {
+    const room = auctionRoom(auctionId);
+    if (!realtimePool.hasRoom(room)) {
       return;
     }
     try {
       const bidsPayload = await loadAuctionBidsPayload(deps, bids, auctionId, 15);
-      sendRealtimePayloadToClients(clientIds, {
+      sendRealtimePayloadToRoom(room, {
         type: "auction_bids",
         auctionId,
         data: bidsPayload
@@ -788,28 +884,43 @@ export async function registerWebRoutes(
   }
 
   async function resyncAuctionSnapshots(): Promise<void> {
-    if (auctionSubscriptions.size === 0) {
+    const rooms = realtimePool.getRoomsByPrefix(auctionRoomPrefix);
+    if (rooms.length === 0) {
       return;
     }
-    for (const auctionId of auctionSubscriptions.keys()) {
+    for (const room of rooms) {
+      const auctionId = room.slice(auctionRoomPrefix.length);
+      if (!auctionId) {
+        continue;
+      }
       await broadcastAuctionSnapshotFromSource(auctionId);
     }
   }
 
   async function resyncAuctionBids(): Promise<void> {
-    if (auctionSubscriptions.size === 0) {
+    const rooms = realtimePool.getRoomsByPrefix(auctionRoomPrefix);
+    if (rooms.length === 0) {
       return;
     }
-    for (const auctionId of auctionSubscriptions.keys()) {
+    for (const room of rooms) {
+      const auctionId = room.slice(auctionRoomPrefix.length);
+      if (!auctionId) {
+        continue;
+      }
       await broadcastAuctionBids(auctionId);
     }
   }
 
   async function resyncActiveBids(): Promise<void> {
-    if (userSubscriptions.size === 0) {
+    const rooms = realtimePool.getRoomsByPrefix(userRoomPrefix);
+    if (rooms.length === 0) {
       return;
     }
-    for (const userId of userSubscriptions.keys()) {
+    for (const room of rooms) {
+      const userId = room.slice(userRoomPrefix.length);
+      if (!userId) {
+        continue;
+      }
       await sendActiveBidsToUser(userId);
     }
   }
@@ -886,29 +997,34 @@ export async function registerWebRoutes(
   }
 
   function sendRealtimePayload(client: RealtimeClient, payload: unknown): void {
-    try {
-      client.socket.send(JSON.stringify(payload));
-    } catch {
+    const message = JSON.stringify(payload);
+    sendRealtimeMessage(client, message);
+  }
+
+  function sendRealtimeMessage(client: RealtimeClient, message: string): void {
+    if (!realtimePool.send(client.id, message)) {
       cleanupRealtimeClient(client);
     }
   }
 
-  function sendRealtimePayloadToClients(
-    clientIds: Iterable<string>,
-    payload: unknown
-  ): void {
-    for (const clientId of clientIds) {
+  function sendRealtimePayloadToRoom(room: string, payload: unknown): void {
+    const members = realtimePool.getRoomMembers(room);
+    if (!members || members.size === 0) {
+      return;
+    }
+    const message = JSON.stringify(payload);
+    for (const clientId of members) {
       const client = realtimeClients.get(clientId);
-      if (!client) {
-        continue;
+      if (client) {
+        sendRealtimeMessage(client, message);
       }
-      sendRealtimePayload(client, payload);
     }
   }
 
   function broadcastRealtimePayload(payload: unknown): void {
+    const message = JSON.stringify(payload);
     for (const client of realtimeClients.values()) {
-      sendRealtimePayload(client, payload);
+      sendRealtimeMessage(client, message);
     }
   }
 
@@ -920,22 +1036,14 @@ export async function registerWebRoutes(
       detachRealtimeUser(client);
     }
     client.userId = userId;
-    const set = userSubscriptions.get(userId) ?? new Set<string>();
-    set.add(client.id);
-    userSubscriptions.set(userId, set);
+    realtimePool.joinRoom(client.id, userRoom(userId));
   }
 
   function detachRealtimeUser(client: RealtimeClient): void {
     if (!client.userId) {
       return;
     }
-    const set = userSubscriptions.get(client.userId);
-    if (set) {
-      set.delete(client.id);
-      if (set.size === 0) {
-        userSubscriptions.delete(client.userId);
-      }
-    }
+    realtimePool.leaveRoom(client.id, userRoom(client.userId));
     client.userId = null;
   }
 
@@ -943,29 +1051,21 @@ export async function registerWebRoutes(
     if (!ObjectId.isValid(auctionId)) {
       return;
     }
-    if (client.auctionIds.has(auctionId)) {
+    const room = auctionRoom(auctionId);
+    if (realtimePool.isInRoom(client.id, room)) {
       return;
     }
-    client.auctionIds.add(auctionId);
-    const set = auctionSubscriptions.get(auctionId) ?? new Set<string>();
-    set.add(client.id);
-    auctionSubscriptions.set(auctionId, set);
+    realtimePool.joinRoom(client.id, room);
     void sendAuctionSnapshotToClient(client, auctionId);
     void sendAuctionBidsToClient(client, auctionId);
   }
 
   function detachAuctionSubscription(client: RealtimeClient, auctionId: string): void {
-    if (!client.auctionIds.has(auctionId)) {
+    const room = auctionRoom(auctionId);
+    if (!realtimePool.isInRoom(client.id, room)) {
       return;
     }
-    client.auctionIds.delete(auctionId);
-    const set = auctionSubscriptions.get(auctionId);
-    if (set) {
-      set.delete(client.id);
-      if (set.size === 0) {
-        auctionSubscriptions.delete(auctionId);
-      }
-    }
+    realtimePool.leaveRoom(client.id, room);
   }
 
   function cleanupRealtimeClient(client: RealtimeClient): void {
@@ -974,21 +1074,7 @@ export async function registerWebRoutes(
     }
     realtimeClients.delete(client.id);
     detachRealtimeUser(client);
-    for (const auctionId of client.auctionIds) {
-      const set = auctionSubscriptions.get(auctionId);
-      if (set) {
-        set.delete(client.id);
-        if (set.size === 0) {
-          auctionSubscriptions.delete(auctionId);
-        }
-      }
-    }
-    client.auctionIds.clear();
-    try {
-      client.socket.close();
-    } catch {
-      // ignore close errors
-    }
+    realtimePool.close(client.id);
   }
 
   function normalizeAuctionIds(value: unknown): string[] {
