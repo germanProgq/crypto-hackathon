@@ -23,6 +23,7 @@ import type { RedisClient } from "../src/shared/storage/redis.js";
 import { createCryptoGatewayService } from "../src/services/crypto-gateway/cryptoGatewayService.js";
 import type { SignedPayload, WithdrawalSigningPayload } from "../src/services/crypto-gateway/types.js";
 import { createLedgerRepository } from "../src/services/ledger/ledgerStore.js";
+import { canListenLoopback, hasDocker } from "./support/infra.js";
 
 type TestTransaction = {
   txId: string;
@@ -44,6 +45,8 @@ const payloadSchema = z.object({
   requestedAt: z.string().min(1),
   memo: z.string().min(1).optional()
 });
+
+const describeInfra = hasDocker() && canListenLoopback() ? describe : describe.skip;
 
 class TestSignerServer {
   readonly token: string;
@@ -274,7 +277,7 @@ function canonicalize(value: unknown): string {
   return `{${entries.join(",")}}`;
 }
 
-describe("crypto gateway flows", () => {
+describeInfra("crypto gateway flows", () => {
   const testDbName = `crypto_hack_test_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   const signerToken = "signer-token";
   const observer = new TestObserverServer();

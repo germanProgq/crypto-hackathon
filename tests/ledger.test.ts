@@ -10,8 +10,11 @@ import {
 } from "../src/shared/storage/mongo.js";
 import { mongoCollections } from "../src/shared/storage/mongoSchemas.js";
 import { LedgerError, createLedgerRepository } from "../src/services/ledger/ledgerStore.js";
+import { hasDocker } from "./support/infra.js";
 
-describe("ledger core", () => {
+const describeInfra = hasDocker() ? describe : describe.skip;
+
+describeInfra("ledger core", () => {
   const testDbName = `crypto_hack_test_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   const config = loadConfig({
     serviceName: "ledger-test",

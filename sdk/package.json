@@ -1,0 +1,16 @@
+{
+  "name": "@crypto-auction/sdk",
+  "version": "1.0.0",
+  "description": "TypeScript SDK for Crypto Auction Platform API",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  },
+  "license": "MIT"
+}

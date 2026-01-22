@@ -1,0 +1,55 @@
+# Railway deployment configuration
+# Deploy with: railway up
+
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "npm run start:all"
+healthcheckPath = "/health/live"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
+
+# Environment variables (set via Railway dashboard)
+# CORE_API_TOKEN - Service authentication token
+# MONGODB_URI - MongoDB connection string
+# REDIS_URL - Redis connection string
+# NODE_ENV - production
+
+[[services]]
+name = "auction-engine"
+port = 4001
+healthcheckPath = "/health/live"
+
+[[services]]
+name = "ledger"
+port = 4002
+healthcheckPath = "/health/live"
+
+[[services]]
+name = "crypto-gateway"
+port = 4003
+healthcheckPath = "/health/live"
+
+[[services]]
+name = "web"
+port = 4005
+healthcheckPath = "/health/live"
+
+[[services]]
+name = "workers"
+port = 4006
+healthcheckPath = "/health/live"
+
+# Resource limits
+[deploy.resources]
+memory = "512Mi"
+cpu = "1"
+
+# Scaling configuration
+[deploy.scaling]
+minInstances = 1
+maxInstances = 3
+targetCPU = 80

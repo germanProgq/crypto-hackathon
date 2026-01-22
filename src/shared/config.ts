@@ -91,6 +91,9 @@ export interface AppConfig {
       anomalyMultiplier: number;
       maxRequestsPerHour: number;
       maxRequestsPerDay: number;
+      riskScoreReviewThreshold: number;
+      riskScoreRejectThreshold: number;
+      riskHistoryLimit: number;
     };
   };
   signer: {
@@ -347,6 +350,9 @@ function createEnvSchema(defaultPort: number) {
     CRYPTO_WITHDRAWAL_ANOMALY_MULTIPLIER: z.coerce.number().positive().default(3),
     CRYPTO_WITHDRAWAL_MAX_REQUESTS_PER_HOUR: z.coerce.number().int().min(1).default(5),
     CRYPTO_WITHDRAWAL_MAX_REQUESTS_PER_DAY: z.coerce.number().int().min(1).default(20),
+    CRYPTO_WITHDRAWAL_RISK_SCORE_REVIEW: z.coerce.number().min(0).default(50),
+    CRYPTO_WITHDRAWAL_RISK_SCORE_REJECT: z.coerce.number().min(0).default(80),
+    CRYPTO_WITHDRAWAL_RISK_HISTORY_LIMIT: z.coerce.number().int().min(10).default(100),
     SIGNER_API_TOKEN: z.string().default(""),
     SIGNER_ALLOWED_IPS: z.string().default(""),
     SIGNER_PRIVATE_KEY: z.string().default(""),
@@ -461,6 +467,11 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
   if (parsed.CRYPTO_WITHDRAWAL_MAX_AMOUNT < parsed.CRYPTO_WITHDRAWAL_MIN_AMOUNT) {
     throw new Error("CRYPTO_WITHDRAWAL_MAX_AMOUNT must be >= CRYPTO_WITHDRAWAL_MIN_AMOUNT.");
   }
+  if (parsed.CRYPTO_WITHDRAWAL_RISK_SCORE_REJECT < parsed.CRYPTO_WITHDRAWAL_RISK_SCORE_REVIEW) {
+    throw new Error(
+      "CRYPTO_WITHDRAWAL_RISK_SCORE_REJECT must be >= CRYPTO_WITHDRAWAL_RISK_SCORE_REVIEW."
+    );
+  }
 
   if (serviceName === "signer" && parsed.SIGNER_API_TOKEN.length === 0) {
     throw new Error("SIGNER_API_TOKEN must be set for signer.");
@@ -563,7 +574,10 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
         autoAuthorizeMaxAmount: parsed.CRYPTO_WITHDRAWAL_AUTO_AUTHORIZE_MAX_AMOUNT,
         anomalyMultiplier: parsed.CRYPTO_WITHDRAWAL_ANOMALY_MULTIPLIER,
         maxRequestsPerHour: parsed.CRYPTO_WITHDRAWAL_MAX_REQUESTS_PER_HOUR,
-        maxRequestsPerDay: parsed.CRYPTO_WITHDRAWAL_MAX_REQUESTS_PER_DAY
+        maxRequestsPerDay: parsed.CRYPTO_WITHDRAWAL_MAX_REQUESTS_PER_DAY,
+        riskScoreReviewThreshold: parsed.CRYPTO_WITHDRAWAL_RISK_SCORE_REVIEW,
+        riskScoreRejectThreshold: parsed.CRYPTO_WITHDRAWAL_RISK_SCORE_REJECT,
+        riskHistoryLimit: parsed.CRYPTO_WITHDRAWAL_RISK_HISTORY_LIMIT
       }
     },
     signer: {

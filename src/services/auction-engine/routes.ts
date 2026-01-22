@@ -33,6 +33,7 @@ import {
   requireServiceAuth,
   resolveUserIdFromAuth
 } from "../../shared/auth/coreAuth.js";
+import { registerOpenAPI } from "../../shared/openapi/spec.js";
 
 type BidAuditPayload = BidDocument["audit"];
 
@@ -214,6 +215,9 @@ export async function registerAuctionRoutes(
   app: FastifyInstance,
   deps: ServiceDependencies
 ): Promise<void> {
+  // Register OpenAPI/Swagger documentation
+  await registerOpenAPI(app);
+
   const bidService = createBidService(deps);
   const auctionRepository = createAuctionRepository(deps.mongo);
   const auctions = deps.mongo.db.collection<AuctionDocument>(mongoCollections.auctions);
@@ -356,7 +360,8 @@ export async function registerAuctionRoutes(
           auctions,
           bids,
           auctionRepository,
-          auctionId
+          auctionId,
+          deps.logger
         );
         return reply.send({ snapshot });
       } catch (error) {
@@ -391,7 +396,8 @@ export async function registerAuctionRoutes(
           auctions,
           auctionRepository,
           auctionId,
-          roundIndex
+          roundIndex,
+          deps.logger
         );
         return reply.send({ state: buildRoundStateResponse(state, now) });
       } catch (error) {
@@ -510,10 +516,15 @@ function serializeAuctionSummary(auction: WithId<AuctionDocument>) {
 }
 
 function serializeRoundState(
-  state: Pick<
-    AuctionRoundStateDocument,
-    "status" | "roundIndex" | "scheduledStartAt" | "scheduledEndAt" | "effectiveEndAt" | "extensionCount" | "lastBidAt"
-  >
+  state: {
+    status: string;
+    roundIndex: number;
+    scheduledStartAt: Date;
+    scheduledEndAt: Date;
+    effectiveEndAt: Date;
+    extensionCount: number;
+    lastBidAt?: Date | null;
+  }
 ) {
   return {
     status: state.status,
@@ -626,12 +637,14 @@ function buildSnapshotFromAuctionDoc(
   };
 }
 
+// Resolve auction snapshots with Redis acceleration and Mongo fallbacks.
 async function resolveAuctionSnapshot(
   redis: RedisClient,
   auctions: Collection<AuctionDocument>,
   bids: Collection<BidDocument>,
   repository: ReturnType<typeof createAuctionRepository>,
-  auctionId: ObjectId
+  auctionId: ObjectId,
+  logger: ServiceDependencies["logger"]
 ): Promise<AuctionSnapshotResponse> {
   const auctionIdText = auctionId.toHexString();
   const cached = await readAuctionSnapshotFromRedis(redis, auctionIdText);
@@ -646,7 +659,11 @@ async function resolveAuctionSnapshot(
 
   const denormSnapshot = buildSnapshotFromAuctionDoc(auction);
   if (denormSnapshot) {
-    await writeAuctionSnapshotToRedis(redis, denormSnapshot);
+    try {
+      await writeAuctionSnapshotToRedis(redis, denormSnapshot);
+    } catch (error) {
+      logger.warn({ err: error, auctionId: auctionIdText }, "Failed to cache auction snapshot");
+    }
     return denormSnapshot;
   }
 
@@ -692,7 +709,11 @@ async function resolveAuctionSnapshot(
     lastBidAmount
   };
 
-  await writeAuctionSnapshotToRedis(redis, snapshot);
+  try {
+    await writeAuctionSnapshotToRedis(redis, snapshot);
+  } catch (error) {
+    logger.warn({ err: error, auctionId: auctionIdText }, "Failed to cache auction snapshot");
+  }
   await repository.updateAuctionSnapshot(
     auctionId,
     {
@@ -712,7 +733,8 @@ async function resolveRoundState(
   auctions: Collection<AuctionDocument>,
   repository: ReturnType<typeof createAuctionRepository>,
   auctionId: ObjectId,
-  roundIndex: number
+  roundIndex: number,
+  logger: ServiceDependencies["logger"]
 ): Promise<RoundStatePayload> {
   const auctionIdText = auctionId.toHexString();
   const cached = await readRoundStateFromRedis(redis, auctionIdText, roundIndex);
@@ -751,7 +773,14 @@ async function resolveRoundState(
     allocationSize: roundConfig.allocationSize
   };
 
-  await writeRoundStateToRedis(redis, auctionIdText, payload);
+  try {
+    await writeRoundStateToRedis(redis, auctionIdText, payload);
+  } catch (error) {
+    logger.warn(
+      { err: error, auctionId: auctionIdText, roundIndex },
+      "Failed to cache round state"
+    );
+  }
   return payload;
 }
 

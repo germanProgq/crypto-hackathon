@@ -13,6 +13,7 @@ import {
 import { createLedgerRepository, type LedgerBalance } from "../ledger/ledgerStore.js";
 import { createObserverClient } from "./observerClient.js";
 import { createSignerClient } from "./signerClient.js";
+import { createMlAnomalyDetector } from "./mlAnomalyDetector.js";
 import type { ObserverTransaction, WithdrawalSigningPayload } from "./types.js";
 import { createWalletStrategy, type DepositDestination } from "./walletStrategy.js";
 
@@ -59,6 +60,8 @@ export interface WithdrawalDecision {
   decision: "approve" | "review" | "reject";
   flags: string[];
   violations: string[];
+  riskScore?: number;
+  riskReasons?: string[];
 }
 
 export function createCryptoGatewayService(deps: ServiceDependencies) {
@@ -70,6 +73,15 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
   const walletStrategy = createWalletStrategy(deps.mongo, deps.config.crypto);
   const observer = createObserverClient(deps.config.crypto);
   const signer = createSignerClient(deps.config.crypto);
+  const anomalyDetector = createMlAnomalyDetector(
+    deps.mongo,
+    {
+      historyLimit: deps.config.crypto.withdrawal.riskHistoryLimit,
+      reviewThreshold: deps.config.crypto.withdrawal.riskScoreReviewThreshold,
+      rejectThreshold: deps.config.crypto.withdrawal.riskScoreRejectThreshold
+    },
+    deps.logger
+  );
 
   const deposits = deps.mongo.db.collection<CryptoDepositDocument>(
     mongoCollections.cryptoDeposits
@@ -849,15 +861,46 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
       flags.push("manual_threshold");
     }
 
+    const anomaly = await anomalyDetector.evaluate({
+      userId: record.userId,
+      currency: record.currency,
+      amount: record.amount,
+      destinationAddress: record.destinationAddress,
+      requestedAt: record.requestedAt
+    });
+    if (anomaly.score >= anomalyDetector.rejectThreshold) {
+      violations.push("ml_risk");
+    } else if (anomaly.score >= anomalyDetector.reviewThreshold) {
+      flags.push("ml_risk");
+    }
+
     if (violations.length > 0) {
-      return { decision: "reject", flags, violations };
+      return {
+        decision: "reject",
+        flags,
+        violations,
+        riskScore: anomaly.score,
+        riskReasons: anomaly.reasons
+      };
     }
 
     if (flags.length > 0) {
-      return { decision: "review", flags, violations };
+      return {
+        decision: "review",
+        flags,
+        violations,
+        riskScore: anomaly.score,
+        riskReasons: anomaly.reasons
+      };
     }
 
-    return { decision: "approve", flags, violations };
+    return {
+      decision: "approve",
+      flags,
+      violations,
+      riskScore: anomaly.score,
+      riskReasons: anomaly.reasons
+    };
   }
 
   async function applyWithdrawalDecision(
@@ -876,6 +919,8 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
             authorizedBy: "system",
             reviewRequired: false,
             flags: decision.flags,
+            riskScore: decision.riskScore ?? 0,
+            riskReasons: decision.riskReasons ?? [],
             updatedAt: now,
             nextPollAt: now
           }
@@ -892,6 +937,8 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
           $set: {
             reviewRequired: true,
             flags: decision.flags,
+            riskScore: decision.riskScore ?? 0,
+            riskReasons: decision.riskReasons ?? [],
             updatedAt: now
           }
         },
@@ -911,6 +958,8 @@ export function createCryptoGatewayService(deps: ServiceDependencies) {
             failureReason,
             reviewRequired: false,
             flags: decision.flags,
+            riskScore: decision.riskScore ?? 0,
+            riskReasons: decision.riskReasons ?? [],
             updatedAt: now
           }
         },

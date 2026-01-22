@@ -22,6 +22,7 @@
     "start:web": "node dist/src/services/web/index.js",
     "start:workers": "node dist/src/services/workers/index.js",
     "start:mock-rpc": "node dist/src/services/mock-rpc/index.js",
+    "start:all": "npm run build && concurrently \"npm:start:auction-engine\" \"npm:start:ledger\" \"npm:start:crypto-gateway\" \"npm:start:web\" \"npm:start:workers\"",
     "test": "vitest run",
     "test:watch": "vitest",
     "load:bot": "node scripts/load/bot-sim.js",
@@ -31,9 +32,16 @@
     "load:all": "node scripts/load/suite.js",
     "load:perf": "node scripts/load/perf-cli.js",
     "test:rpc": "tsx scripts/test-rpc.ts",
-    "test:ton-rpc": "tsx scripts/test-ton-rpc.ts"
+    "test:ton-rpc": "tsx scripts/test-ton-rpc.ts",
+    "sdk:generate": "tsx scripts/generate-sdk.ts",
+    "sdk:build": "cd sdk && npm install && npm run build",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f"
   },
   "dependencies": {
+    "@fastify/swagger": "^9.6.1",
+    "@fastify/swagger-ui": "^5.2.4",
     "@fastify/websocket": "^11.2.0",
     "fastify": "^5.6.2",
     "ioredis": "^5.3.2",

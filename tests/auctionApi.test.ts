@@ -24,6 +24,7 @@ import { createAuctionRepository } from "../src/services/auction-engine/auctionS
 import { buildAuctionSnapshotKey, buildRoundStateKey } from "../src/services/auction-engine/auctionKeys.js";
 import { evaluateRoundTransition } from "../src/services/auction-engine/roundStateMachine.js";
 import { createLedgerRepository } from "../src/services/ledger/ledgerStore.js";
+import { hasDocker } from "./support/infra.js";
 
 const execFileAsync = promisify(execFile);
 const redisDockerImage = "redis:7.2-alpine";
@@ -31,8 +32,9 @@ const dockerTimeoutMs = 60000;
 const localHosts = new Set(["localhost", "127.0.0.1", "::1", "0.0.0.0"]);
 const coreApiToken = "test-core-token";
 const coreHeaders = { "x-service-token": coreApiToken };
+const describeInfra = hasDocker() ? describe : describe.skip;
 
-describe("auction api", () => {
+describeInfra("auction api", () => {
   const testDbName = `crypto_hack_test_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   const redisPrefix = `test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const config = loadConfig({

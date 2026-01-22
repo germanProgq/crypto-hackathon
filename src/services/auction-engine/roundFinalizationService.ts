@@ -201,20 +201,21 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
       winners = await resolveRoundWinners(auction, roundIndex);
       const now = new Date();
       const proof = await buildRoundProof(auction, roundState, roundIndex, winners, now);
-      await roundResults.updateOne(
-        { auctionId, roundIndex },
-        {
-          $setOnInsert: {
+      const insertDoc: Record<string, unknown> = {
             auctionId,
             roundIndex,
             winners,
             merkleRoot: proof.merkleRoot,
             merkleCount: proof.merkleCount,
-            proof: proof.signedProof ?? undefined,
             finalizedAt: now,
             createdAt: now
+      };
+      if (proof.signedProof) {
+        insertDoc.proof = proof.signedProof;
           }
-        },
+      await roundResults.updateOne(
+        { auctionId, roundIndex },
+        { $setOnInsert: insertDoc },
         { upsert: true }
       );
       await markRoundFinalized(auctionId, roundIndex, now);
@@ -227,15 +228,16 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
         winners,
         finalizedAt
       );
+      const updateDoc: Record<string, unknown> = {
+            merkleRoot: proof.merkleRoot,
+        merkleCount: proof.merkleCount
+      };
+      if (proof.signedProof) {
+        updateDoc.proof = proof.signedProof;
+      }
       await roundResults.updateOne(
         { auctionId, roundIndex },
-        {
-          $set: {
-            merkleRoot: proof.merkleRoot,
-            merkleCount: proof.merkleCount,
-            proof: proof.signedProof ?? undefined
-          }
-        }
+        { $set: updateDoc }
       );
     }
 
@@ -413,7 +415,7 @@ export function createRoundFinalizationService(deps: ServiceDependencies) {
       );
     }
 
-    return mongoTop.length > allocationSize ? mongoTop[allocationSize] : null;
+    return mongoTop.length > allocationSize ? mongoTop[allocationSize] ?? null : null;
   }
 
   async function buildRoundProof(

@@ -2380,7 +2380,9 @@
       subscribedAuctionIds: new Set(),
       auctionSnapshots: new Map(),
       detailAuctionId: null,
-      lastBalanceRefreshAt: 0
+      lastBalanceRefreshAt: 0,
+      pendingRequests: new Map(),
+      requestTimeoutMs: 5000
     };
     const detailState = {
       auctionId: null,
@@ -2402,6 +2404,9 @@
     };
     const createWizard = { step: 0, steps: [] };
     const createDefaults = {
+      pricingMode: 'first-price',
+      minBid: '',
+      minIncrement: '',
       rounds: 3,
       allocationSize: 5,
       roundDurationSeconds: 300,
@@ -2484,6 +2489,7 @@
       socket.addEventListener('close', () => {
         realtimeState.socket = null;
         updateReplayStatus();
+        cancelPendingRealtimeRequests('connection_closed');
         scheduleRealtimeReconnect();
       });
       socket.addEventListener('error', () => {
@@ -2533,6 +2539,55 @@
         type: 'auth',
         initData: getTelegramInitData(),
         demoUserId: allowDemoUser ? getDemoUserId() : null
+      });
+    }
+
+    function isRealtimeConnected() {
+      return Boolean(
+        realtimeState.socket && realtimeState.socket.readyState === WebSocket.OPEN
+      );
+    }
+
+    function createRequestId() {
+      if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+        return window.crypto.randomUUID();
+      }
+      if (window.crypto && typeof window.crypto.getRandomValues === 'function') {
+        const bytes = new Uint8Array(16);
+        window.crypto.getRandomValues(bytes);
+        return Array.from(bytes)
+          .map((value) => value.toString(16).padStart(2, '0'))
+          .join('');
+      }
+      const seed = Math.random().toString(16).slice(2);
+      return `${Date.now().toString(16)}${seed}`;
+    }
+
+    function cancelPendingRealtimeRequests(reason) {
+      if (realtimeState.pendingRequests.size === 0) return;
+      for (const entry of realtimeState.pendingRequests.values()) {
+        clearTimeout(entry.timeout);
+        entry.reject(new Error(reason));
+      }
+      realtimeState.pendingRequests.clear();
+    }
+
+    function sendRealtimeRequest(payload, timeoutMs) {
+      if (!isRealtimeConnected()) {
+        return Promise.reject(new Error('realtime_unavailable'));
+      }
+      const requestId =
+        typeof payload.requestId === 'string' && payload.requestId.trim().length > 0
+          ? payload.requestId
+          : createRequestId();
+      payload.requestId = requestId;
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          realtimeState.pendingRequests.delete(requestId);
+          reject(new Error('timeout'));
+        }, timeoutMs);
+        realtimeState.pendingRequests.set(requestId, { resolve, reject, timeout });
+        sendRealtime(payload);
       });
     }
 
@@ -2587,6 +2642,18 @@
       }
       if (message.type === 'balance_updated') {
         maybeRefreshBalanceFromRealtime();
+        return;
+      }
+      if (message.type === 'bid_result') {
+        const requestId = message.requestId;
+        if (typeof requestId === 'string') {
+          const pending = realtimeState.pendingRequests.get(requestId);
+          if (pending) {
+            clearTimeout(pending.timeout);
+            realtimeState.pendingRequests.delete(requestId);
+            pending.resolve(message);
+          }
+        }
         return;
       }
       if (message.type === 'auction_snapshot') {
@@ -3651,6 +3718,20 @@
           setCreateError(t('web.create.error.requiredCurrency'));
           return false;
         }
+        const pricingModeInput = document.getElementById('create-pricing-mode');
+        const pricingMode = pricingModeInput ? pricingModeInput.value : '';
+        if (!validatePricingMode(pricingMode)) {
+          setCreateError(t('web.create.error.invalid', { field: t('web.create.pricingModeLabel') }));
+          return false;
+        }
+        const minBid = readCreateOptionalNumber('create-min-bid');
+        if (!validateCreateNonNegative(minBid, t('web.create.minBidLabel'))) {
+          return false;
+        }
+        const minIncrement = readCreateOptionalNumber('create-min-increment');
+        if (!validateCreateNonNegative(minIncrement, t('web.create.minIncrementLabel'))) {
+          return false;
+        }
         const rounds = readCreateNumber('create-rounds', NaN);
         const allocationSize = readCreateNumber('create-allocation', NaN);
         if (!validateCreateRange(rounds, 1, 20, t('web.create.roundsLabel'))) return false;
@@ -3704,6 +3785,9 @@
       const description = document.getElementById('create-description');
       const delivery = document.getElementById('create-delivery');
       const currency = document.getElementById('create-currency');
+      const pricingMode = document.getElementById('create-pricing-mode');
+      const minBid = document.getElementById('create-min-bid');
+      const minIncrement = document.getElementById('create-min-increment');
       const rounds = document.getElementById('create-rounds');
       const allocation = document.getElementById('create-allocation');
       const duration = document.getElementById('create-duration');
@@ -3720,6 +3804,9 @@
         currency.value = getCurrentCurrency() || 'USDT';
         currency.dataset.autofill = 'true';
       }
+      if (pricingMode) pricingMode.value = createDefaults.pricingMode;
+      if (minBid) minBid.value = createDefaults.minBid;
+      if (minIncrement) minIncrement.value = createDefaults.minIncrement;
       if (rounds) rounds.value = String(createDefaults.rounds);
       if (allocation) allocation.value = String(createDefaults.allocationSize);
       if (duration) duration.value = String(createDefaults.roundDurationSeconds);
@@ -3778,6 +3865,16 @@
       return value;
     }
 
+    function readCreateOptionalNumber(id) {
+      const input = document.getElementById(id);
+      if (!input) return null;
+      const raw = input.value.trim();
+      if (!raw) return null;
+      const value = Number(raw);
+      if (!Number.isFinite(value)) return NaN;
+      return value;
+    }
+
     function validateCreateRange(value, min, max, label) {
       if (!Number.isFinite(value) || !Number.isInteger(value)) {
         setCreateError(t('web.create.error.invalid', { field: label }));
@@ -3788,6 +3885,21 @@
         return false;
       }
       return true;
+    }
+
+    function validateCreateNonNegative(value, label) {
+      if (value === null) {
+        return true;
+      }
+      if (!Number.isFinite(value) || value < 0) {
+        setCreateError(t('web.create.error.invalid', { field: label }));
+        return false;
+      }
+      return true;
+    }
+
+    function validatePricingMode(mode) {
+      return mode === 'first-price' || mode === 'cutoff';
     }
 
     async function submitCreateAuction(event) {
@@ -3802,6 +3914,7 @@
       const descriptionInput = document.getElementById('create-description');
       const deliveryInput = document.getElementById('create-delivery');
       const currencyInput = document.getElementById('create-currency');
+      const pricingModeInput = document.getElementById('create-pricing-mode');
       const toggle = document.getElementById('create-antisniping-toggle');
 
       const title = titleInput ? titleInput.value.trim() : '';
@@ -3810,6 +3923,9 @@
       const currency = currencyInput && currencyInput.value.trim()
         ? currencyInput.value.trim()
         : getCurrentCurrency();
+      const pricingMode = pricingModeInput ? pricingModeInput.value : '';
+      const minBid = readCreateOptionalNumber('create-min-bid');
+      const minIncrement = readCreateOptionalNumber('create-min-increment');
       const rounds = readCreateNumber('create-rounds', NaN);
       const allocationSize = readCreateNumber('create-allocation', NaN);
       const roundDurationSeconds = readCreateNumber('create-duration', NaN);
@@ -3827,10 +3943,17 @@
       if (!validateCreateRange(allocationSize, 1, 500, t('web.create.allocationLabel'))) return;
       if (!validateCreateRange(roundDurationSeconds, 30, 7200, t('web.create.durationLabel'))) return;
       if (!validateCreateRange(startOffsetSeconds, 0, 86400, t('web.create.startOffsetLabel'))) return;
+      if (!validatePricingMode(pricingMode)) {
+        setCreateError(t('web.create.error.invalid', { field: t('web.create.pricingModeLabel') }));
+        return;
+      }
+      if (!validateCreateNonNegative(minBid, t('web.create.minBidLabel'))) return;
+      if (!validateCreateNonNegative(minIncrement, t('web.create.minIncrementLabel'))) return;
 
       const payload = {
         title,
         currency: currency || 'USDT',
+        pricingMode,
         rounds,
         allocationSize,
         roundDurationSeconds,
@@ -3843,6 +3966,13 @@
 
       if (deliveryType) {
         payload.deliveryType = deliveryType;
+      }
+
+      if (minBid !== null) {
+        payload.minBid = minBid;
+      }
+      if (minIncrement !== null) {
+        payload.minIncrement = minIncrement;
       }
 
       if (toggle && toggle.checked) {
@@ -4396,6 +4526,9 @@
       const ends = document.getElementById('detail-ends');
       const lastBid = document.getElementById('detail-last-bid');
       const delivery = document.getElementById('detail-delivery');
+      const pricingMode = document.getElementById('detail-pricing-mode');
+      const minBid = document.getElementById('detail-min-bid');
+      const minIncrement = document.getElementById('detail-min-increment');
       const bids = document.getElementById('detail-bids-list');
       const winners = document.getElementById('detail-winners-list');
       const timeline = document.getElementById('detail-timeline');
@@ -4415,6 +4548,9 @@
       if (ends) ends.textContent = '--';
       if (lastBid) lastBid.textContent = '--';
       if (delivery) delivery.textContent = '--';
+      if (pricingMode) pricingMode.textContent = '--';
+      if (minBid) minBid.textContent = '--';
+      if (minIncrement) minIncrement.textContent = '--';
       if (bids) bids.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
       if (winners) winners.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
       if (timeline) timeline.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
@@ -4443,6 +4579,9 @@
       const status = document.getElementById('detail-status');
       const topbarTitle = document.getElementById('detail-topbar-title');
       const delivery = document.getElementById('detail-delivery');
+      const pricingMode = document.getElementById('detail-pricing-mode');
+      const minBid = document.getElementById('detail-min-bid');
+      const minIncrement = document.getElementById('detail-min-increment');
 
       if (title) title.textContent = auction.title || t('web.detail.untitled');
       if (topbarTitle) topbarTitle.textContent = auction.title || t('web.detail.untitled');
@@ -4464,6 +4603,17 @@
         const deliveryType = detailState.replay?.auction?.deliveryType ?? auction.deliveryType ?? null;
         delivery.textContent = deliveryType ? formatDeliveryType(deliveryType) : t('web.detail.deliveryDefault');
       }
+      if (pricingMode) {
+        pricingMode.textContent = formatPricingMode(auction.pricingMode);
+      }
+      if (minBid) {
+        const amount = typeof auction.minBid === 'number' ? auction.minBid : 0;
+        minBid.textContent = formatAmount(amount, auction.currency);
+      }
+      if (minIncrement) {
+        const amount = typeof auction.minIncrement === 'number' ? auction.minIncrement : 0;
+        minIncrement.textContent = formatAmount(amount, auction.currency);
+      }
       renderRoundSelect();
       renderWatchlistState();
       renderDetailBalance();
@@ -4474,6 +4624,14 @@
       const key = `web.round.status.${status}`;
       const value = t(key);
       return value === key ? status : value;
+    }
+
+    function formatPricingMode(mode) {
+      if (!mode) return '--';
+      const resolved = mode === 'cutoff' ? 'cutoff' : 'firstPrice';
+      const key = `web.detail.pricing.${resolved}`;
+      const value = t(key);
+      return value === key ? mode : value;
     }
 
     function renderAuctionDetailSnapshot() {
@@ -5283,6 +5441,34 @@
       setDetailBidError('');
     }
 
+    function resolveBidErrorMessage(errorCode, message) {
+      if (errorCode === 'invalid_request' || errorCode === 'idempotency_conflict') {
+        return t('errors.validation');
+      }
+      if (errorCode === 'auction_not_live' || errorCode === 'round_not_live') {
+        return t('errors.auctionNotActive');
+      }
+      if (errorCode === 'bid_too_low') {
+        return t('errors.bidTooLow');
+      }
+      if (errorCode === 'insufficient_funds') {
+        return t('errors.insufficientBalance');
+      }
+      if (errorCode === 'rate_limited') {
+        return t('errors.rateLimited', { seconds: 1 });
+      }
+      if (errorCode === 'auth_required') {
+        return t('errors.unauthorized');
+      }
+      if (errorCode === 'timeout') {
+        return t('errors.timeout');
+      }
+      if (message && typeof message === 'string') {
+        return message;
+      }
+      return t('errors.unknown');
+    }
+
     async function submitAuctionBid() {
       if (detailState.bidSubmitting) return;
       const auctionId = detailState.auctionId;
@@ -5316,27 +5502,54 @@
       if (submitButton) submitButton.disabled = true;
 
       try {
-        const payload = { amount };
+        const idempotencyKey = createRequestId();
+        const payload = { amount, idempotencyKey };
         if (maxAmount !== null) {
           payload.maxAmount = maxAmount;
         }
+        if (isRealtimeConnected()) {
+          try {
+            const result = await sendRealtimeRequest(
+              {
+                type: 'place_bid',
+                requestId: createRequestId(),
+                auctionId,
+                amount,
+                maxAmount: maxAmount !== null ? maxAmount : undefined,
+                idempotencyKey
+              },
+              realtimeState.requestTimeoutMs
+            );
+            if (result && result.success) {
+              if (amountInput) amountInput.value = '';
+              if (maxInput) maxInput.value = '';
+              await loadBalance();
+              scheduleReplayRefresh();
+              return;
+            }
+            const errorMessage = resolveBidErrorMessage(result?.error, result?.message);
+            setDetailBidError(t('web.detail.bid.error.failed', { message: errorMessage }));
+            return;
+          } catch (error) {
+          }
+        }
+
         const response = await apiFetch(`/api/auctions/${auctionId}/bids`, {
           method: 'POST',
           body: JSON.stringify(payload)
         });
         const data = await readJsonSafe(response);
         if (!response.ok) {
-          setDetailBidError(
-            t('web.detail.bid.error.failed', { message: data?.message || t('errors.unknown') })
-          );
-          detailState.bidSubmitting = false;
-          if (submitButton) submitButton.disabled = false;
+          const errorMessage = resolveBidErrorMessage(data?.error, data?.message);
+          setDetailBidError(t('web.detail.bid.error.failed', { message: errorMessage }));
           return;
         }
-        if (amountInput) amountInput.value = '';
-        if (maxInput) maxInput.value = '';
-        await loadBalance();
-        scheduleReplayRefresh();
+        if (response.ok) {
+          if (amountInput) amountInput.value = '';
+          if (maxInput) maxInput.value = '';
+          await loadBalance();
+          scheduleReplayRefresh();
+        }
       } catch (error) {
         setDetailBidError(t('web.detail.bid.error.network'));
       } finally {

@@ -1,265 +1,239 @@
-// ML-based anomaly detection for withdrawal security using online learning.
+// Withdrawal anomaly scoring for crypto gateway risk decisions.
+import type { Collection } from "mongodb";
 import type { Logger } from "pino";
 import type { MongoDependencies } from "../../shared/storage/mongo.js";
-import { mongoCollections } from "../../shared/storage/mongoSchemas.js";
+import {
+  mongoCollections,
+  type CryptoWithdrawalDocument
+} from "../../shared/storage/mongoSchemas.js";
 
-type WithdrawalEvent = {
+export type WithdrawalAnomalyInput = {
   userId: string;
+  currency: string;
   amount: number;
   destinationAddress: string;
-  currency: string;
-  timestamp: Date;
+  requestedAt: Date;
+};
+
+export type WithdrawalAnomalyResult = {
+  score: number;
+  reasons: string[];
+  historyCount: number;
+};
+
+export type WithdrawalAnomalyConfig = {
+  historyLimit: number;
+  reviewThreshold: number;
+  rejectThreshold: number;
 };
 
 type WithdrawalProfile = {
   userId: string;
   currency: string;
-  features: {
-    avgAmount: number;
-    stdAmount: number;
-    avgFrequency: number;
-    uniqueAddressCount: number;
-    timeOfDayPattern: number[];
-  };
-  lastUpdated: Date;
+  avgAmount: number;
+  stdAmount: number;
+  avgFrequencyHours: number | null;
+  timeOfDayPattern: number[];
+  knownAddresses: Set<string>;
+  lastRequestedAt: Date | null;
+  historyCount: number;
+  computedAt: Date;
 };
 
-type AnomalyResult = {
-  isAnomaly: boolean;
-  score: number;
-  reasons: string[];
-};
+const profileTtlMs = 5 * 60 * 1000;
 
-type WithdrawalHistoryEntry = {
-  userId: string;
-  amount: number;
-  destinationAddress: string;
-  timestamp: Date;
-  status: string;
-  currency: string;
-};
+export function createMlAnomalyDetector(
+  mongo: MongoDependencies,
+  config: WithdrawalAnomalyConfig,
+  logger?: Logger
+) {
+  const withdrawals = mongo.db.collection<CryptoWithdrawalDocument>(
+    mongoCollections.cryptoWithdrawals
+  );
+  const profiles = new Map<string, WithdrawalProfile>();
 
-const profileCacheTtl = 3600000;
-const anomalyThreshold = 50;
-const learningRate = 0.1;
-const historyLookback = 100;
+  async function evaluate(input: WithdrawalAnomalyInput): Promise<WithdrawalAnomalyResult> {
+    const profile = await loadProfile(withdrawals, profiles, input, config, logger);
+    if (profile.historyCount === 0) {
+      return { score: 0, reasons: [], historyCount: 0 };
+    }
 
-export class MLAnomalyDetector {
-  private profiles = new Map<string, { profile: WithdrawalProfile; cachedAt: number }>();
-
-  constructor(
-    private readonly logger: Logger,
-    private readonly mongo: MongoDependencies
-  ) {}
-
-  async detectAnomaly(withdrawal: WithdrawalEvent): Promise<AnomalyResult> {
-    const profileKey = buildProfileKey(withdrawal.userId, withdrawal.currency);
-    const profile = await this.getOrBuildProfile(profileKey, withdrawal.userId, withdrawal.currency);
     const reasons: string[] = [];
-    let anomalyScore = 0;
+    let score = 0;
 
-    const amountZScore = computeZScore(
-      withdrawal.amount,
-      profile.features.avgAmount,
-      profile.features.stdAmount
-    );
-    if (amountZScore > 3) {
-      anomalyScore += 40;
-      const formatted = amountZScore.toFixed(2);
-      reasons.push(`amount_deviation: ${formatted}σ`);
+    const deviation = computeAmountDeviation(input.amount, profile.avgAmount, profile.stdAmount);
+    if (deviation > 3) {
+      score += 40;
+      reasons.push(`amount_deviation:${deviation.toFixed(2)}σ`);
     }
 
-    const history = await this.getWithdrawalHistory(withdrawal.userId, withdrawal.currency);
-    const knownAddresses = new Set(history.map((entry) => entry.destinationAddress));
-    if (!knownAddresses.has(withdrawal.destinationAddress)) {
-      anomalyScore += 25;
-      reasons.push("new_destination_address");
+    if (profile.knownAddresses.size > 0 && !profile.knownAddresses.has(input.destinationAddress)) {
+      score += 25;
+      reasons.push("new_destination");
     }
 
-    const lastWithdrawal = history[0] ?? null;
-    if (lastWithdrawal) {
+    if (profile.avgFrequencyHours !== null && profile.lastRequestedAt) {
       const hoursSince =
-        (withdrawal.timestamp.getTime() - lastWithdrawal.timestamp.getTime()) / 3600000;
-      const frequencyThreshold = profile.features.avgFrequency * 0.2;
-      if (hoursSince < frequencyThreshold && profile.features.avgFrequency > 0) {
-        anomalyScore += 30;
-        const hoursFormatted = hoursSince.toFixed(1);
-        const avgFormatted = profile.features.avgFrequency.toFixed(1);
-        reasons.push(`high_frequency: ${hoursFormatted}h vs ${avgFormatted}h avg`);
+        (input.requestedAt.getTime() - profile.lastRequestedAt.getTime()) / 3600000;
+      if (hoursSince >= 0 && hoursSince < profile.avgFrequencyHours * 0.2) {
+        score += 30;
+        reasons.push(`high_frequency:${hoursSince.toFixed(1)}h`);
       }
     }
 
-    const hour = withdrawal.timestamp.getHours();
-    const typicalHourActivity = profile.features.timeOfDayPattern[hour] ?? 0;
-    if (typicalHourActivity < 0.1 && history.length > 10) {
-      const mostActiveHour = profile.features.timeOfDayPattern.indexOf(
-        Math.max(...profile.features.timeOfDayPattern)
-      );
-      anomalyScore += 15;
-      reasons.push(`unusual_time: ${hour}:00 (typical: ${mostActiveHour}:00)`);
+    if (profile.historyCount >= 10) {
+      const hour = input.requestedAt.getHours();
+      const typical = profile.timeOfDayPattern[hour] ?? 0;
+      if (typical < 0.08) {
+        score += 15;
+        reasons.push(`unusual_time:${hour}`);
+      }
     }
 
-    const recentCount = history.filter(
-      (entry) => withdrawal.timestamp.getTime() - entry.timestamp.getTime() < 3600000
-    ).length;
-    if (recentCount > 3) {
-      anomalyScore += 20;
-      reasons.push(`rapid_succession: ${recentCount} in 1h`);
+    const recentCount = await countRecentWithdrawals(withdrawals, input.userId, input.currency);
+    if (recentCount >= 3) {
+      score += 20;
+      reasons.push(`rapid_succession:${recentCount}`);
     }
 
-    const isAnomaly = anomalyScore >= anomalyThreshold;
+    return { score, reasons, historyCount: profile.historyCount };
+  }
 
-    this.logger.info(
-      {
-        userId: withdrawal.userId,
-        amount: withdrawal.amount,
-        currency: withdrawal.currency,
-        anomalyScore,
-        isAnomaly,
-        reasons
-      },
-      "Anomaly detection completed"
+  return {
+    evaluate,
+    reviewThreshold: config.reviewThreshold,
+    rejectThreshold: config.rejectThreshold
+  };
+}
+
+async function loadProfile(
+  withdrawals: Collection<CryptoWithdrawalDocument>,
+  profiles: Map<string, WithdrawalProfile>,
+  input: WithdrawalAnomalyInput,
+  config: WithdrawalAnomalyConfig,
+  logger?: Logger
+): Promise<WithdrawalProfile> {
+  const key = `${input.userId}:${input.currency}`;
+  const cached = profiles.get(key);
+  if (cached && Date.now() - cached.computedAt.getTime() <= profileTtlMs) {
+    return cached;
+  }
+
+  const history = await withdrawals
+    .find({
+      userId: input.userId,
+      currency: input.currency,
+      status: "confirmed"
+    })
+    .sort({ confirmedAt: -1, requestedAt: -1 })
+    .limit(Math.max(1, Math.floor(config.historyLimit)))
+    .toArray();
+
+  const profile = buildProfile(input.userId, input.currency, history);
+  profiles.set(key, profile);
+  if (logger && profile.historyCount === 0) {
+    logger.info(
+      { userId: input.userId, currency: input.currency },
+      "No withdrawal history for anomaly scoring"
     );
-
-    void this.updateProfile(profileKey, withdrawal.userId, withdrawal.currency, withdrawal);
-
-    return { isAnomaly, score: anomalyScore, reasons };
   }
-
-  private async getOrBuildProfile(
-    profileKey: string,
-    userId: string,
-    currency: string
-  ): Promise<WithdrawalProfile> {
-    const cached = this.profiles.get(profileKey);
-    const now = Date.now();
-    if (cached && now - cached.cachedAt < profileCacheTtl) {
-      return cached.profile;
-    }
-
-    const history = await this.getWithdrawalHistory(userId, currency);
-    const profile = buildProfileFromHistory(userId, currency, history);
-    this.profiles.set(profileKey, { profile, cachedAt: now });
-    return profile;
-  }
-
-  private async updateProfile(
-    profileKey: string,
-    _userId: string,
-    _currency: string,
-    withdrawal: WithdrawalEvent
-  ): Promise<void> {
-    try {
-      const cached = this.profiles.get(profileKey);
-      if (!cached) {
-        return;
-      }
-
-      const profile = cached.profile;
-      profile.features.avgAmount =
-        profile.features.avgAmount * (1 - learningRate) + withdrawal.amount * learningRate;
-
-      const deviation = Math.abs(withdrawal.amount - profile.features.avgAmount);
-      profile.features.stdAmount =
-        profile.features.stdAmount * (1 - learningRate) + deviation * learningRate;
-
-      profile.lastUpdated = new Date();
-      this.profiles.set(profileKey, { profile, cachedAt: Date.now() });
-    } catch (error) {
-      this.logger.warn({ err: error }, "Failed to update anomaly profile");
-    }
-  }
-
-  private async getWithdrawalHistory(
-    userId: string,
-    currency: string
-  ): Promise<WithdrawalHistoryEntry[]> {
-    try {
-      const withdrawals = this.mongo.db.collection(mongoCollections.cryptoWithdrawals);
-      const results = await withdrawals
-        .find({ userId, currency, status: { $in: ["confirmed", "broadcasted"] } })
-        .sort({ createdAt: -1 })
-        .limit(historyLookback)
-        .project<WithdrawalHistoryEntry>({
-          userId: 1,
-          amount: 1,
-          destinationAddress: 1,
-          timestamp: "$createdAt",
-          status: 1,
-          currency: 1
-        })
-        .toArray();
-
-      return results.map((entry) => ({
-        userId: entry.userId,
-        amount: entry.amount,
-        destinationAddress: entry.destinationAddress,
-        timestamp: entry.timestamp ?? new Date(0),
-        status: entry.status,
-        currency: entry.currency
-      }));
-    } catch (error) {
-      this.logger.warn({ err: error, userId, currency }, "Failed to load withdrawal history");
-      return [];
-    }
-  }
+  return profile;
 }
 
-function buildProfileKey(userId: string, currency: string): string {
-  return `${userId}:${currency}`;
-}
-
-function buildProfileFromHistory(
+function buildProfile(
   userId: string,
   currency: string,
-  history: WithdrawalHistoryEntry[]
+  history: CryptoWithdrawalDocument[]
 ): WithdrawalProfile {
-  const amounts = history.map((entry) => entry.amount);
-  const avgAmount = amounts.length > 0 ? amounts.reduce((sum, val) => sum + val, 0) / amounts.length : 0;
-  const variance =
-    amounts.length > 0
-      ? amounts.reduce((sum, val) => sum + Math.pow(val - avgAmount, 2), 0) / amounts.length
-      : 0;
-  const stdAmount = Math.sqrt(variance);
+  const amounts = history
+    .map((entry) => entry.amount)
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const historyCount = history.length;
+  const avgAmount = amounts.length > 0 ? mean(amounts) : 0;
+  const stdAmount = amounts.length > 1 ? stddev(amounts, avgAmount) : 0;
 
-  const timestamps = history.map((entry) => entry.timestamp.getTime());
-  const intervals =
-    timestamps.length > 1
-      ? timestamps.slice(1).map((time, index) => {
-          const prev = timestamps[index];
-          return prev !== undefined ? (time - prev) / 3600000 : 0;
-        })
-      : [];
-  const avgFrequency =
-    intervals.length > 0 ? intervals.reduce((sum, val) => sum + val, 0) / intervals.length : 24;
-
-  const uniqueAddresses = new Set(history.map((entry) => entry.destinationAddress)).size;
+  const ordered = [...history].sort((a, b) => {
+    const timeA = a.requestedAt?.getTime() ?? 0;
+    const timeB = b.requestedAt?.getTime() ?? 0;
+    return timeB - timeA;
+  });
+  const timestamps = ordered
+    .map((entry) => entry.requestedAt)
+    .filter((value): value is Date => value instanceof Date);
+  const intervals = [];
+  for (let index = 1; index < timestamps.length; index += 1) {
+    const prev = timestamps[index - 1];
+    const next = timestamps[index];
+    if (!prev || !next) {
+      continue;
+    }
+    intervals.push((prev.getTime() - next.getTime()) / 3600000);
+  }
+  const avgFrequencyHours = intervals.length > 0 ? mean(intervals) : null;
 
   const timeOfDayPattern = new Array(24).fill(0);
-  history.forEach((entry) => {
-    const hour = entry.timestamp.getHours();
-    timeOfDayPattern[hour]++;
-  });
-  const total = timeOfDayPattern.reduce((sum, count) => sum + count, 0) || 1;
-  const normalizedPattern = timeOfDayPattern.map((count) => count / total);
+  for (const entry of history) {
+    const date = entry.requestedAt ?? entry.confirmedAt;
+    if (!date) {
+      continue;
+    }
+    const hour = date.getHours();
+    timeOfDayPattern[hour] += 1;
+  }
+  const total = timeOfDayPattern.reduce((sum, value) => sum + value, 0);
+  const normalized =
+    total > 0 ? timeOfDayPattern.map((value) => value / total) : timeOfDayPattern;
+
+  const knownAddresses = new Set(
+    history.map((entry) => entry.destinationAddress).filter((value) => value)
+  );
+  const lastRequestedAt = timestamps[0] ?? null;
 
   return {
     userId,
     currency,
-    features: {
-      avgAmount,
-      stdAmount,
-      avgFrequency,
-      uniqueAddressCount: uniqueAddresses,
-      timeOfDayPattern: normalizedPattern
-    },
-    lastUpdated: new Date()
+    avgAmount,
+    stdAmount,
+    avgFrequencyHours,
+    timeOfDayPattern: normalized,
+    knownAddresses,
+    lastRequestedAt,
+    historyCount,
+    computedAt: new Date()
   };
 }
 
-function computeZScore(value: number, mean: number, stdDev: number): number {
-  if (stdDev === 0 || !Number.isFinite(stdDev)) {
+function computeAmountDeviation(amount: number, avg: number, std: number): number {
+  if (!Number.isFinite(amount) || amount <= 0 || !Number.isFinite(avg)) {
     return 0;
   }
-  return Math.abs((value - mean) / stdDev);
+  const sigma = std > 0 ? std : Math.max(1e-9, avg * 0.1);
+  return Math.abs(amount - avg) / sigma;
+}
+
+async function countRecentWithdrawals(
+  withdrawals: Collection<CryptoWithdrawalDocument>,
+  userId: string,
+  currency: string
+): Promise<number> {
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+  return withdrawals.countDocuments({
+    userId,
+    currency,
+    requestedAt: { $gte: oneHourAgo },
+    status: { $in: ["requested", "authorized", "broadcasted", "confirmed"] }
+  });
+}
+
+function mean(values: number[]): number {
+  if (values.length === 0) {
+    return 0;
+  }
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function stddev(values: number[], avg: number): number {
+  const variance =
+    values.reduce((sum, value) => sum + Math.pow(value - avg, 2), 0) / values.length;
+  return Math.sqrt(variance);
 }

@@ -16,8 +16,8 @@ export function buildAuctionDocument(
   const deliveryType = config.deliveryType;
   const rounds = normalizeRounds(config.rounds);
   const pricingMode = config.pricingMode;
-  const minBid = normalizeNonNegative(config.minBid);
-  const minIncrement = normalizeNonNegative(config.minIncrement);
+  const minBid = normalizeNonNegative(config.minBid ?? 0);
+  const minIncrement = normalizeNonNegative(config.minIncrement ?? 0);
   const firstRound = rounds[0] ?? null;
   const now = new Date();
 
@@ -26,10 +26,9 @@ export function buildAuctionDocument(
     title,
     status: "draft",
     currency,
-    pricingMode,
+    pricingMode: pricingMode ?? "first-price",
     minBid,
     minIncrement,
-    deliveryType,
     startsAt: config.startsAt,
     endsAt: config.endsAt,
     rounds,
@@ -41,8 +40,12 @@ export function buildAuctionDocument(
     createdAt: now,
     updatedAt: now
   };
+  // Only add optional fields if they have values (MongoDB validator doesn't accept undefined)
   if (description) {
     auction.description = description;
+  }
+  if (deliveryType) {
+    auction.deliveryType = deliveryType;
   }
   return auction;
 }

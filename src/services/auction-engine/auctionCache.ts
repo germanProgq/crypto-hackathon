@@ -252,6 +252,8 @@ export async function readRoundStateFromRedis(
       const effectiveEndAt = parseRedisDate(data.effectiveEndAt);
       const extensionCount = parseRedisInt(data.extensionCount);
       const allocationSize = parseRedisInt(data.allocationSize);
+      const startedAt = parseRedisDate(data.startedAt);
+      const closedAt = parseRedisDate(data.closedAt);
       const antiSnipingTriggerWindowSeconds = normalizeNonNegative(
         parseRedisInt(data.antiSnipingTriggerWindowSeconds)
       );
@@ -286,8 +288,8 @@ export async function readRoundStateFromRedis(
         antiSnipingExtensionSeconds,
         antiSnipingMaxExtensions,
         lastBidAt: parseRedisDate(data.lastBidAt),
-        startedAt: null,
-        closedAt: null,
+        startedAt,
+        closedAt,
         allocationSize
       };
     } catch {
@@ -399,6 +401,14 @@ export function buildRoundStateFields(
   if (state.lastBidAt) {
     fields.lastBidAt = state.lastBidAt.toISOString();
     fields.lastBidAtMs = state.lastBidAt.getTime().toString();
+  }
+  if (state.startedAt) {
+    fields.startedAt = state.startedAt.toISOString();
+    fields.startedAtMs = state.startedAt.getTime().toString();
+  }
+  if (state.closedAt) {
+    fields.closedAt = state.closedAt.toISOString();
+    fields.closedAtMs = state.closedAt.getTime().toString();
   }
 
   return fields;

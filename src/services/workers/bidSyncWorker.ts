@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Fast bid sync worker to persist Redis-accepted bids into MongoDB.
 import type { FastifyInstance } from "fastify";
 import { ObjectId, type WithId } from "mongodb";

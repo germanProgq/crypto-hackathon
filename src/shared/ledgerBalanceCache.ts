@@ -192,6 +192,9 @@ export async function applyBalanceDelta(
   const client = ensureBalanceScript(redis);
   const currentDelta = deltas.availableDelta + deltas.heldDelta;
 
+  if (!client.applyBalanceDelta) {
+    throw new Error("Balance delta script not loaded");
+  }
   const applied = await client.applyBalanceDelta(
     2,
     balanceKey,

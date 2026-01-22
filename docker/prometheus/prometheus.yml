@@ -1,0 +1,43 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'auction-engine'
+    static_configs:
+      - targets: ['auction-engine:4001']
+    metrics_path: '/metrics'
+
+  - job_name: 'ledger'
+    static_configs:
+      - targets: ['ledger:4002']
+    metrics_path: '/metrics'
+
+  - job_name: 'crypto-gateway'
+    static_configs:
+      - targets: ['crypto-gateway:4003']
+    metrics_path: '/metrics'
+
+  - job_name: 'bot'
+    static_configs:
+      - targets: ['bot:4004']
+    metrics_path: '/metrics'
+
+  - job_name: 'web'
+    static_configs:
+      - targets: ['web:4005']
+    metrics_path: '/metrics'
+
+  - job_name: 'workers'
+    static_configs:
+      - targets: ['workers:4006']
+    metrics_path: '/metrics'
+
+  - job_name: 'signer'
+    static_configs:
+      - targets: ['signer:4007']
+    metrics_path: '/metrics'

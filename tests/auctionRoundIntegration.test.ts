@@ -16,8 +16,11 @@ import {
 } from "../src/shared/storage/mongoSchemas.js";
 import { createAuctionRepository } from "../src/services/auction-engine/auctionStore.js";
 import { deriveAuctionStatus, evaluateRoundTransition } from "../src/services/auction-engine/roundStateMachine.js";
+import { hasDocker } from "./support/infra.js";
 
-describe("auction round scheduling", () => {
+const describeInfra = hasDocker() ? describe : describe.skip;
+
+describeInfra("auction round scheduling", () => {
   const testDbName = `crypto_hack_test_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   const config = loadConfig({
     serviceName: "auction-test",

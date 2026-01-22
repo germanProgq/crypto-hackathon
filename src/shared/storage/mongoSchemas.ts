@@ -346,6 +346,8 @@ export interface CryptoWithdrawalDocument {
   txId?: string;
   nextPollAt?: Date;
   flags?: string[];
+  riskScore?: number;
+  riskReasons?: string[];
   reviewRequired?: boolean;
   failureReason?: string;
   authorizedBy?: string;
@@ -870,6 +872,8 @@ const cryptoWithdrawalValidator: Document = {
       txId: { bsonType: "string" },
       nextPollAt: { bsonType: "date" },
       flags: { bsonType: "array", items: { bsonType: "string" } },
+      riskScore: { bsonType: bsonNumber },
+      riskReasons: { bsonType: "array", items: { bsonType: "string" } },
       reviewRequired: { bsonType: "bool" },
       failureReason: { bsonType: "string" },
       authorizedBy: { bsonType: "string" },

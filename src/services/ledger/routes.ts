@@ -15,6 +15,7 @@ import {
   requireServiceAuth,
   resolveUserIdFromAuth
 } from "../../shared/auth/coreAuth.js";
+import { registerOpenAPI } from "../../shared/openapi/spec.js";
 
 const auditSchema = z
   .object({
@@ -68,6 +69,9 @@ export async function registerLedgerRoutes(
   app: FastifyInstance,
   deps: ServiceDependencies
 ): Promise<void> {
+  // Register OpenAPI/Swagger documentation
+  await registerOpenAPI(app);
+
   const ledger = createLedgerRepository(deps.mongo, {
     retentionDays: deps.config.dataRetention.ledgerDays,
     redis: deps.redis,

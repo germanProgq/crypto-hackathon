@@ -681,6 +681,9 @@ export class FastBidProcessor {
     const auditJson = input.audit ? JSON.stringify(input.audit) : "";
 
     const client = ensureFastBidScript(this.redis);
+    if (!client.fastBid) {
+      throw new FastBidError("script_not_loaded", "FastBid script not loaded", "bid", 500);
+    }
     let result: string[] | null = null;
     try {
       result = await client.fastBid(
@@ -795,7 +798,7 @@ function buildFastBidPlacement(payload: FastBidResponsePayload): FastBidPlacemen
     idempotencyKey: payload.bid.idempotencyKey,
     active: true,
     roundIndex: payload.bid.roundIndex,
-    origin: payload.bid.origin
+    origin: payload.bid.origin as "manual" | "proxy" | "auto" | undefined
   };
   if (payload.bid.maxAmountProvided === 1) {
     bid.maxAmount = payload.bid.maxAmount;
@@ -843,7 +846,8 @@ function buildFastBidPlacement(payload: FastBidResponsePayload): FastBidPlacemen
     available: payload.balance.available,
     held: payload.balance.held,
     spent: payload.balance.spent ?? 0,
-    current: payload.balance.current ?? payload.balance.available + payload.balance.held
+    current: payload.balance.current ?? payload.balance.available + payload.balance.held,
+    asOf: new Date()
   };
 
   return {

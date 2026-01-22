@@ -13,6 +13,7 @@ import {
   requireCoreAuth,
   resolveUserIdFromAuth
 } from "../../shared/auth/coreAuth.js";
+import { registerOpenAPI } from "../../shared/openapi/spec.js";
 
 const currencyQuerySchema = z.object({
   currency: z.string().min(1)
@@ -42,6 +43,9 @@ export async function registerCryptoGatewayRoutes(
   app: FastifyInstance,
   deps: ServiceDependencies
 ): Promise<void> {
+  // Register OpenAPI/Swagger documentation
+  await registerOpenAPI(app);
+
   const service = createCryptoGatewayService(deps);
 
   app.get("/crypto/:userId/deposit-address", async (request, reply) => {
