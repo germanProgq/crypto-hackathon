@@ -294,7 +294,8 @@ export async function registerWebRoutes(
   registerGraphQL(app, {
     db: deps.mongo.db,
     redis: deps.redis,
-    logger: deps.logger
+    logger: deps.logger,
+    config: deps.config
   });
 
   const auctionRepository = createAuctionRepository(deps.mongo);

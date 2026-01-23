@@ -1,14 +1,29 @@
 // GraphQL API layer for Crypto Auction Platform
 import type { FastifyInstance } from "fastify";
-import type { Db, ObjectId, WithId } from "mongodb";
+import { ObjectId, type Db, type WithId } from "mongodb";
 import type { Redis } from "ioredis";
 import type { Logger } from "pino";
-import { mongoCollections, type AuctionDocument, type BidDocument, type LedgerAccountDocument } from "../../shared/storage/mongoSchemas.js";
+import { mongoCollections, type AuctionDocument, type BidDocument, type LedgerAccountDocument, type LedgerEntryType } from "../../shared/storage/mongoSchemas.js";
+import type { AppConfig } from "../../shared/config.js";
+import { requireCoreAuth, resolveUserIdFromAuth, type CoreAuthContext } from "../../shared/auth/coreAuth.js";
 
 interface GraphQLDeps {
   db: Db;
   redis: Redis;
   logger: Logger;
+  config: AppConfig;
+}
+
+// Helper to safely parse ObjectId from string
+function parseObjectId(id: string): ObjectId | null {
+  if (!id || typeof id !== "string") return null;
+  // Check if valid 24-character hex string
+  if (!/^[0-9a-fA-F]{24}$/.test(id)) return null;
+  try {
+    return new ObjectId(id);
+  } catch {
+    return null;
+  }
 }
 
 // GraphQL Schema
@@ -218,6 +233,7 @@ const typeDefs = `
 
 // Type definitions for resolver context
 interface GraphQLContext {
+  auth: CoreAuthContext;
   userId?: string;
   deps: GraphQLDeps;
 }
@@ -231,7 +247,10 @@ export function registerGraphQL(app: FastifyInstance, deps: GraphQLDeps) {
   const resolvers = {
     Query: {
       auction: async (_: unknown, { id }: { id: string }) => {
-        const auction = await auctions.findOne({ _id: id as unknown as ObjectId });
+        const objectId = parseObjectId(id);
+        if (!objectId) return null;
+        
+        const auction = await auctions.findOne({ _id: objectId });
         return auction ? transformAuction(auction) : null;
       },
 
@@ -244,7 +263,10 @@ export function registerGraphQL(app: FastifyInstance, deps: GraphQLDeps) {
         }
         
         if (args.cursor) {
-          query._id = { $lt: args.cursor };
+          const cursorId = parseObjectId(args.cursor);
+          if (cursorId) {
+            query._id = { $lt: cursorId };
+          }
         }
 
         const results = await auctions
@@ -271,10 +293,18 @@ export function registerGraphQL(app: FastifyInstance, deps: GraphQLDeps) {
         };
       },
 
-      userBids: async (_: unknown, { userId, auctionId }: { userId: string; auctionId?: string }) => {
+      userBids: async (_: unknown, { userId, auctionId }: { userId: string; auctionId?: string }, context: GraphQLContext) => {
+        // Verify user can only access their own bids unless service auth
+        if (context.auth.kind === "user" && context.auth.userId !== userId) {
+          throw new Error("Forbidden: cannot access other user's bids");
+        }
+        
         const query: Record<string, unknown> = { userId };
         if (auctionId) {
-          query.auctionId = auctionId;
+          const auctionObjectId = parseObjectId(auctionId);
+          if (auctionObjectId) {
+            query.auctionId = auctionObjectId;
+          }
         }
         
         const results = await bids.find(query).sort({ createdAt: -1 }).limit(100).toArray();
@@ -282,10 +312,13 @@ export function registerGraphQL(app: FastifyInstance, deps: GraphQLDeps) {
       },
 
       leaderboard: async (_: unknown, args: { auctionId: string; roundIndex?: number; limit?: number }) => {
+        const auctionObjectId = parseObjectId(args.auctionId);
+        if (!auctionObjectId) return [];
+        
         const limit = Math.min(args.limit ?? 10, 100);
         
         const pipeline = [
-          { $match: { auctionId: args.auctionId as unknown as ObjectId, active: true } },
+          { $match: { auctionId: auctionObjectId, active: true } },
           { $sort: { amount: -1, createdAt: 1 } as const },
           { $limit: limit },
           { $project: { userId: 1, amount: 1, _id: 1 } }
@@ -301,7 +334,12 @@ export function registerGraphQL(app: FastifyInstance, deps: GraphQLDeps) {
         }));
       },
 
-      balance: async (_: unknown, { userId, currency }: { userId: string; currency: string }) => {
+      balance: async (_: unknown, { userId, currency }: { userId: string; currency: string }, context: GraphQLContext) => {
+        // Verify user can only access their own balance unless service auth
+        if (context.auth.kind === "user" && context.auth.userId !== userId) {
+          throw new Error("Forbidden: cannot access other user's balance");
+        }
+        
         const account = await accounts.findOne({ userId, currency });
         
         if (!account || !account.totals) {
@@ -314,28 +352,36 @@ export function registerGraphQL(app: FastifyInstance, deps: GraphQLDeps) {
           };
         }
 
-        const totals = account.totals as Record<string, number> | undefined;
-        const deposits = totals?.deposit ?? 0;
-        const withdrawals = totals?.withdrawal ?? 0;
-        const held = totals?.hold ?? 0;
-        const captured = totals?.capture ?? 0;
-        const released = totals?.release ?? 0;
-        const refunds = totals?.refund ?? 0;
+        // Use correct LedgerEntryType keys from ledgerStore
+        const totals = account.totals as Partial<Record<LedgerEntryType, number>> | undefined;
+        const depositConfirmed = totals?.deposit_confirmed ?? 0;
+        const holdCreated = totals?.hold_created ?? 0;
+        const holdReleased = totals?.hold_released ?? 0;
+        const holdCaptured = totals?.hold_captured ?? 0;
+        const withdrawalRequested = totals?.withdrawal_requested ?? 0;
+        const withdrawalConfirmed = totals?.withdrawal_confirmed ?? 0;
+        const withdrawalFailed = totals?.withdrawal_failed ?? 0;
         
-        const available = deposits - withdrawals - held + released + refunds - captured;
-        const current = deposits - withdrawals - captured + refunds;
+        // Calculate balances using correct ledger formula
+        const available = depositConfirmed + holdReleased + withdrawalFailed - holdCreated - withdrawalRequested;
+        const held = holdCreated + withdrawalRequested - holdReleased - holdCaptured - withdrawalConfirmed - withdrawalFailed;
+        const spent = holdCaptured + withdrawalConfirmed;
+        const current = available + held;
 
         return {
           available,
-          held: held - released,
+          held,
           current,
-          spent: captured,
+          spent,
           currency
         };
       },
 
       roundState: async (_: unknown, args: { auctionId: string; roundIndex: number }) => {
-        const auction = await auctions.findOne({ _id: args.auctionId as unknown as ObjectId });
+        const auctionObjectId = parseObjectId(args.auctionId);
+        if (!auctionObjectId) return null;
+        
+        const auction = await auctions.findOne({ _id: auctionObjectId });
         
         if (!auction) return null;
 
@@ -386,15 +432,24 @@ export function registerGraphQL(app: FastifyInstance, deps: GraphQLDeps) {
 
   // Register a simple GraphQL endpoint (without full Mercurius for simplicity)
   app.post("/graphql", async (request, reply) => {
+    // Require authentication - no more trusting x-user-id header
+    const auth = requireCoreAuth(request, reply, { config: deps.config } as any);
+    if (!auth) {
+      return; // Response already sent by requireCoreAuth
+    }
+
     const { query, variables, operationName } = request.body as {
       query: string;
       variables?: Record<string, unknown>;
       operationName?: string;
     };
 
-    // Simple query parser (production would use graphql-js or mercurius)
+    // Derive userId from authenticated context
+    const userId = auth.kind === "user" ? auth.userId : undefined;
+
     const context: GraphQLContext = {
-      userId: (request.headers["x-user-id"] as string) ?? undefined,
+      auth,
+      userId,
       deps
     };
 
@@ -408,10 +463,13 @@ export function registerGraphQL(app: FastifyInstance, deps: GraphQLDeps) {
     }
   });
 
-  // GraphiQL UI
-  app.get("/graphiql", async (_request, reply) => {
-    reply.type("text/html").send(generateGraphiQLHtml());
-  });
+  // GraphiQL UI - only enabled in non-production environments
+  if (deps.config.env !== "production") {
+    app.get("/graphiql", async (_request, reply) => {
+      reply.type("text/html").send(generateGraphiQLHtml());
+    });
+    deps.logger.info("GraphiQL UI enabled at /graphiql (non-production mode)");
+  }
 
   deps.logger.info("GraphQL endpoint registered at /graphql");
 }

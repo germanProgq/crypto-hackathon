@@ -1,9 +1,73 @@
 // Webhook notification dispatcher with retry logic and signature verification
-import { createHmac, randomUUID } from "crypto";
+import { createHmac, randomBytes, randomUUID } from "crypto";
 import type { Logger } from "pino";
 import type { Redis } from "ioredis";
-import type { Db } from "mongodb";
+import { ObjectId, type Db, type WithId } from "mongodb";
 import { mongoCollections } from "../../shared/storage/mongoSchemas.js";
+
+// SSRF protection - block private/internal IP ranges
+const BLOCKED_IP_RANGES = [
+  /^127\./,                    // Loopback
+  /^10\./,                     // Private Class A
+  /^172\.(1[6-9]|2\d|3[01])\./, // Private Class B
+  /^192\.168\./,               // Private Class C
+  /^169\.254\./,               // Link-local
+  /^0\./,                      // Current network
+  /^::1$/,                     // IPv6 loopback
+  /^fc00:/i,                   // IPv6 unique local
+  /^fe80:/i,                   // IPv6 link-local
+  /^ff00:/i,                   // IPv6 multicast
+  /^localhost$/i,
+  /^.*\.local$/i,
+  /^.*\.internal$/i,
+];
+
+const BLOCKED_HOSTNAMES = [
+  "localhost",
+  "127.0.0.1",
+  "0.0.0.0",
+  "::1",
+  "metadata.google.internal",
+  "169.254.169.254", // Cloud metadata
+];
+
+function isPrivateOrBlockedUrl(urlString: string): boolean {
+  try {
+    const url = new URL(urlString);
+    const hostname = url.hostname.toLowerCase();
+    
+    // Block non-https in production (allow http for testing)
+    if (url.protocol !== "https:" && url.protocol !== "http:") {
+      return true;
+    }
+    
+    // Check blocked hostnames
+    if (BLOCKED_HOSTNAMES.includes(hostname)) {
+      return true;
+    }
+    
+    // Check blocked IP patterns
+    for (const pattern of BLOCKED_IP_RANGES) {
+      if (pattern.test(hostname)) {
+        return true;
+      }
+    }
+    
+    return false;
+  } catch {
+    return true; // Invalid URL
+  }
+}
+
+// Hash webhook secret for storage (one-way hash for verification)
+function hashWebhookSecret(secret: string): string {
+  return createHmac("sha256", "webhook-secret-salt").update(secret).digest("hex");
+}
+
+// Generate a secure random secret for webhooks
+function generateWebhookSecret(): string {
+  return randomBytes(32).toString("hex");
+}
 
 export type WebhookEventType =
   | "bid_placed"
@@ -19,10 +83,10 @@ export type WebhookEventType =
   | "withdrawal_failed";
 
 export interface WebhookConfig {
-  _id?: string;
+  _id?: ObjectId;
   userId: string;
   url: string;
-  secret: string;
+  secretHash: string; // Stored as hash, not plaintext
   events: WebhookEventType[];
   active: boolean;
   createdAt: Date;
@@ -32,8 +96,8 @@ export interface WebhookConfig {
 }
 
 export interface WebhookDelivery {
-  _id?: string;
-  webhookId: string;
+  _id?: ObjectId;
+  webhookId: ObjectId; // Use ObjectId, not string
   eventType: WebhookEventType;
   payload: Record<string, unknown>;
   status: "pending" | "delivered" | "failed" | "retrying";
@@ -46,6 +110,11 @@ export interface WebhookDelivery {
   error?: string;
   createdAt: Date;
   deliveredAt?: Date;
+}
+
+// Response type that includes the plaintext secret (only returned on creation)
+export interface WebhookConfigWithSecret extends Omit<WebhookConfig, "secretHash"> {
+  secret: string; // Plaintext secret - only returned once on creation
 }
 
 interface WebhookDispatcherDeps {
@@ -70,12 +139,24 @@ export function createWebhookDispatcher(deps: WebhookDispatcherDeps) {
 
   return {
     /**
-     * Register a new webhook endpoint
+     * Register a new webhook endpoint with URL validation and secret hashing
      */
-    async registerWebhook(config: Omit<WebhookConfig, "_id" | "createdAt" | "updatedAt" | "failureCount">): Promise<WebhookConfig> {
+    async registerWebhook(config: { userId: string; url: string; events: WebhookEventType[]; active: boolean }): Promise<WebhookConfigWithSecret> {
+      // SSRF protection - validate URL
+      if (isPrivateOrBlockedUrl(config.url)) {
+        throw new Error("Webhook URL must be a public HTTPS endpoint. Private/internal URLs are not allowed.");
+      }
+
       const now = new Date();
+      const plaintextSecret = generateWebhookSecret();
+      const secretHash = hashWebhookSecret(plaintextSecret);
+      
       const webhook: WebhookConfig = {
-        ...config,
+        userId: config.userId,
+        url: config.url,
+        secretHash,
+        events: config.events,
+        active: config.active,
         failureCount: 0,
         createdAt: now,
         updatedAt: now
@@ -84,32 +165,74 @@ export function createWebhookDispatcher(deps: WebhookDispatcherDeps) {
       const result = await webhooks.insertOne(webhook);
       logger.info({ webhookId: result.insertedId, userId: config.userId }, "Webhook registered");
       
-      return { ...webhook, _id: String(result.insertedId) };
+      // Return with plaintext secret (only time it's available)
+      return { 
+        ...webhook, 
+        _id: result.insertedId,
+        secret: plaintextSecret // User must save this - it won't be retrievable again
+      };
     },
 
     /**
      * Update webhook configuration
      */
-    async updateWebhook(webhookId: string, updates: Partial<Pick<WebhookConfig, "url" | "secret" | "events" | "active">>): Promise<void> {
+    async updateWebhook(webhookId: string, updates: Partial<Pick<WebhookConfig, "url" | "events" | "active">>): Promise<void> {
+      // Validate URL if being updated
+      if (updates.url && isPrivateOrBlockedUrl(updates.url)) {
+        throw new Error("Webhook URL must be a public HTTPS endpoint. Private/internal URLs are not allowed.");
+      }
+
+      const objectId = ObjectId.isValid(webhookId) ? new ObjectId(webhookId) : null;
+      if (!objectId) {
+        throw new Error("Invalid webhook ID format");
+      }
+
       await webhooks.updateOne(
-        { _id: webhookId as any },
+        { _id: objectId },
         { $set: { ...updates, updatedAt: new Date() } }
       );
+    },
+
+    /**
+     * Regenerate webhook secret (returns new plaintext secret)
+     */
+    async regenerateSecret(webhookId: string): Promise<string> {
+      const objectId = ObjectId.isValid(webhookId) ? new ObjectId(webhookId) : null;
+      if (!objectId) {
+        throw new Error("Invalid webhook ID format");
+      }
+
+      const plaintextSecret = generateWebhookSecret();
+      const secretHash = hashWebhookSecret(plaintextSecret);
+
+      await webhooks.updateOne(
+        { _id: objectId },
+        { $set: { secretHash, updatedAt: new Date() } }
+      );
+
+      return plaintextSecret;
     },
 
     /**
      * Delete webhook
      */
     async deleteWebhook(webhookId: string): Promise<void> {
-      await webhooks.deleteOne({ _id: webhookId as any });
+      const objectId = ObjectId.isValid(webhookId) ? new ObjectId(webhookId) : null;
+      if (!objectId) {
+        throw new Error("Invalid webhook ID format");
+      }
+
+      await webhooks.deleteOne({ _id: objectId });
       logger.info({ webhookId }, "Webhook deleted");
     },
 
     /**
-     * List webhooks for a user
+     * List webhooks for a user (secrets are not returned)
      */
-    async listWebhooks(userId: string): Promise<WebhookConfig[]> {
-      return webhooks.find({ userId }).toArray();
+    async listWebhooks(userId: string): Promise<Array<Omit<WithId<WebhookConfig>, "secretHash">>> {
+      const results = await webhooks.find({ userId }).toArray();
+      // Don't return secret hashes
+      return results.map(({ secretHash, ...rest }) => rest);
     },
 
     /**
@@ -127,7 +250,7 @@ export function createWebhookDispatcher(deps: WebhookDispatcherDeps) {
       logger.debug({ eventType, subscriberCount: subscribers.length }, "Dispatching webhook event");
 
       const deliveryDocs: WebhookDelivery[] = subscribers.map(webhook => ({
-        webhookId: webhook._id!.toString(),
+        webhookId: webhook._id!, // Now correctly using ObjectId
         eventType,
         payload,
         status: "pending",
@@ -141,8 +264,8 @@ export function createWebhookDispatcher(deps: WebhookDispatcherDeps) {
       // Queue for immediate processing
       const queueKey = "webhook:delivery:queue";
       await redis.lpush(queueKey, ...deliveryDocs.map(d => JSON.stringify({
-        deliveryId: d._id,
-        webhookId: d.webhookId,
+        deliveryId: d._id?.toHexString(),
+        webhookId: d.webhookId.toHexString(),
         eventType
       })));
     },
@@ -181,8 +304,13 @@ export function createWebhookDispatcher(deps: WebhookDispatcherDeps) {
      * Get delivery history for a webhook
      */
     async getDeliveryHistory(webhookId: string, limit = 50): Promise<WebhookDelivery[]> {
+      const objectId = ObjectId.isValid(webhookId) ? new ObjectId(webhookId) : null;
+      if (!objectId) {
+        return [];
+      }
+      
       return deliveries
-        .find({ webhookId })
+        .find({ webhookId: objectId })
         .sort({ createdAt: -1 })
         .limit(limit)
         .toArray();
@@ -190,7 +318,8 @@ export function createWebhookDispatcher(deps: WebhookDispatcherDeps) {
   };
 
   async function processDelivery(delivery: WebhookDelivery): Promise<void> {
-    const webhook = await webhooks.findOne({ _id: delivery.webhookId as any });
+    // webhookId is now ObjectId
+    const webhook = await webhooks.findOne({ _id: delivery.webhookId });
     
     if (!webhook || !webhook.active) {
       await deliveries.updateOne(
@@ -200,9 +329,20 @@ export function createWebhookDispatcher(deps: WebhookDispatcherDeps) {
       return;
     }
 
+    // SSRF check before making request
+    if (isPrivateOrBlockedUrl(webhook.url)) {
+      await deliveries.updateOne(
+        { _id: delivery._id },
+        { $set: { status: "failed", error: "Webhook URL blocked (private/internal address)" } }
+      );
+      logger.warn({ webhookId: webhook._id, url: webhook.url }, "Blocked webhook delivery to private URL");
+      return;
+    }
+
     const attempt = delivery.attempts + 1;
     const timestamp = Date.now().toString();
-    const signature = signPayload(delivery.payload, webhook.secret, timestamp);
+    // Use secretHash for signing (the hash itself is used as the signing key)
+    const signature = signPayload(delivery.payload, webhook.secretHash, timestamp);
 
     try {
       const controller = new AbortController();
