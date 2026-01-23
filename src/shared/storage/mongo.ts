@@ -200,46 +200,33 @@ async function ensureDockerMongoReplica(
   logger: Logger
 ): Promise<ReplicaEnsureResult> {
   const containerName = `crypto-hack-mongo-${port}`;
-  const exists = await dockerContainerExists(containerName);
+  let exists = await dockerContainerExists(containerName);
   let containerReady = exists;
 
   if (!exists) {
-    try {
-      await runDocker([
-        "run",
-        "-d",
-        "--name",
-        containerName,
-        "-p",
-        `${port}:27017`,
-        dockerImage,
-        "--replSet",
-        replicaSetName,
-        "--bind_ip_all"
-      ]);
-      logger.info({ container: containerName, port }, "Mongo docker container created");
-      containerReady = true;
-    } catch (error) {
-      if (isPortInUseError(error)) {
-        return {
-          ok: false,
-          error: error instanceof Error ? error : new Error("Mongo port already in use."),
-          reason: "port_in_use"
-        };
-      }
-      if (isContainerNameConflictError(error)) {
-        containerReady = true;
-      } else {
-        throw error;
-      }
+    const created = await createMongoContainer(containerName, port, logger);
+    if (!created.ok) {
+      return created;
     }
+    containerReady = true;
   }
 
   if (containerReady) {
     const running = await dockerContainerRunning(containerName);
     if (!running) {
-      await runDocker(["start", containerName]);
-      logger.info({ container: containerName, port }, "Mongo docker container started");
+      try {
+        await runDocker(["start", containerName]);
+        logger.info({ container: containerName, port }, "Mongo docker container started");
+      } catch (error) {
+        if (isContainerMissingError(error)) {
+          const recreated = await createMongoContainer(containerName, port, logger);
+          if (!recreated.ok) {
+            return recreated;
+          }
+        } else {
+          throw error;
+        }
+      }
     }
   }
 
@@ -253,6 +240,41 @@ async function ensureDockerMongoReplica(
         error: error instanceof Error ? error : new Error("Mongo replica set not enabled."),
         reason: "replication_disabled"
       };
+    }
+    throw error;
+  }
+}
+
+async function createMongoContainer(
+  containerName: string,
+  port: number,
+  logger: Logger
+): Promise<ReplicaEnsureResult> {
+  try {
+    await runDocker([
+      "run",
+      "-d",
+      "--name",
+      containerName,
+      "-p",
+      `${port}:27017`,
+      dockerImage,
+      "--replSet",
+      replicaSetName,
+      "--bind_ip_all"
+    ]);
+    logger.info({ container: containerName, port }, "Mongo docker container created");
+    return { ok: true };
+  } catch (error) {
+    if (isPortInUseError(error)) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error : new Error("Mongo port already in use."),
+        reason: "port_in_use"
+      };
+    }
+    if (isContainerNameConflictError(error)) {
+      return { ok: true };
     }
     throw error;
   }
@@ -410,6 +432,13 @@ function isContainerNameConflictError(error: unknown): boolean {
     return false;
   }
   return error.message.includes("container name") && error.message.includes("already in use");
+}
+
+function isContainerMissingError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return error.message.includes("No such container");
 }
 
 async function getReplicaSetStatus(

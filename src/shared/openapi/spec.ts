@@ -1,9 +1,66 @@
 // OpenAPI specification and Swagger UI registration for auction platform.
 import type { FastifyInstance } from "fastify";
-import fastifySwagger from "@fastify/swagger";
-import fastifySwaggerUi from "@fastify/swagger-ui";
+
+type SwaggerModule = typeof import("@fastify/swagger");
+type SwaggerUiModule = typeof import("@fastify/swagger-ui");
+
+function parseOptionalBoolean(value: string | undefined): boolean | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  return undefined;
+}
+
+function shouldEnableOpenApi(): boolean {
+  const override = parseOptionalBoolean(process.env.OPENAPI_ENABLED);
+  if (override !== undefined) {
+    return override;
+  }
+  if (process.env.NODE_ENV === "test" || process.env.VITEST === "true") {
+    return false;
+  }
+  return true;
+}
+
+function isMissingDependency(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ERR_MODULE_NOT_FOUND" || error.message.includes("Cannot find package");
+}
 
 export async function registerOpenAPI(app: FastifyInstance): Promise<void> {
+  if (!shouldEnableOpenApi()) {
+    app.log.info("OpenAPI disabled");
+    return;
+  }
+
+  let fastifySwagger: SwaggerModule["default"];
+  let fastifySwaggerUi: SwaggerUiModule["default"];
+
+  try {
+    const [swaggerModule, swaggerUiModule] = await Promise.all([
+      import("@fastify/swagger"),
+      import("@fastify/swagger-ui")
+    ]);
+    fastifySwagger = swaggerModule.default;
+    fastifySwaggerUi = swaggerUiModule.default;
+  } catch (error) {
+    if (isMissingDependency(error)) {
+      app.log.warn({ err: error }, "OpenAPI skipped: swagger packages are not installed");
+      return;
+    }
+    throw error;
+  }
+
   await app.register(fastifySwagger, {
     openapi: {
       info: {
