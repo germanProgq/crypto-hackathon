@@ -11,6 +11,8 @@
 [![OpenAPI](https://img.shields.io/badge/OpenAPI-3.0-85EA2D.svg)](https://swagger.io/)
 
 ---
+Сайт: http://tbubbacoin.website
+Телеграм бот: https://t.me/tggiftauctionbot
 
 ## ✨ Что нового в версии 2.0
 
